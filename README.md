@@ -2,7 +2,7 @@
 
 Modern, web-first VPS control center for Linux servers.
 
-> **Current release:** `v0.6.0-alpha`  
+> **Current release:** `v0.7.0-rc1`  
 > This is an active alpha. Use a disposable VPS for first installation and validate host behavior before production use.
 
 ## Highlights
@@ -121,3 +121,23 @@ See `docs/ROADMAP.md` on the development line for the full roadmap.
 ## License
 
 GPL-3.0-or-later. Third-party code must only be incorporated when license and attribution requirements are compatible.
+
+## Protocol Hub (RC1)
+
+Makia now has operational adapters for:
+
+- **Xray family:** VLESS, VMess, Trojan and Shadowsocks quick inbounds when Xray is already installed. Config changes are tested before apply and rolled back if restart/health fails.
+- **WireGuard:** package installation, server bootstrap, peer provisioning and downloadable client config.
+- **OpenVPN:** package/PKI bootstrap, server configuration and downloadable client profiles.
+- **SSH:** account lifecycle, expiry, PIN/password generation, live sessions and disconnect controls.
+- **Stunnel:** installation/status and service integration.
+
+The panel intentionally does not label unimplemented actions as working. Unsupported operations are surfaced as unavailable until a tested adapter exists.
+
+## Domain / TLS
+
+Settings → Domain & TLS can persist the panel domain, apply it to Nginx after config validation, and request Let's Encrypt via Certbot. DNS must already point to the VPS before certificate issuance.
+
+## UI direction
+
+The interface uses a modern card-driven control-center layout inspired by current infrastructure panels and high-conversion marketplace UX patterns, while keeping Makia's code and visual identity independent.
