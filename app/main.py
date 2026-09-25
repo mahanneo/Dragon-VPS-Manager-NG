@@ -418,7 +418,7 @@ def protocol_clients_get(request:Request):
     now_ts=int(time.time())
     for item in list_protocol_clients():
         usage={"uplink":0,"downlink":0,"total":0,"available":False,"error":None}
-        if item.get("engine")=="xray" and item.get("protocol") in {"vless","vmess","trojan"} and item.get("enabled"):
+        if item.get("engine")=="xray" and item.get("protocol") in {"vless","vmess","trojan","hysteria2"} and item.get("enabled"):
             try: usage=protocol_ops.xray_client_traffic(item["name"])
             except Exception as exc: usage={"uplink":0,"downlink":0,"total":0,"available":False,"error":str(exc)[:160]}
         stored_up=int(item.get("used_up_bytes") or 0)
