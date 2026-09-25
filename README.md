@@ -2,7 +2,7 @@
 
 Modern web-first VPS and access-infrastructure control center for Ubuntu.
 
-> **Current release candidate:** `v0.8.0-rc1`  
+> **Current release candidate:** `v0.8.0-rc2`  
 > CI-validated, but **not yet production-certified**. A real-host UAT is required before a `1.0.0 Stable` label.
 
 ## What Makia manages today
@@ -126,14 +126,28 @@ The installer prints a unique administrator bootstrap password. Change it immedi
 
 ## Update
 
+For installations already on v0.8.0-rc2 or newer:
+
 ```bash
-sudo makia-update
+sudo makia-upgrade
 ```
+
+`makia-upgrade` first fetches the newest updater from GitHub, then executes it. This prevents an older local updater from missing newly introduced service units.
+
+### One-time upgrade from v0.7.x or older
+
+Use the bootstrap updater once:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/mahanneo/Makia-VPS-Manager/main/upgrade.sh)
+```
+
+After that, future updates can use `sudo makia-upgrade`.
 
 The updater:
 1. creates a backup;
 2. downloads the current `main`;
-3. updates application and service units;
+3. updates application and all service units;
 4. restarts Makia workers;
 5. performs a backend health check;
 6. runs `makia-doctor`.
@@ -186,7 +200,7 @@ Important:
 
 ## Release gate
 
-`v0.8.0-rc1` must pass:
+`v0.8.0-rc2` must pass:
 - Python compilation
 - unit tests
 - Bash syntax
@@ -195,7 +209,7 @@ Important:
 - packaging contract
 - real Ubuntu 22.04/24.04 host UAT
 
-See `docs/UAT-0.8.0-RC1.md`.
+See `docs/UAT-0.8.0-RC2.md`.
 
 ## License
 
