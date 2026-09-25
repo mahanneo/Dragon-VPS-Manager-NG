@@ -2,24 +2,27 @@
 
 Modern, web-first VPS control center for Linux servers.
 
-> **Current release:** `v0.4.0-alpha`  
+> **Current release:** `v0.6.0-alpha`  
 > This is an active alpha. Use a disposable VPS for first installation and validate host behavior before production use.
 
 ## Highlights
 
 - Premium responsive dark control center
+- Global command palette (Ctrl/Cmd + K)
 - Live CPU / RAM / disk / swap / load / network telemetry
 - Professional SSH Account Center
-- Easy 4-digit PIN, 6-digit PIN or strong password generation
-- Account expiry, plan, notes, enforced connection limit and quota policy
-- Live session visibility and controlled disconnect
+- Server-side 4-digit PIN, 6-digit PIN, Easy-8 and strong password generation
+- Professional Account Center with search/filter, expiry presets, plan, notes, bulk extend, enforced connection limit and quota policy
+- Live session visibility, controlled disconnect and bulk disconnect
 - Background Policy Enforcer for concurrent SSH connection limits
 - Xray Protocol Center with real binary/service/config/inbound discovery
 - Service start / stop / restart through an allowlist
 - Security Center status for UFW, Fail2ban and OpenSSH
+- Fail2ban baseline automatically enabled on fresh installs and upgrades
 - Audit trail
 - In-panel backup creation and backup listing
 - CLI updater with pre-update backup and post-update health check
+- GitHub version awareness in Update Center
 - Ubuntu 22.04 / 24.04 installer
 - Migration path from the earlier Dragon alpha runtime
 
@@ -100,7 +103,7 @@ Makia intentionally does not expose a generic root shell endpoint.
 ## Roadmap
 
 Next major work:
-- Xray integration
+- Full validated Xray inbound management
 - VLESS / VMess / Trojan / Shadowsocks adapters where validated
 - QR and share links
 - Subscription endpoints
