@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.7.0-rc1] - 2026-09-26
+
+### Protocol Hub
+- Added real protocol catalog/status for Xray, WireGuard, OpenVPN, SSH and Stunnel.
+- Added apt-backed installation for WireGuard, OpenVPN and Stunnel.
+- Added WireGuard server bootstrap and peer provisioning with downloadable client configuration.
+- Added OpenVPN PKI/server bootstrap and client `.ovpn` provisioning.
+- Added Xray quick inbound provisioning for VLESS, VMess, Trojan and Shadowsocks with config validation, backup, restart health check, rollback, share links and QR.
+- Xray is detected and managed when installed; Makia does not run an unverified remote installer for the Xray binary.
+
+### Domain, TLS and language
+- Added persistent Persian/English panel language preference with RTL/LTR shell behavior.
+- Added validated panel-domain configuration.
+- Added Nginx `server_name` apply with syntax validation and rollback.
+- Added optional Let's Encrypt certificate issuance through Certbot after DNS is configured.
+
+### UX
+- Rebuilt Protocol Hub as a card-based operational surface.
+- Added capability strip, status badges, configuration modals and one-click copy/download actions.
+- Upgraded shell, top bar, responsive layout and domain/environment indicator.
+- Removed fake protocol actions: unavailable operations are explicitly marked unavailable instead of rendering non-functional buttons.
+
+### Quality
+- Added domain and protocol validation unit tests.
+- CI continues to enforce Python compile, unit tests, Bash syntax, JavaScript syntax and dangerous-pattern checks.
+
+### Release status
+This is a release candidate. Stable status requires host UAT on clean Ubuntu 22.04/24.04, protocol provisioning tests, update/rollback tests and TLS/domain tests.
+
 ## [0.6.0-alpha] - 2026-09-26
 
 ### Account Center V2
