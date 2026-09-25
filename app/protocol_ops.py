@@ -475,6 +475,30 @@ def xray_client_traffic(email, reset=False):
             if name.endswith(">>>uplink"): up+=value
             elif name.endswith(">>>downlink"): down+=value
     return {"uplink":up,"downlink":down,"total":up+down,"available":True,"error":None}
+def xray_client_online_ips(email):
+    binary=_binary()
+    if not binary:
+        return {"available":False,"ips":[],"error":"Xray core is not installed"}
+    args=[binary,"api","statsonlineiplist","--server=127.0.0.1:10085","--email="+str(email)]
+    p=subprocess.run(args,text=True,capture_output=True,timeout=8,check=False)
+    if p.returncode!=0:
+        err=(p.stderr or p.stdout or "").strip()
+        # Older Xray cores do not expose this RPC/CLI.
+        return {"available":False,"ips":[],"error":err[:240]}
+    text=p.stdout or ""
+    entries=[]
+    try:
+        payload=json.loads(text)
+        raw=payload.get("ips") or {}
+        if isinstance(raw,dict):
+            entries=[{"ip":str(ip),"last_seen":int(ts or 0)} for ip,ts in raw.items()]
+    except Exception:
+        # Fallback for protobuf-text-like command output.
+        for ip,ts in re.findall(r'key:\s*"([^"]+)"[\s\S]*?value:\s*(\d+)',text):
+            entries.append({"ip":ip,"last_seen":int(ts)})
+    entries.sort(key=lambda item:item.get("last_seen",0),reverse=True)
+    return {"available":True,"ips":entries,"error":None}
+
 
 def _xray_default_config(path):
     return {
