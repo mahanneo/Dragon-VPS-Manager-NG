@@ -8,10 +8,11 @@ SECRET_PATH = Path(os.getenv("MAKIA_SECRET_PATH", os.getenv("DRAGON_SECRET_PATH"
 COOKIE_NAME = "makia_session"
 SESSION_TTL_SECONDS = 60 * 60 * 12
 APP_NAME = "Makia VPS Manager"
-VERSION = "0.3.0-alpha"
+VERSION = "0.4.0-alpha"
 ALLOWED_SERVICES = {
     "ssh": "OpenSSH",
     "nginx": "Nginx",
     "stunnel4": "Stunnel",
     "fail2ban": "Fail2ban",
+    "xray": "Xray",
 }
