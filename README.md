@@ -48,19 +48,18 @@ The project uses 3x-ui / Sanaei as a **feature benchmark**, not as a code or vis
 
 ## Quick install
 
-The public installer currently tracks the stable `main` branch:
+The public installer tracks the `main` release branch:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/mahanneo/Dragon-VPS-Manager-NG/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/mahanneo/Makia-VPS-Manager/main/install.sh)
 ```
 
 To test the new Makia development branch:
 
 ```bash
-DRAGON_REF=develop bash <(curl -fsSL https://raw.githubusercontent.com/mahanneo/Dragon-VPS-Manager-NG/develop/install.sh)
+MAKIA_REF=develop bash <(curl -fsSL https://raw.githubusercontent.com/mahanneo/Makia-VPS-Manager/develop/install.sh)
 ```
 
-> The repository slug is still `Dragon-VPS-Manager-NG` for compatibility. It can be renamed to `Makia-VPS-Manager` once the installer URLs are migrated.
 
 ## Architecture
 
