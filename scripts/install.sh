@@ -23,9 +23,11 @@ case "${VERSION_ID:-}" in
 esac
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP=/opt/dragon-vps-manager-ng
+APP=/opt/makia-vps-manager
+OLD_APP=/opt/dragon-vps-manager-ng
 DATA="$APP/data"
-ADMIN_PASSWORD="${DRAGON_INITIAL_ADMIN_PASSWORD:-}"
+ADMIN_PASSWORD="${MAKIA_INITIAL_ADMIN_PASSWORD:-${DRAGON_INITIAL_ADMIN_PASSWORD:-}}"
+
 if [[ -z "$ADMIN_PASSWORD" ]]; then
   ADMIN_PASSWORD="$(python3 - <<'PY'
 import secrets
@@ -34,15 +36,21 @@ PY
 )"
 fi
 if [[ ${#ADMIN_PASSWORD} -lt 16 ]]; then
-  echo "DRAGON_INITIAL_ADMIN_PASSWORD must be at least 16 characters."
+  echo "MAKIA_INITIAL_ADMIN_PASSWORD must be at least 16 characters."
   exit 1
 fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y python3 python3-venv python3-pip nginx curl ca-certificates
+apt-get install -y python3 python3-venv python3-pip nginx curl ca-certificates tar
 
-install -d -m 0750 "$APP" "$DATA"
+install -d -m 0750 "$APP"
+if [[ ! -d "$DATA" && -d "$OLD_APP/data" ]]; then
+  echo "Migrating existing Dragon data into Makia..."
+  cp -a "$OLD_APP/data" "$DATA"
+fi
+install -d -m 0750 "$DATA"
+
 cp -a "$SOURCE_DIR/app" "$SOURCE_DIR/requirements.txt" "$SOURCE_DIR/VERSION" "$APP/"
 python3 -m venv "$APP/.venv"
 "$APP/.venv/bin/pip" install --upgrade pip
@@ -50,37 +58,34 @@ python3 -m venv "$APP/.venv"
 
 (
   cd "$APP"
-  DRAGON_INITIAL_ADMIN_PASSWORD="$ADMIN_PASSWORD"   DRAGON_DATA_DIR="$DATA"   "$APP/.venv/bin/python" -c 'from app.db import init_db; init_db()'
+  MAKIA_INITIAL_ADMIN_PASSWORD="$ADMIN_PASSWORD"   MAKIA_DATA_DIR="$DATA"   "$APP/.venv/bin/python" -c 'from app.db import init_db; init_db()'
 )
 
-install -m 0644 "$SOURCE_DIR/systemd/dragon-vps-manager.service" /etc/systemd/system/dragon-vps-manager.service
-install -m 0644 "$SOURCE_DIR/nginx/dragon-vps-manager.conf" /etc/nginx/sites-available/dragon-vps-manager
-ln -sfn /etc/nginx/sites-available/dragon-vps-manager /etc/nginx/sites-enabled/dragon-vps-manager
-rm -f /etc/nginx/sites-enabled/default
+systemctl disable --now dragon-vps-manager 2>/dev/null || true
+rm -f /etc/systemd/system/dragon-vps-manager.service
 
-install -m 0755 "$SOURCE_DIR/scripts/update.sh" /usr/local/sbin/dragon-update
-install -m 0755 "$SOURCE_DIR/scripts/backup.sh" /usr/local/sbin/dragon-backup
-install -m 0755 "$SOURCE_DIR/scripts/uninstall.sh" /usr/local/sbin/dragon-uninstall
+install -m 0644 "$SOURCE_DIR/systemd/makia-vps-manager.service" /etc/systemd/system/makia-vps-manager.service
+install -m 0644 "$SOURCE_DIR/nginx/makia-vps-manager.conf" /etc/nginx/sites-available/makia-vps-manager
+ln -sfn /etc/nginx/sites-available/makia-vps-manager /etc/nginx/sites-enabled/makia-vps-manager
+rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/dragon-vps-manager /etc/nginx/sites-available/dragon-vps-manager
+
+install -m 0755 "$SOURCE_DIR/scripts/update.sh" /usr/local/sbin/makia-update
+install -m 0755 "$SOURCE_DIR/scripts/backup.sh" /usr/local/sbin/makia-backup
+install -m 0755 "$SOURCE_DIR/scripts/uninstall.sh" /usr/local/sbin/makia-uninstall
+ln -sfn /usr/local/sbin/makia-update /usr/local/sbin/dragon-update
+ln -sfn /usr/local/sbin/makia-backup /usr/local/sbin/dragon-backup
+ln -sfn /usr/local/sbin/makia-uninstall /usr/local/sbin/dragon-uninstall
 
 systemctl daemon-reload
-systemctl enable --now dragon-vps-manager
+systemctl enable --now makia-vps-manager
 nginx -t
 systemctl enable --now nginx
 systemctl reload nginx
 
 SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
-printf '
-Dragon VPS Manager NG installed successfully.
-'
-printf 'Panel: http://%s/
-' "${SERVER_IP:-SERVER_IP}"
-printf 'Username: admin
-'
-printf 'Bootstrap password: %s
-' "$ADMIN_PASSWORD"
-printf '
-IMPORTANT: sign in and change this password immediately.
-'
-printf 'This alpha build should be tested on a non-production VPS first.
-
-'
+printf '\nMakia VPS Manager installed successfully.\n'
+printf 'Panel: http://%s/\n' "${SERVER_IP:-SERVER_IP}"
+printf 'Username: admin\n'
+printf 'Bootstrap password: %s\n' "$ADMIN_PASSWORD"
+printf '\nIMPORTANT: change the administrator password immediately.\n'
+printf 'For public exposure, enable HTTPS and review Security Center first.\n\n'
