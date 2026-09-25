@@ -752,6 +752,73 @@ def disable_xray_client(inbound_tag,email):
 def reset_xray_client_traffic(email):
     return xray_client_traffic(email,reset=True)
 
+def read_xray_config():
+    path=_config_path()
+    if not path:
+        raise ProtocolError("Xray config file is not available")
+    try:
+        raw=Path(path).read_text(encoding="utf-8")
+        data=json.loads(raw)
+    except Exception as exc:
+        raise ProtocolError(f"cannot read Xray config: {exc}") from exc
+    return {"path":path,"config":data}
+
+def validate_xray_config(data):
+    binary=_binary()
+    if not binary:
+        raise ProtocolError("Xray core is not installed")
+    if not isinstance(data,dict):
+        raise ProtocolError("Xray config must be a JSON object")
+    config_path=_config_path() or "/usr/local/etc/xray/config.json"
+    path=Path(config_path)
+    path.parent.mkdir(parents=True,exist_ok=True)
+    tmp=path.with_suffix(path.suffix+".makia-validate")
+    try:
+        tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+        os.chmod(tmp,0o600)
+        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        return {"ok":True}
+    finally:
+        try:
+            if tmp.exists(): tmp.unlink()
+        except Exception:
+            pass
+
+def apply_xray_config(data):
+    binary=_binary()
+    if not binary:
+        raise ProtocolError("Xray core is not installed")
+    if not isinstance(data,dict):
+        raise ProtocolError("Xray config must be a JSON object")
+    config_path=_config_path() or "/usr/local/etc/xray/config.json"
+    path=Path(config_path)
+    path.parent.mkdir(parents=True,exist_ok=True)
+    tmp=path.with_suffix(path.suffix+".makia-apply")
+    backup_dir=Path("/var/backups/makia-vps-manager")
+    backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
+    backup=None
+    if path.exists():
+        backup=backup_dir/f"xray-manual-{int(time.time())}.json"
+        shutil.copy2(path,backup)
+    tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    os.chmod(tmp,0o600)
+    try:
+        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        os.replace(tmp,path)
+        _run(["systemctl","restart","xray"],timeout=30)
+        if not _active("xray"):
+            raise ProtocolError("Xray failed to become active")
+    except Exception:
+        try:
+            if tmp.exists(): tmp.unlink()
+            if backup and backup.exists():
+                shutil.copy2(backup,path)
+                _run(["systemctl","restart","xray"],timeout=30)
+        except Exception:
+            pass
+        raise
+    return {"ok":True,"path":str(path),"backup":str(backup) if backup else None}
+
 
 def status():
     return xray_status()
