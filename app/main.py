@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from .config import APP_NAME, VERSION, COOKIE_NAME, ALLOWED_SERVICES, DATA_DIR
-from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client, reset_protocol_traffic, protocol_client_by_subscription
+from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client, reset_protocol_traffic, protocol_client_by_subscription, login_rate_state, record_login_failure, clear_login_failures
 from .security import verify_password, make_session, read_session, hash_password, make_preauth, read_preauth
 from . import system_ops, protocol_ops, panel_ops
 
@@ -119,11 +119,20 @@ def login_page(request:Request):
 
 @app.post("/login")
 def login(request:Request,username:str=Form(...),password:str=Form(...)):
+    remote_ip=ip(request) or "unknown"
+    now_ts=int(time.time())
+    rate=login_rate_state(remote_ip,now_ts)
+    if int(rate.get("blocked_until") or 0)>now_ts:
+        wait=max(1,int(rate["blocked_until"])-now_ts)
+        audit(username or "unknown","login_rate_limited",detail=f"retry_after={wait}",ip=remote_ip)
+        return templates.TemplateResponse("login.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"error":f"تلاش‌های ناموفق زیاد بوده است. {max(1,wait//60)} دقیقه دیگر دوباره امتحان کنید."},status_code=429)
     with connect() as con:
         row=con.execute("SELECT * FROM admins WHERE username=? AND active=1",(username,)).fetchone()
     if not row or not verify_password(password,row["password_hash"]):
-        audit(username or "unknown","login_failed",ip=ip(request))
+        state=record_login_failure(remote_ip,now_ts)
+        audit(username or "unknown","login_failed",detail=f"failures={state['failures']}",ip=remote_ip)
         return templates.TemplateResponse("login.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"error":"نام کاربری یا رمز عبور صحیح نیست."},status_code=401)
+    clear_login_failures(remote_ip)
     twofa=get_admin_2fa(username)
     if twofa and twofa.get("totp_enabled"):
         audit(username,"login_password_success_2fa_required",ip=ip(request))
@@ -373,6 +382,7 @@ class XrayQuickInbound(BaseModel):
     quota_gb:float=Field(default=0,ge=0,le=100000)
     expire_days:int=Field(default=0,ge=0,le=3650)
     ip_limit:int=Field(default=1,ge=1,le=50)
+    reset_days:int=Field(default=0,ge=0,le=3650)
 
 @app.post("/api/protocols/xray/quick-inbound")
 def xray_quick_inbound(payload:XrayQuickInbound,request:Request):
@@ -391,12 +401,13 @@ def xray_quick_inbound(payload:XrayQuickInbound,request:Request):
     expire_at=int(time.time()+payload.expire_days*86400) if payload.expire_days else 0
     client_id=create_protocol_client(
         payload.name,"xray",payload.protocol,result["tag"],result["credential"],result["share_link"],
-        quota_bytes,expire_at,payload.ip_limit
+        quota_bytes,expire_at,payload.ip_limit,payload.reset_days
     )
     result["client_id"]=client_id
     result["quota_bytes"]=quota_bytes
     result["expire_at"]=expire_at
     result["ip_limit"]=payload.ip_limit
+    result["reset_days"]=payload.reset_days
     audit(actor,"xray_quick_inbound",result["tag"],f"protocol={payload.protocol}; port={payload.port}; quota={quota_bytes}; ip_limit={payload.ip_limit}",ip(request))
     return result
 
@@ -457,6 +468,7 @@ class ProtocolClientPolicy(BaseModel):
     quota_gb:float|None=Field(default=None,ge=0,le=100000)
     expire_days:int|None=Field(default=None,ge=0,le=3650)
     ip_limit:int|None=Field(default=None,ge=1,le=50)
+    reset_days:int|None=Field(default=None,ge=0,le=3650)
     enabled:bool|None=None
 
 @app.put("/api/protocol-clients/{client_id}")
@@ -466,7 +478,7 @@ def protocol_client_update(client_id:int,payload:ProtocolClientPolicy,request:Re
     if not row: raise HTTPException(404,"client not found")
     quota_bytes=int(payload.quota_gb*1024*1024*1024) if payload.quota_gb is not None else None
     expire_at=int(time.time()+payload.expire_days*86400) if payload.expire_days is not None and payload.expire_days>0 else (0 if payload.expire_days==0 else None)
-    update_protocol_client_state(client_id,payload.enabled,quota_bytes,expire_at,payload.ip_limit)
+    update_protocol_client_state(client_id,payload.enabled,quota_bytes,expire_at,payload.ip_limit,payload.reset_days)
     audit(actor,"protocol_client_update",str(client_id),ip=ip(request))
     return {"ok":True}
 
