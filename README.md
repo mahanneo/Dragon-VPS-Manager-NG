@@ -1,110 +1,118 @@
-# 🐉 Dragon VPS Manager NG
+# ⚡ Makia VPS Manager
 
-A modern, web-based VPS management foundation inspired by the operational goals of the legacy DRAGON VPS Manager project, implemented as a clean-room architecture focused on safer browser administration.
+Modern, web-first VPS control center for Linux servers.
 
-> **Status:** `v0.1.0-alpha` — testing foundation, not production-certified yet.
+> **Current release:** `v0.3.0-alpha`  
+> This is an active alpha. Use a disposable VPS for first installation and validate host behavior before production use.
 
-## Current features
+## Highlights
 
-- Responsive black/gold Web Admin Panel
-- Secure signed HttpOnly administrator sessions
-- Scrypt password hashing
-- Unique bootstrap administrator password per installation
-- Live CPU / RAM / Disk / Load / Uptime / Network dashboard
-- SSH system-user listing, creation, lock/unlock and deletion
-- Allowlisted systemd service control (no arbitrary web shell)
-- Audit trail for security-sensitive actions
-- Ubuntu 22.04 LTS and Ubuntu 24.04 LTS installer
-- Nginx reverse proxy and systemd service
-- Backup, update and uninstall helpers
-- Health endpoint and CI checks
+- Premium responsive dark control center
+- Live CPU / RAM / disk / swap / load / network telemetry
+- Professional SSH Account Center
+- Easy 4-digit PIN, 6-digit PIN or strong password generation
+- Account expiry, plan, notes, connection-limit policy and quota policy
+- Live session visibility and controlled disconnect
+- Service start / stop / restart through an allowlist
+- Security Center status for UFW, Fail2ban and OpenSSH
+- Audit trail
+- In-panel backup creation and backup listing
+- CLI updater with pre-update backup and post-update health check
+- Ubuntu 22.04 / 24.04 installer
+- Migration path from the earlier Dragon alpha runtime
 
 ## Quick install
 
-Use a **fresh test VPS** first. Run as root:
+Run as root on a fresh Ubuntu 22.04 or 24.04 VPS:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/mahanneo/Makia-VPS-Manager/main/install.sh)
 ```
 
-At the end of installation the terminal prints:
+The installer prints a unique administrator bootstrap password. Change it immediately after login.
 
-- panel URL
-- username `admin`
-- a unique generated bootstrap password
-
-Sign in and change the password immediately.
-
-## Server requirements
-
-- Ubuntu 22.04 LTS or Ubuntu 24.04 LTS
-- Root access
-- Recommended minimum: 1 vCPU, 1 GB RAM, 10 GB free storage
-- TCP 80 temporarily available for the alpha web panel
-
-## Update
+## Commands
 
 ```bash
-sudo dragon-update
+sudo makia-update
+sudo makia-backup
+sudo makia-uninstall
 ```
 
-The updater creates a data backup before replacing application code and runs a local health check afterward.
+Legacy command aliases such as `dragon-update` remain temporarily available for migration compatibility.
 
-## Backup
+## Account passwords
 
-```bash
-sudo dragon-backup
+Makia allows user passwords/PINs with a minimum of **4 characters** for operator convenience. This does **not** mean 4-digit SSH PINs are recommended on an unrestricted public SSH service.
+
+If simple PINs are used:
+- enable Fail2ban;
+- use firewall/IP restrictions where possible;
+- avoid exposing administration endpoints unnecessarily;
+- prefer 6-digit PINs or strong generated passwords for higher-risk accounts.
+
+Administrator passwords still require stronger minimums.
+
+## Quota policy
+
+The current Account Center stores a traffic quota policy for each account, but it does **not invent traffic consumption data**. Reliable per-account accounting/enforcement will be connected to the protocol/Xray accounting layer in the next protocol milestone.
+
+## Runtime layout
+
+```text
+/opt/makia-vps-manager
+├── app
+├── data
+├── .venv
+└── VERSION
+
+/etc/systemd/system/makia-vps-manager.service
+/etc/nginx/sites-available/makia-vps-manager
+/var/backups/makia-vps-manager
 ```
-
-Backups are stored under `/var/backups/dragon-vps-manager-ng/` with root-only permissions.
-
-## Uninstall
-
-```bash
-sudo dragon-uninstall
-```
-
-The uninstall helper preserves backups.
 
 ## Architecture
 
 ```text
-Browser
-  ↓
-Nginx
-  ↓
-FastAPI UI/API (127.0.0.1:8787)
-  ↓
-Allowlisted privileged operations
-  ↓
-Linux / systemd / SSH users
+Admin Browser
+      │
+      ▼
+    Nginx
+      │
+      ▼
+Makia Web/API :8787 (localhost only)
+      │
+      ├── Authentication
+      ├── Account metadata
+      ├── Live sessions
+      ├── Audit
+      ├── Backup
+      └── Validated privileged adapters
+              │
+              ▼
+          Linux host
 ```
 
-The browser never receives a generic root shell endpoint. New privileged features must be added as explicit, validated operations.
-
-## Security notes
-
-Before production use:
-
-1. Enable HTTPS.
-2. Restrict administration by firewall, VPN or trusted IPs where possible.
-3. Change the generated bootstrap password immediately.
-4. Review every newly allowlisted system service and privileged operation.
-5. Do not add arbitrary command execution endpoints.
-6. Test upgrades and rollback behavior on a disposable VPS before production rollout.
-
-See [`docs/SECURITY.md`](docs/SECURITY.md) for additional notes.
-
-## Development branches
-
-- `main` — public release line
-- `develop` — integration/development line
-- `feature/*` — isolated feature work
+Makia intentionally does not expose a generic root shell endpoint.
 
 ## Roadmap
 
-Planned milestones include online SSH sessions, per-user connection limits, expiration enforcement, disconnect controls, protocol/port management, Stunnel/WebSocket configuration, HTTPS, firewall/Fail2ban controls, backup/restore UI, Telegram integration, 2FA and versioned rollback.
+Next major work:
+- Xray integration
+- VLESS / VMess / Trojan / Shadowsocks adapters where validated
+- QR and share links
+- Subscription endpoints
+- reliable traffic accounting and quota enforcement
+- TLS automation
+- TOTP 2FA
+- scoped API tokens
+- multi-node control
+- notification/webhook/Telegram integration
+- signed release verification and one-click rollback
+- PWA and bilingual UI
+
+See `docs/ROADMAP.md` on the development line for the full roadmap.
 
 ## License
 
-See [`LICENSE`](LICENSE). When migrating functionality from third-party projects, verify their licenses before reusing source code. Prefer clean-room reimplementation where licensing is unclear.
+GPL-3.0-or-later. Third-party code must only be incorporated when license and attribution requirements are compatible.
