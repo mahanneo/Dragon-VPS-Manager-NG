@@ -8,6 +8,10 @@ from .security import hash_password
 def connect():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB_PATH)
+    try:
+        os.chmod(DB_PATH, 0o600)
+    except OSError:
+        pass
     con.row_factory = sqlite3.Row
     return con
 
@@ -42,7 +46,13 @@ def init_db():
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS metrics_history (
+        CREATE TABLE IF NOT EXISTS login_rate_limits (
+          ip TEXT PRIMARY KEY,
+          failures INTEGER NOT NULL DEFAULT 0,
+          window_started INTEGER NOT NULL DEFAULT 0,
+          blocked_until INTEGER NOT NULL DEFAULT 0
+        );
+                CREATE TABLE IF NOT EXISTS metrics_history (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           ts INTEGER NOT NULL,
           cpu REAL NOT NULL,
@@ -92,6 +102,8 @@ def init_db():
           used_down_bytes INTEGER NOT NULL DEFAULT 0,
           expire_at INTEGER NOT NULL DEFAULT 0,
           ip_limit INTEGER NOT NULL DEFAULT 1,
+          reset_days INTEGER NOT NULL DEFAULT 0,
+          next_reset_at INTEGER NOT NULL DEFAULT 0,
           enabled INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
@@ -128,6 +140,8 @@ def init_db():
         _add_column(con, "protocol_clients", "used_up_bytes INTEGER NOT NULL DEFAULT 0")
         _add_column(con, "protocol_clients", "used_down_bytes INTEGER NOT NULL DEFAULT 0")
         _add_column(con, "protocol_clients", "last_traffic_at TEXT")
+        _add_column(con, "protocol_clients", "reset_days INTEGER NOT NULL DEFAULT 0")
+        _add_column(con, "protocol_clients", "next_reset_at INTEGER NOT NULL DEFAULT 0")
         _add_column(con, "admins", "totp_secret TEXT")
         _add_column(con, "admins", "totp_enabled INTEGER NOT NULL DEFAULT 0")
 
@@ -309,15 +323,17 @@ def all_settings():
         return {r["key"]:r["value"] for r in con.execute("SELECT key,value FROM settings").fetchall()}
 
 
-def create_protocol_client(name,engine,protocol,inbound_tag,credential,share_link,quota_bytes=0,expire_at=0,ip_limit=1):
+def create_protocol_client(name,engine,protocol,inbound_tag,credential,share_link,quota_bytes=0,expire_at=0,ip_limit=1,reset_days=0):
     ts=now()
     sub_id=secrets.token_urlsafe(18)
+    reset_days=max(0,int(reset_days or 0))
+    next_reset_at=int(datetime.now(timezone.utc).timestamp())+reset_days*86400 if reset_days else 0
     with connect() as con:
         cur=con.execute(
-            """INSERT INTO protocol_clients(name,engine,protocol,inbound_tag,credential,share_link,subscription_id,quota_bytes,expire_at,ip_limit,enabled,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?)""",
+            """INSERT INTO protocol_clients(name,engine,protocol,inbound_tag,credential,share_link,subscription_id,quota_bytes,expire_at,ip_limit,reset_days,next_reset_at,enabled,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)""",
             (name,engine,protocol,inbound_tag,credential,share_link,sub_id,max(0,int(quota_bytes or 0)),
-             max(0,int(expire_at or 0)),max(1,int(ip_limit or 1)),ts,ts)
+             max(0,int(expire_at or 0)),max(1,int(ip_limit or 1)),reset_days,next_reset_at,ts,ts)
         )
         return cur.lastrowid
 
@@ -331,12 +347,16 @@ def get_protocol_client(client_id):
         row=con.execute("SELECT * FROM protocol_clients WHERE id=?",(int(client_id),)).fetchone()
         return dict(row) if row else None
 
-def update_protocol_client_state(client_id,enabled=None,quota_bytes=None,expire_at=None,ip_limit=None):
+def update_protocol_client_state(client_id,enabled=None,quota_bytes=None,expire_at=None,ip_limit=None,reset_days=None):
     fields=[]; values=[]
     if enabled is not None: fields.append("enabled=?"); values.append(1 if enabled else 0)
     if quota_bytes is not None: fields.append("quota_bytes=?"); values.append(max(0,int(quota_bytes)))
     if expire_at is not None: fields.append("expire_at=?"); values.append(max(0,int(expire_at)))
     if ip_limit is not None: fields.append("ip_limit=?"); values.append(max(1,int(ip_limit)))
+    if reset_days is not None:
+        reset_days=max(0,int(reset_days))
+        fields.append("reset_days=?"); values.append(reset_days)
+        fields.append("next_reset_at=?"); values.append(int(datetime.now(timezone.utc).timestamp())+reset_days*86400 if reset_days else 0)
     if not fields: return
     fields.append("updated_at=?"); values.append(now()); values.append(int(client_id))
     with connect() as con:
@@ -382,3 +402,48 @@ def protocol_client_by_subscription(sub_id):
     with connect() as con:
         row=con.execute("SELECT * FROM protocol_clients WHERE subscription_id=? AND enabled=1",(str(sub_id),)).fetchone()
         return dict(row) if row else None
+
+
+def advance_protocol_reset(client_id,reset_days):
+    reset_days=max(0,int(reset_days or 0))
+    next_at=int(datetime.now(timezone.utc).timestamp())+reset_days*86400 if reset_days else 0
+    with connect() as con:
+        con.execute(
+            "UPDATE protocol_clients SET next_reset_at=?,updated_at=? WHERE id=?",
+            (next_at,now(),int(client_id))
+        )
+
+def login_rate_state(ip, now_ts):
+    with connect() as con:
+        row=con.execute("SELECT * FROM login_rate_limits WHERE ip=?",(str(ip),)).fetchone()
+        if not row:
+            return {"failures":0,"window_started":0,"blocked_until":0}
+        data=dict(row)
+        if int(data.get("blocked_until") or 0)>int(now_ts):
+            return data
+        if int(now_ts)-int(data.get("window_started") or 0)>900:
+            con.execute("DELETE FROM login_rate_limits WHERE ip=?",(str(ip),))
+            return {"failures":0,"window_started":0,"blocked_until":0}
+        return data
+
+def record_login_failure(ip, now_ts, max_failures=6, window_seconds=900, block_seconds=900):
+    ip=str(ip)
+    with connect() as con:
+        row=con.execute("SELECT * FROM login_rate_limits WHERE ip=?",(ip,)).fetchone()
+        if not row or int(now_ts)-int(row["window_started"] or 0)>window_seconds:
+            failures=1; started=int(now_ts); blocked=0
+        else:
+            failures=int(row["failures"] or 0)+1; started=int(row["window_started"] or now_ts); blocked=int(row["blocked_until"] or 0)
+        if failures>=max_failures:
+            blocked=max(blocked,int(now_ts)+block_seconds)
+        con.execute(
+            """INSERT INTO login_rate_limits(ip,failures,window_started,blocked_until)
+               VALUES(?,?,?,?)
+               ON CONFLICT(ip) DO UPDATE SET failures=excluded.failures,window_started=excluded.window_started,blocked_until=excluded.blocked_until""",
+            (ip,failures,started,blocked)
+        )
+        return {"failures":failures,"window_started":started,"blocked_until":blocked}
+
+def clear_login_failures(ip):
+    with connect() as con:
+        con.execute("DELETE FROM login_rate_limits WHERE ip=?",(str(ip),))
