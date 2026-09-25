@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from .config import APP_NAME, VERSION, COOKIE_NAME, ALLOWED_SERVICES, DATA_DIR
 from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile
 from .security import verify_password, make_session, read_session, hash_password
-from . import system_ops
+from . import system_ops, protocol_ops
 
 BASE=Path(__file__).resolve().parent
 app=FastAPI(title=APP_NAME,version=VERSION,docs_url=None,redoc_url=None)
@@ -22,6 +22,12 @@ def current_user(request:Request): return read_session(request.cookies.get(COOKI
 def require_user(request:Request):
     user=current_user(request)
     if not user: raise HTTPException(status_code=401,detail="authentication required")
+    return user
+
+def require_mutation(request:Request):
+    user=require_user(request)
+    if request.headers.get("x-makia-request")!="1":
+        raise HTTPException(status_code=403,detail="invalid management request")
     return user
 
 def ip(request:Request): return request.client.host if request.client else None
@@ -72,7 +78,8 @@ def login(request:Request,username:str=Form(...),password:str=Form(...)):
         return templates.TemplateResponse("login.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"error":"نام کاربری یا رمز عبور صحیح نیست."},status_code=401)
     audit(username,"login_success",ip=ip(request))
     r=RedirectResponse("/",302)
-    r.set_cookie(COOKIE_NAME,make_session(username),httponly=True,secure=False,samesite="strict",max_age=43200)
+    secure_cookie=request.headers.get("x-forwarded-proto","").lower()=="https"
+    r.set_cookie(COOKIE_NAME,make_session(username),httponly=True,secure=secure_cookie,samesite="strict",max_age=43200)
     return r
 
 @app.post("/logout")
@@ -120,7 +127,7 @@ class AccountCreate(BaseModel):
 
 @app.post("/api/accounts")
 def create_account(payload:AccountCreate,request:Request):
-    actor=require_user(request)
+    actor=require_mutation(request)
     try:
         system_ops.create_ssh_user(payload.username,payload.password,payload.expire_date)
         upsert_profile(payload.username,payload.plan,payload.note,payload.expire_date,payload.connection_limit,payload.quota_mb,1)
@@ -140,7 +147,7 @@ class AccountUpdate(BaseModel):
 
 @app.put("/api/accounts/{username}")
 def update_account(username:str,payload:AccountUpdate,request:Request):
-    actor=require_user(request)
+    actor=require_mutation(request)
     try:
         system_ops.update_ssh_user(username,payload.password,payload.expire_date,payload.clear_expire)
         system_ops.lock_user(username,not payload.enabled)
@@ -151,7 +158,7 @@ def update_account(username:str,payload:AccountUpdate,request:Request):
 
 @app.post("/api/accounts/{username}/{action}")
 def account_action(username:str,action:str,request:Request):
-    actor=require_user(request)
+    actor=require_mutation(request)
     try:
         if action=="lock":
             result=system_ops.lock_user(username,True)
@@ -185,7 +192,7 @@ class SessionDisconnect(BaseModel):
 
 @app.post("/api/sessions/disconnect")
 def session_disconnect(payload:SessionDisconnect,request:Request):
-    actor=require_user(request)
+    actor=require_mutation(request)
     try: result=system_ops.disconnect_session(payload.tty)
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
     audit(actor,"session_disconnect",payload.username or payload.tty,payload.tty,ip(request))
@@ -193,7 +200,7 @@ def session_disconnect(payload:SessionDisconnect,request:Request):
 
 @app.post("/api/services/{name}/{action}")
 def service(name:str,action:str,request:Request):
-    actor=require_user(request)
+    actor=require_mutation(request)
     try: result=system_ops.service_action(name,action)
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
     audit(actor,f"service_{action}",name,ip=ip(request))
@@ -204,6 +211,11 @@ def security(request:Request):
     require_user(request)
     return system_ops.security_status()
 
+@app.get("/api/protocols")
+def protocols(request:Request):
+    require_user(request)
+    return {"xray":protocol_ops.status()}
+
 @app.get("/api/backups")
 def backups(request:Request):
     require_user(request)
@@ -211,7 +223,7 @@ def backups(request:Request):
 
 @app.post("/api/backups")
 def backup_create(request:Request):
-    actor=require_user(request)
+    actor=require_mutation(request)
     try: result=system_ops.create_backup(str(DATA_DIR))
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
     audit(actor,"backup_create",result["name"],ip=ip(request))
@@ -229,7 +241,7 @@ class PasswordChange(BaseModel):
 
 @app.post("/api/admin/password")
 def change_password(payload:PasswordChange,request:Request):
-    actor=require_user(request)
+    actor=require_mutation(request)
     with connect() as con:
         row=con.execute("SELECT * FROM admins WHERE username=?",(actor,)).fetchone()
         if not row or not verify_password(payload.current_password,row["password_hash"]): raise HTTPException(400,"current password is incorrect")
