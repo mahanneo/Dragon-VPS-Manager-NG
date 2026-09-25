@@ -78,6 +78,23 @@ def init_db():
           disk REAL
         );
         CREATE INDEX IF NOT EXISTS idx_nodes_last_seen ON nodes(last_seen_at);
+        CREATE TABLE IF NOT EXISTS protocol_clients (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          engine TEXT NOT NULL,
+          protocol TEXT NOT NULL,
+          inbound_tag TEXT NOT NULL,
+          credential TEXT NOT NULL,
+          share_link TEXT NOT NULL,
+          quota_bytes INTEGER NOT NULL DEFAULT 0,
+          expire_at INTEGER NOT NULL DEFAULT 0,
+          ip_limit INTEGER NOT NULL DEFAULT 1,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(engine,inbound_tag,name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_protocol_clients_name ON protocol_clients(name);
         CREATE TABLE IF NOT EXISTS account_profiles (
           username TEXT PRIMARY KEY,
           plan TEXT NOT NULL DEFAULT '',
@@ -279,3 +296,40 @@ def set_setting(key, value):
 def all_settings():
     with connect() as con:
         return {r["key"]:r["value"] for r in con.execute("SELECT key,value FROM settings").fetchall()}
+
+
+def create_protocol_client(name,engine,protocol,inbound_tag,credential,share_link,quota_bytes=0,expire_at=0,ip_limit=1):
+    ts=now()
+    with connect() as con:
+        cur=con.execute(
+            """INSERT INTO protocol_clients(name,engine,protocol,inbound_tag,credential,share_link,quota_bytes,expire_at,ip_limit,enabled,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,1,?,?)""",
+            (name,engine,protocol,inbound_tag,credential,share_link,max(0,int(quota_bytes or 0)),
+             max(0,int(expire_at or 0)),max(1,int(ip_limit or 1)),ts,ts)
+        )
+        return cur.lastrowid
+
+def list_protocol_clients():
+    with connect() as con:
+        rows=con.execute("SELECT * FROM protocol_clients ORDER BY id DESC").fetchall()
+        return [dict(r) for r in rows]
+
+def get_protocol_client(client_id):
+    with connect() as con:
+        row=con.execute("SELECT * FROM protocol_clients WHERE id=?",(int(client_id),)).fetchone()
+        return dict(row) if row else None
+
+def update_protocol_client_state(client_id,enabled=None,quota_bytes=None,expire_at=None,ip_limit=None):
+    fields=[]; values=[]
+    if enabled is not None: fields.append("enabled=?"); values.append(1 if enabled else 0)
+    if quota_bytes is not None: fields.append("quota_bytes=?"); values.append(max(0,int(quota_bytes)))
+    if expire_at is not None: fields.append("expire_at=?"); values.append(max(0,int(expire_at)))
+    if ip_limit is not None: fields.append("ip_limit=?"); values.append(max(1,int(ip_limit)))
+    if not fields: return
+    fields.append("updated_at=?"); values.append(now()); values.append(int(client_id))
+    with connect() as con:
+        con.execute("UPDATE protocol_clients SET "+",".join(fields)+" WHERE id=?",values)
+
+def delete_protocol_client(client_id):
+    with connect() as con:
+        con.execute("DELETE FROM protocol_clients WHERE id=?",(int(client_id),))
