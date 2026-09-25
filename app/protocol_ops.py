@@ -156,6 +156,7 @@ def catalog():
             {"id":"vmess","engine":"xray","available":x["installed"]},
             {"id":"trojan","engine":"xray","available":x["installed"]},
             {"id":"shadowsocks","engine":"xray","available":x["installed"]},
+            {"id":"hysteria2","engine":"xray","available":x["installed"]},
             {"id":"wireguard","engine":"wireguard","available":wg["installed"]},
             {"id":"openvpn","engine":"openvpn","available":ovpn["installed"]},
             {"id":"ssh","engine":"openssh","available":ssh["installed"]},
@@ -555,7 +556,7 @@ def _build_xray_stream(binary,protocol,transport,security,path_value,server_name
 
 def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", security="none", path_value="/", server_name="", reality_dest=""):
     protocol=(protocol or "").lower()
-    if protocol not in {"vless","vmess","trojan","shadowsocks"}:
+    if protocol not in {"vless","vmess","trojan","shadowsocks","hysteria2"}:
         raise ProtocolError("unsupported Xray quick protocol")
     port=_validate_port(port)
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
@@ -586,6 +587,7 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
     tag=f"makia-{protocol}-{port}"
     credential=None
     client_obj=None
+    xray_protocol="hysteria" if protocol=="hysteria2" else protocol
     if protocol in {"vless","vmess"}:
         credential=str(uuid.uuid4())
         client_obj={"id":credential,"email":name,"level":0}
@@ -597,17 +599,43 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
         credential=secrets.token_urlsafe(18)
         client_obj={"password":credential,"email":name,"level":0}
         settings={"clients":[client_obj]}
+    elif protocol=="hysteria2":
+        credential=secrets.token_urlsafe(24)
+        client_obj={"auth":credential,"email":name,"level":0}
+        settings={"version":2,"users":[client_obj]}
+        transport="hysteria"
+        security="tls"
     else:
         credential=secrets.token_urlsafe(18)
         settings={"method":"aes-128-gcm","password":credential,"network":"tcp,udp"}
-    stream,reality_meta=_build_xray_stream(binary,protocol,transport,security,path_value,server_name,reality_dest)
+    if protocol=="hysteria2":
+        sni=(server_name or "").strip().lower()
+        if not sni:
+            raise ProtocolError("Hysteria2 requires a TLS domain/SNI")
+        cert=Path(f"/etc/letsencrypt/live/{sni}/fullchain.pem")
+        key=Path(f"/etc/letsencrypt/live/{sni}/privkey.pem")
+        if not cert.exists() or not key.exists():
+            raise ProtocolError("Hysteria2 requires a valid Let's Encrypt certificate for the SNI")
+        stream={
+            "method":"hysteria",
+            "security":"tls",
+            "hysteriaSettings":{"version":2},
+            "tlsSettings":{
+                "serverName":sni,
+                "alpn":["h3"],
+                "certificates":[{"certificateFile":str(cert),"keyFile":str(key)}],
+            },
+        }
+        reality_meta={}
+    else:
+        stream,reality_meta=_build_xray_stream(binary,protocol,transport,security,path_value,server_name,reality_dest)
     if protocol=="vless" and security=="reality" and stream.get("method")=="raw":
         client_obj["flow"]="xtls-rprx-vision"
     inbound={
         "tag":tag,
         "listen":"0.0.0.0",
         "port":port,
-        "protocol":protocol,
+        "protocol":xray_protocol,
         "settings":settings,
         "streamSettings":stream,
         "sniffing":{"enabled":True,"destOverride":["http","tls","quic"],"routeOnly":True},
@@ -651,7 +679,10 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
         q.update({"sni":reality_meta["server_name"],"fp":"chrome","pbk":reality_meta["public_key"],"sid":reality_meta["short_id"]})
         if protocol=="vless" and method=="raw": q["flow"]="xtls-rprx-vision"
     query=urllib.parse.urlencode(q)
-    if protocol=="vless":
+    if protocol=="hysteria2":
+        hq={"sni":(server_name or "").strip().lower(),"insecure":"0"}
+        link=f"hysteria2://{urllib.parse.quote(credential,safe='')}@{host}:{port}/?{urllib.parse.urlencode(hq)}#{label}"
+    elif protocol=="vless":
         link=f"vless://{credential}@{host}:{port}?{query}#{label}"
     elif protocol=="trojan":
         link=f"trojan://{urllib.parse.quote(credential,safe='')}@{host}:{port}?{query}#{label}"
@@ -684,10 +715,15 @@ def disable_xray_client(inbound_tag,email):
             continue
         settings=inbound.get("settings") or {}
         clients=settings.get("clients")
+        users=settings.get("users")
         if isinstance(clients,list):
             before=len(clients)
             settings["clients"]=[x for x in clients if not (isinstance(x,dict) and x.get("email")==email)]
             changed=len(settings["clients"])!=before
+        elif isinstance(users,list):
+            before=len(users)
+            settings["users"]=[x for x in users if not (isinstance(x,dict) and x.get("email")==email)]
+            changed=len(settings["users"])!=before
     if not changed:
         return {"disabled":False,"reason":"client not found in config"}
     backup_dir=Path("/var/backups/makia-vps-manager")
