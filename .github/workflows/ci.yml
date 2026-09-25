@@ -38,3 +38,16 @@ jobs:
           grep -q 'Makia VPS Manager' app/config.py
           grep -q '/opt/makia-vps-manager' scripts/install.sh
           grep -q 'makia-vps-manager.service' scripts/install.sh
+
+      - name: Packaging contract
+        run: |
+          grep -q 'makia-protocol-traffic.service' scripts/install.sh
+          grep -q 'makia-protocol-traffic.service' scripts/update.sh
+          grep -q 'makia-doctor' scripts/install.sh
+          grep -q 'makia-doctor' scripts/update.sh
+          grep -q 'makia-protocol-traffic' scripts/uninstall.sh
+          test -f systemd/makia-protocol-traffic.service
+          test -f scripts/doctor.sh
+          test -f app/static/manifest.webmanifest
+          test -f app/static/sw.js
+          test -f docs/UAT-0.8.0-RC1.md

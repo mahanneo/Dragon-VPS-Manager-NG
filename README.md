@@ -1,66 +1,157 @@
 # ⚡ Makia VPS Manager
 
-Modern, web-first VPS control center for Linux servers.
+Modern web-first VPS and access-infrastructure control center for Ubuntu.
 
-> **Current release:** `v0.7.0-rc1`  
-> This is an active alpha. Use a disposable VPS for first installation and validate host behavior before production use.
+> **Current release candidate:** `v0.8.0-rc1`  
+> CI-validated, but **not yet production-certified**. A real-host UAT is required before a `1.0.0 Stable` label.
 
-## Highlights
+## What Makia manages today
 
-- Premium responsive dark control center
-- Global command palette (Ctrl/Cmd + K)
-- Live CPU / RAM / disk / swap / load / network telemetry
-- Professional SSH Account Center
-- Server-side 4-digit PIN, 6-digit PIN, Easy-8 and strong password generation
-- Professional Account Center with search/filter, expiry presets, plan, notes, bulk extend, enforced connection limit and quota policy
-- Live session visibility, controlled disconnect and bulk disconnect
-- Background Policy Enforcer for concurrent SSH connection limits
-- Xray Protocol Center with real binary/service/config/inbound discovery
-- Service start / stop / restart through an allowlist
-- Security Center status for UFW, Fail2ban and OpenSSH
-- Fail2ban baseline automatically enabled on fresh installs and upgrades
-- Audit trail
-- In-panel backup creation and backup listing
-- CLI updater with pre-update backup and post-update health check
-- GitHub version awareness in Update Center
-- Ubuntu 22.04 / 24.04 installer
-- Migration path from the earlier Dragon alpha runtime
+### SSH Account Center
+- Server-side PIN 4 / PIN 6 / Easy-8 / strong-password generation
+- 1 / 3 / 7 / 15 / 30 / 60 / 90 day presets and custom date
+- Extend from the existing future expiry date
+- Unlimited-expiry mode
+- **Session Limit** and **Device/IP Limit** as separate policies
+- Real background enforcement for expiry, concurrent sessions and distinct SSH source IPs
+- Search, filters, bulk lock/unlock/disconnect and bulk renewal
+- Live source-IP visibility
+- Fail2ban baseline on fresh installs/upgrades
+
+> SSH traffic quota is deliberately **not presented as enforced** until a reliable per-user host accounting layer is available.
+
+### Protocol Hub
+Guided, operational adapters:
+- Xray: VLESS, VMess, Trojan, Shadowsocks, Hysteria2
+- WireGuard
+- OpenVPN
+- SSH
+- Stunnel
+
+Validated Xray transports:
+- RAW/TCP
+- WebSocket
+- gRPC
+- HTTPUpgrade
+- XHTTP
+- mKCP
+
+Xray security:
+- None
+- TLS using the panel-managed Let's Encrypt certificate
+- VLESS REALITY with generated X25519 keys and Short ID
+
+Advanced Xray JSON editor:
+- Read the live config
+- Validate with the installed Xray binary before apply
+- Backup before change
+- Restart/health gate
+- Automatic rollback on failed apply
+
+This advanced surface can be used for Xray features such as routing, outbounds, fallbacks, HTTP/SOCKS, Tunnel/Dokodemo and TUN while dedicated guided forms are still being built.
+
+### Protocol Clients
+- First-class protocol-client records
+- Secure subscription IDs and `/sub/<id>` endpoint
+- QR/share links
+- Expiry
+- Traffic quota for Xray clients with per-user stats support
+- Persistent cumulative traffic counters across Xray restarts
+- Manual traffic reset
+- Recurring 7/30/custom-day traffic reset cycles
+- Automatic quota suspension
+- Automatic reactivation at the next quota-reset boundary
+- Live Xray online-IP/device visibility where supported by the installed Xray core
+- IP-limit violation visibility
+- Manual suspend/reactivate that actually modifies the Xray config
+
+Per-client traffic enforcement currently applies to VLESS, VMess, Trojan and Hysteria2. Shadowsocks quick profiles are clearly marked as not having independent per-client accounting in this RC.
+
+### WireGuard
+- Package install
+- Server bootstrap
+- IP forwarding/NAT
+- Peer provisioning
+- Downloadable client configuration
+
+### OpenVPN
+- Package/Easy-RSA install
+- CA and server PKI bootstrap
+- Server configuration
+- UDP or TCP-server mode
+- NAT/IP forwarding
+- Client certificate generation
+- Downloadable inline `.ovpn` profile
+
+### Infrastructure / Admin
+- CPU/RAM/disk/swap/load/network telemetry
+- 24-hour metrics history
+- Service health/control allowlist
+- Audit log
+- Backups
+- Update Center
+- Multi-node heartbeat foundation
+- Admin 2FA
+- Scoped API tokens
+- Persistent login-rate limiting
+- Owner-only SQLite permissions
+- Domain management + Nginx validation/rollback
+- Let's Encrypt via Certbot
+- Persian / English shell
+- Midnight / AMOLED / Graphite themes
+- Comfortable / Compact density
+- Installable PWA shell
+- `makia-doctor` host diagnostics
+
+## Capability honesty
+
+Makia does not render an unimplemented feature as a working button.
+
+The Protocol Hub labels capabilities as:
+- **Guided** — dedicated tested Makia workflow exists.
+- **Advanced** — supported through the validated Xray configuration editor.
+- **Unavailable** — no tested adapter exists in this release.
+
+TUIC, AmneziaWG and MTProto are currently listed as unavailable rather than being simulated.
 
 ## Quick install
 
-Run as root on a fresh Ubuntu 22.04 or 24.04 VPS:
+Run as root on a **fresh Ubuntu 22.04 or 24.04 VPS**:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/mahanneo/Makia-VPS-Manager/main/install.sh)
 ```
 
-The installer prints a unique administrator bootstrap password. Change it immediately after login.
+The installer prints a unique administrator bootstrap password. Change it immediately.
 
-## Commands
+## Update
 
 ```bash
 sudo makia-update
+```
+
+The updater:
+1. creates a backup;
+2. downloads the current `main`;
+3. updates application and service units;
+4. restarts Makia workers;
+5. performs a backend health check;
+6. runs `makia-doctor`.
+
+## Diagnostics
+
+```bash
+sudo makia-doctor
+```
+
+It checks the Makia backend, Nginx, Policy Enforcer, Metrics Sampler, Protocol Traffic Collector, Fail2ban and installed optional protocol tooling.
+
+## Other commands
+
+```bash
 sudo makia-backup
 sudo makia-uninstall
 ```
-
-Legacy command aliases such as `dragon-update` remain temporarily available for migration compatibility.
-
-## Account passwords
-
-Makia allows user passwords/PINs with a minimum of **4 characters** for operator convenience. This does **not** mean 4-digit SSH PINs are recommended on an unrestricted public SSH service.
-
-If simple PINs are used:
-- enable Fail2ban;
-- use firewall/IP restrictions where possible;
-- avoid exposing administration endpoints unnecessarily;
-- prefer 6-digit PINs or strong generated passwords for higher-risk accounts.
-
-Administrator passwords still require stronger minimums.
-
-## Quota policy
-
-The current Account Center stores a traffic quota policy for each account, but it does **not invent traffic consumption data**. Reliable per-account accounting/enforcement will be connected to the protocol/Xray accounting layer in the next protocol milestone.
 
 ## Runtime layout
 
@@ -71,73 +162,41 @@ The current Account Center stores a traffic quota policy for each account, but i
 ├── .venv
 └── VERSION
 
-/etc/systemd/system/makia-vps-manager.service
+/etc/systemd/system/
+├── makia-vps-manager.service
+├── makia-policy-enforcer.service
+├── makia-metrics-sampler.service
+└── makia-protocol-traffic.service
+
 /etc/nginx/sites-available/makia-vps-manager
 /var/backups/makia-vps-manager
 ```
 
-## Architecture
+## Security design
 
-```text
-Admin Browser
-      │
-      ▼
-    Nginx
-      │
-      ▼
-Makia Web/API :8787 (localhost only)
-      │
-      ├── Authentication
-      ├── Account metadata
-      ├── Live sessions
-      ├── Audit
-      ├── Backup
-      └── Validated privileged adapters
-              │
-              ▼
-          Linux host
-```
+The browser is not given a generic root-shell endpoint. Privileged operations are explicit and validated.
 
-Makia intentionally does not expose a generic root shell endpoint.
+Important:
+- Admin passwords remain stronger than SSH user PINs.
+- Four-digit SSH PINs are optional and intentionally labelled low-security.
+- Use HTTPS before exposing the admin panel publicly.
+- Keep Fail2ban active.
+- Prefer trusted admin IPs/VPN access where possible.
+- Test Xray/WireGuard/OpenVPN changes on a disposable VPS before production.
 
-## Roadmap
+## Release gate
 
-Next major work:
-- Full validated Xray inbound management
-- VLESS / VMess / Trojan / Shadowsocks adapters where validated
-- QR and share links
-- Subscription endpoints
-- reliable traffic accounting and quota enforcement
-- TLS automation
-- TOTP 2FA
-- scoped API tokens
-- multi-node control
-- notification/webhook/Telegram integration
-- signed release verification and one-click rollback
-- PWA and bilingual UI
+`v0.8.0-rc1` must pass:
+- Python compilation
+- unit tests
+- Bash syntax
+- JavaScript syntax
+- dangerous-pattern guard
+- packaging contract
+- real Ubuntu 22.04/24.04 host UAT
 
-See `docs/ROADMAP.md` on the development line for the full roadmap.
+See `docs/UAT-0.8.0-RC1.md`.
 
 ## License
 
-GPL-3.0-or-later. Third-party code must only be incorporated when license and attribution requirements are compatible.
-
-## Protocol Hub (RC1)
-
-Makia now has operational adapters for:
-
-- **Xray family:** VLESS, VMess, Trojan and Shadowsocks quick inbounds when Xray is already installed. Config changes are tested before apply and rolled back if restart/health fails.
-- **WireGuard:** package installation, server bootstrap, peer provisioning and downloadable client config.
-- **OpenVPN:** package/PKI bootstrap, server configuration and downloadable client profiles.
-- **SSH:** account lifecycle, expiry, PIN/password generation, live sessions and disconnect controls.
-- **Stunnel:** installation/status and service integration.
-
-The panel intentionally does not label unimplemented actions as working. Unsupported operations are surfaced as unavailable until a tested adapter exists.
-
-## Domain / TLS
-
-Settings → Domain & TLS can persist the panel domain, apply it to Nginx after config validation, and request Let's Encrypt via Certbot. DNS must already point to the VPS before certificate issuance.
-
-## UI direction
-
-The interface uses a modern card-driven control-center layout inspired by current infrastructure panels and high-conversion marketplace UX patterns, while keeping Makia's code and visual identity independent.
+GPL-3.0-or-later. Third-party source is only incorporated where its license and attribution requirements are compatible.

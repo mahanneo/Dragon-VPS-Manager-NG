@@ -1,0 +1,18 @@
+{
+  "name": "Makia VPS Manager",
+  "short_name": "Makia",
+  "description": "Modern VPS and access infrastructure control center",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#060913",
+  "theme_color": "#060913",
+  "icons": [
+    {
+      "src": "/static/makia.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

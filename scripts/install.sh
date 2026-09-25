@@ -68,6 +68,7 @@ rm -f /etc/systemd/system/dragon-vps-manager.service
 install -m 0644 "$SOURCE_DIR/systemd/makia-vps-manager.service" /etc/systemd/system/makia-vps-manager.service
 install -m 0644 "$SOURCE_DIR/systemd/makia-policy-enforcer.service" /etc/systemd/system/makia-policy-enforcer.service
 install -m 0644 "$SOURCE_DIR/systemd/makia-metrics-sampler.service" /etc/systemd/system/makia-metrics-sampler.service
+install -m 0644 "$SOURCE_DIR/systemd/makia-protocol-traffic.service" /etc/systemd/system/makia-protocol-traffic.service
 install -m 0644 "$SOURCE_DIR/nginx/makia-vps-manager.conf" /etc/nginx/sites-available/makia-vps-manager
 ln -sfn /etc/nginx/sites-available/makia-vps-manager /etc/nginx/sites-enabled/makia-vps-manager
 rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/dragon-vps-manager /etc/nginx/sites-available/dragon-vps-manager
@@ -75,6 +76,7 @@ rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/dragon-vps-manag
 install -m 0755 "$SOURCE_DIR/scripts/update.sh" /usr/local/sbin/makia-update
 install -m 0755 "$SOURCE_DIR/scripts/backup.sh" /usr/local/sbin/makia-backup
 install -m 0755 "$SOURCE_DIR/scripts/uninstall.sh" /usr/local/sbin/makia-uninstall
+install -m 0755 "$SOURCE_DIR/scripts/doctor.sh" /usr/local/sbin/makia-doctor
 ln -sfn /usr/local/sbin/makia-update /usr/local/sbin/dragon-update
 ln -sfn /usr/local/sbin/makia-backup /usr/local/sbin/dragon-backup
 ln -sfn /usr/local/sbin/makia-uninstall /usr/local/sbin/dragon-uninstall
@@ -83,6 +85,7 @@ systemctl daemon-reload
 systemctl enable --now makia-vps-manager
 systemctl enable --now makia-policy-enforcer
 systemctl enable --now makia-metrics-sampler
+systemctl enable --now makia-protocol-traffic
 
 # Baseline SSH brute-force protection. We do not enable/modify UFW automatically
 # because doing so without knowing the operator's SSH path can lock them out.
@@ -107,4 +110,5 @@ printf 'Panel: http://%s/\n' "${SERVER_IP:-SERVER_IP}"
 printf 'Username: admin\n'
 printf 'Bootstrap password: %s\n' "$ADMIN_PASSWORD"
 printf '\nIMPORTANT: change the administrator password immediately.\n'
-printf 'For public exposure, enable HTTPS and review Security Center first.\n\n'
+printf 'For public exposure, enable HTTPS and review Security Center first.\n'
+printf 'Run makia-doctor for host diagnostics.\n\n'

@@ -4,12 +4,12 @@ import time, io, base64, secrets, string, urllib.request
 import pyotp, qrcode
 import qrcode.image.svg
 from fastapi import FastAPI, Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from .config import APP_NAME, VERSION, COOKIE_NAME, ALLOWED_SERVICES, DATA_DIR
-from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings
+from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client, reset_protocol_traffic, protocol_client_by_subscription, login_rate_state, record_login_failure, clear_login_failures
 from .security import verify_password, make_session, read_session, hash_password, make_preauth, read_preauth
 from . import system_ops, protocol_ops, panel_ops
 
@@ -94,7 +94,10 @@ def account_rows():
             "expire_date":p.get("expire_date"),
             "days_left":left,
             "connection_limit":int(p.get("connection_limit",1) or 1),
+            "device_limit":int(p.get("device_limit",1) or 1),
             "quota_mb":int(p.get("quota_mb",0) or 0),
+            "renewal_days":int(p.get("renewal_days",0) or 0),
+            "online_ips":sorted({s.get("remote") for s in sessions if s.get("username")==u["username"] and s.get("remote")}),
             "enabled":bool(p.get("enabled",1)),
             "online":counts.get(u["username"],0),
             "expired":left is not None and left<0,
@@ -104,7 +107,11 @@ def account_rows():
 @app.get("/",response_class=HTMLResponse)
 def root(request:Request):
     if not current_user(request): return RedirectResponse("/login",302)
-    return templates.TemplateResponse("dashboard.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"language":get_setting("language","fa"),"panel_domain":get_setting("panel_domain","")})
+    return templates.TemplateResponse("dashboard.html",{
+        "request":request,"app_name":APP_NAME,"version":VERSION,
+        "language":get_setting("language","fa"),"panel_domain":get_setting("panel_domain",""),
+        "theme":get_setting("theme","midnight"),"density":get_setting("density","comfortable")
+    })
 
 @app.get("/login",response_class=HTMLResponse)
 def login_page(request:Request):
@@ -112,11 +119,20 @@ def login_page(request:Request):
 
 @app.post("/login")
 def login(request:Request,username:str=Form(...),password:str=Form(...)):
+    remote_ip=ip(request) or "unknown"
+    now_ts=int(time.time())
+    rate=login_rate_state(remote_ip,now_ts)
+    if int(rate.get("blocked_until") or 0)>now_ts:
+        wait=max(1,int(rate["blocked_until"])-now_ts)
+        audit(username or "unknown","login_rate_limited",detail=f"retry_after={wait}",ip=remote_ip)
+        return templates.TemplateResponse("login.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"error":f"تلاش‌های ناموفق زیاد بوده است. {max(1,wait//60)} دقیقه دیگر دوباره امتحان کنید."},status_code=429)
     with connect() as con:
         row=con.execute("SELECT * FROM admins WHERE username=? AND active=1",(username,)).fetchone()
     if not row or not verify_password(password,row["password_hash"]):
-        audit(username or "unknown","login_failed",ip=ip(request))
+        state=record_login_failure(remote_ip,now_ts)
+        audit(username or "unknown","login_failed",detail=f"failures={state['failures']}",ip=remote_ip)
         return templates.TemplateResponse("login.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"error":"نام کاربری یا رمز عبور صحیح نیست."},status_code=401)
+    clear_login_failures(remote_ip)
     twofa=get_admin_2fa(username)
     if twofa and twofa.get("totp_enabled"):
         audit(username,"login_password_success_2fa_required",ip=ip(request))
@@ -191,7 +207,9 @@ class AccountCreate(BaseModel):
     plan:str=""
     note:str=""
     connection_limit:int=Field(default=1,ge=1,le=50)
+    device_limit:int=Field(default=1,ge=1,le=50)
     quota_mb:int=Field(default=0,ge=0,le=10_000_000)
+    renewal_days:int=Field(default=0,ge=0,le=3650)
 
 @app.get("/api/accounts/new-defaults")
 def account_new_defaults(request:Request):
@@ -220,7 +238,7 @@ def create_account(payload:AccountCreate,request:Request):
         raise HTTPException(400,"password is required")
     try:
         system_ops.create_ssh_user(payload.username,password,payload.expire_date)
-        upsert_profile(payload.username,payload.plan,payload.note,payload.expire_date,payload.connection_limit,payload.quota_mb,1)
+        upsert_profile(payload.username,payload.plan,payload.note,payload.expire_date,payload.connection_limit,payload.quota_mb,1,payload.device_limit,payload.renewal_days)
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
     audit(actor,"account_create",payload.username,f"plan={payload.plan}; limit={payload.connection_limit}; quota_mb={payload.quota_mb}; password_mode={payload.password_mode}",ip(request))
     return {"ok":True,"username":payload.username,"password":password if generated else None,"generated":generated}
@@ -232,7 +250,9 @@ class AccountUpdate(BaseModel):
     plan:str=""
     note:str=""
     connection_limit:int=Field(default=1,ge=1,le=50)
+    device_limit:int=Field(default=1,ge=1,le=50)
     quota_mb:int=Field(default=0,ge=0,le=10_000_000)
+    renewal_days:int=Field(default=0,ge=0,le=3650)
     enabled:bool=True
 
 @app.put("/api/accounts/{username}")
@@ -241,7 +261,7 @@ def update_account(username:str,payload:AccountUpdate,request:Request):
     try:
         system_ops.update_ssh_user(username,payload.password,payload.expire_date,payload.clear_expire)
         system_ops.lock_user(username,not payload.enabled)
-        upsert_profile(username,payload.plan,payload.note,None if payload.clear_expire else payload.expire_date,payload.connection_limit,payload.quota_mb,1 if payload.enabled else 0)
+        upsert_profile(username,payload.plan,payload.note,None if payload.clear_expire else payload.expire_date,payload.connection_limit,payload.quota_mb,1 if payload.enabled else 0,payload.device_limit,payload.renewal_days)
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
     audit(actor,"account_update",username,f"enabled={payload.enabled}; limit={payload.connection_limit}; quota_mb={payload.quota_mb}",ip(request))
     return {"ok":True}
@@ -253,11 +273,11 @@ def account_action(username:str,action:str,request:Request):
         if action=="lock":
             result=system_ops.lock_user(username,True)
             p=next((a for a in account_rows() if a["username"]==username),None)
-            if p: upsert_profile(username,p["plan"],p["note"],p["expire_date"],p["connection_limit"],p["quota_mb"],0)
+            if p: upsert_profile(username,p["plan"],p["note"],p["expire_date"],p["connection_limit"],p["quota_mb"],0,p.get("device_limit",1),p.get("renewal_days",0))
         elif action=="unlock":
             result=system_ops.lock_user(username,False)
             p=next((a for a in account_rows() if a["username"]==username),None)
-            if p: upsert_profile(username,p["plan"],p["note"],p["expire_date"],p["connection_limit"],p["quota_mb"],1)
+            if p: upsert_profile(username,p["plan"],p["note"],p["expire_date"],p["connection_limit"],p["quota_mb"],1,p.get("device_limit",1),p.get("renewal_days",0))
         elif action=="disconnect":
             targets=[s for s in system_ops.online_sessions() if s["username"]==username and s["tty"]]
             for s in targets:
@@ -303,7 +323,7 @@ def bulk_account_action(payload:BulkAccountAction,request:Request):
                         pass
                 new_expire=(base+timedelta(days=payload.days)).isoformat()
                 system_ops.update_ssh_user(username,expire=new_expire)
-                upsert_profile(username,p.get("plan",""),p.get("note",""),new_expire,p.get("connection_limit",1),p.get("quota_mb",0),p.get("enabled",1))
+                upsert_profile(username,p.get("plan",""),p.get("note",""),new_expire,p.get("connection_limit",1),p.get("quota_mb",0),p.get("enabled",1),p.get("device_limit",1),p.get("renewal_days",0))
             else:
                 for s in [x for x in system_ops.online_sessions() if x["username"]==username and x["tty"]]:
                     try: system_ops.disconnect_session(s["tty"])
@@ -354,18 +374,165 @@ class XrayQuickInbound(BaseModel):
     port:int=Field(ge=1,le=65535)
     name:str=Field(min_length=1,max_length=48)
     endpoint:str=Field(min_length=1,max_length=255)
+    transport:str="tcp"
+    security:str="none"
+    path_value:str=Field(default="/",max_length=255)
+    server_name:str=Field(default="",max_length=255)
+    reality_dest:str=Field(default="",max_length=255)
+    quota_gb:float=Field(default=0,ge=0,le=100000)
+    expire_days:int=Field(default=0,ge=0,le=3650)
+    ip_limit:int=Field(default=1,ge=1,le=50)
+    reset_days:int=Field(default=0,ge=0,le=3650)
 
 @app.post("/api/protocols/xray/quick-inbound")
 def xray_quick_inbound(payload:XrayQuickInbound,request:Request):
     actor=require_mutation(request)
+    if any(row.get("engine")=="xray" and row.get("name")==payload.name for row in list_protocol_clients()):
+        raise HTTPException(400,"Xray client name must be unique because traffic accounting uses the client email/name identity")
     try:
-        result=protocol_ops.create_xray_inbound(payload.protocol,payload.port,payload.name,payload.endpoint)
+        result=protocol_ops.create_xray_inbound(
+            payload.protocol,payload.port,payload.name,payload.endpoint,
+            payload.transport,payload.security,payload.path_value,payload.server_name,payload.reality_dest
+        )
     except protocol_ops.ProtocolError as e:
         raise HTTPException(400,str(e))
     qr=qrcode.make(result["share_link"],image_factory=qrcode.image.svg.SvgPathImage)
     buf=io.BytesIO(); qr.save(buf)
     result["qr"]="data:image/svg+xml;base64,"+base64.b64encode(buf.getvalue()).decode()
-    audit(actor,"xray_quick_inbound",result["tag"],f"protocol={payload.protocol}; port={payload.port}",ip(request))
+    quota_bytes=int(payload.quota_gb*1024*1024*1024)
+    expire_at=int(time.time()+payload.expire_days*86400) if payload.expire_days else 0
+    client_id=create_protocol_client(
+        payload.name,"xray",payload.protocol,result["tag"],result["credential"],result["share_link"],
+        quota_bytes,expire_at,payload.ip_limit,payload.reset_days
+    )
+    result["client_id"]=client_id
+    result["quota_bytes"]=quota_bytes
+    result["expire_at"]=expire_at
+    result["ip_limit"]=payload.ip_limit
+    result["reset_days"]=payload.reset_days
+    audit(actor,"xray_quick_inbound",result["tag"],f"protocol={payload.protocol}; port={payload.port}; quota={quota_bytes}; ip_limit={payload.ip_limit}",ip(request))
+    return result
+
+@app.get("/sub/{subscription_id}",response_class=PlainTextResponse)
+def subscription_get(subscription_id:str,format:str="base64"):
+    row=protocol_client_by_subscription(subscription_id)
+    if not row:
+        raise HTTPException(404,"subscription not found")
+    link=(row.get("share_link") or "").strip()
+    if not link:
+        raise HTTPException(404,"subscription is empty")
+    if format=="raw":
+        return PlainTextResponse(link+"\n",media_type="text/plain; charset=utf-8")
+    if format not in {"base64","b64"}:
+        raise HTTPException(400,"supported formats: base64, raw")
+    encoded=base64.b64encode((link+"\n").encode()).decode()
+    return PlainTextResponse(encoded+"\n",media_type="text/plain; charset=utf-8")
+
+@app.get("/api/protocol-clients")
+def protocol_clients_get(request:Request):
+    require_user(request)
+    rows=[]
+    now_ts=int(time.time())
+    for item in list_protocol_clients():
+        usage={"uplink":0,"downlink":0,"total":0,"available":False,"error":None}
+        if item.get("engine")=="xray" and item.get("protocol") in {"vless","vmess","trojan","hysteria2"} and item.get("enabled"):
+            try: usage=protocol_ops.xray_client_traffic(item["name"])
+            except Exception as exc: usage={"uplink":0,"downlink":0,"total":0,"available":False,"error":str(exc)[:160]}
+        stored_up=int(item.get("used_up_bytes") or 0)
+        stored_down=int(item.get("used_down_bytes") or 0)
+        cumulative={
+            "uplink":stored_up+int(usage.get("uplink") or 0),
+            "downlink":stored_down+int(usage.get("downlink") or 0),
+            "total":stored_up+stored_down+int(usage.get("total") or 0),
+            "available":bool(usage.get("available") or stored_up or stored_down),
+            "error":usage.get("error"),
+        }
+        online={"available":False,"ips":[],"error":None}
+        if item.get("engine")=="xray" and item.get("enabled"):
+            try: online=protocol_ops.xray_client_online_ips(item["name"])
+            except Exception as exc: online={"available":False,"ips":[],"error":str(exc)[:160]}
+        quota=int(item.get("quota_bytes") or 0)
+        expire_at=int(item.get("expire_at") or 0)
+        ip_limit=max(1,int(item.get("ip_limit") or 1))
+        accounting_supported=item.get("protocol") in {"vless","vmess","trojan","hysteria2"}
+        rows.append({
+            **item,
+            "accounting_supported":accounting_supported,
+            "usage":cumulative,
+            "online":online,
+            "online_ip_count":len(online.get("ips") or []),
+            "ip_violation":bool(online.get("available") and len(online.get("ips") or [])>ip_limit),
+            "quota_percent":round((cumulative["total"]/quota)*100,1) if quota else 0,
+            "expired":bool(expire_at and expire_at<now_ts),
+            "days_left":max(0,(expire_at-now_ts)//86400) if expire_at and expire_at>=now_ts else (0 if expire_at else None),
+        })
+    return rows
+
+class ProtocolClientPolicy(BaseModel):
+    quota_gb:float|None=Field(default=None,ge=0,le=100000)
+    expire_days:int|None=Field(default=None,ge=0,le=3650)
+    ip_limit:int|None=Field(default=None,ge=1,le=50)
+    reset_days:int|None=Field(default=None,ge=0,le=3650)
+    enabled:bool|None=None
+
+@app.put("/api/protocol-clients/{client_id}")
+def protocol_client_update(client_id:int,payload:ProtocolClientPolicy,request:Request):
+    actor=require_mutation(request)
+    row=get_protocol_client(client_id)
+    if not row: raise HTTPException(404,"client not found")
+    quota_bytes=int(payload.quota_gb*1024*1024*1024) if payload.quota_gb is not None else None
+    expire_at=int(time.time()+payload.expire_days*86400) if payload.expire_days is not None and payload.expire_days>0 else (0 if payload.expire_days==0 else None)
+
+    if payload.enabled is not None and bool(payload.enabled)!=bool(row.get("enabled")):
+        if row.get("engine")=="xray" and row.get("protocol") in {"vless","vmess","trojan","hysteria2"}:
+            try:
+                if payload.enabled:
+                    protocol_ops.enable_xray_client(row["inbound_tag"],row["name"],row["protocol"],row["credential"])
+                else:
+                    protocol_ops.disable_xray_client(row["inbound_tag"],row["name"])
+            except protocol_ops.ProtocolError as e:
+                raise HTTPException(400,str(e))
+
+    update_protocol_client_state(client_id,payload.enabled,quota_bytes,expire_at,payload.ip_limit,payload.reset_days)
+    audit(actor,"protocol_client_update",str(client_id),f"enabled={payload.enabled}; reset_days={payload.reset_days}",ip(request))
+    return {"ok":True}
+
+@app.post("/api/protocol-clients/{client_id}/reset-traffic")
+def protocol_client_reset_traffic(client_id:int,request:Request):
+    actor=require_mutation(request)
+    row=get_protocol_client(client_id)
+    if not row: raise HTTPException(404,"client not found")
+    if row.get("engine")!="xray":
+        raise HTTPException(400,"traffic reset is only available for Xray clients in this release")
+    try:
+        result=protocol_ops.reset_xray_client_traffic(row["name"])
+        reset_protocol_traffic(client_id)
+    except protocol_ops.ProtocolError as e:
+        raise HTTPException(400,str(e))
+    audit(actor,"protocol_client_reset_traffic",str(client_id),ip=ip(request))
+    return {"ok":True,"xray":result}
+
+@app.get("/api/protocols/xray/config")
+def xray_config_get(request:Request):
+    require_user(request)
+    try: return protocol_ops.read_xray_config()
+    except protocol_ops.ProtocolError as e: raise HTTPException(400,str(e))
+
+class XrayConfigPayload(BaseModel):
+    config:dict
+
+@app.post("/api/protocols/xray/config/validate")
+def xray_config_validate(payload:XrayConfigPayload,request:Request):
+    require_mutation(request)
+    try: return protocol_ops.validate_xray_config(payload.config)
+    except protocol_ops.ProtocolError as e: raise HTTPException(400,str(e))
+
+@app.put("/api/protocols/xray/config")
+def xray_config_apply(payload:XrayConfigPayload,request:Request):
+    actor=require_mutation(request)
+    try: result=protocol_ops.apply_xray_config(payload.config)
+    except protocol_ops.ProtocolError as e: raise HTTPException(400,str(e))
+    audit(actor,"xray_config_apply",result.get("path"),f"backup={result.get('backup')}",ip(request))
     return result
 
 class ProtocolInstall(BaseModel):
@@ -551,6 +718,8 @@ def node_heartbeat(payload:NodeHeartbeat,request:Request):
 class GeneralSettings(BaseModel):
     language:str="fa"
     panel_domain:str=""
+    theme:str="midnight"
+    density:str="comfortable"
 
 @app.get("/api/settings/general")
 def general_settings_get(request:Request):
@@ -560,6 +729,8 @@ def general_settings_get(request:Request):
     return {
         "language":data.get("language","fa"),
         "panel_domain":domain,
+        "theme":data.get("theme","midnight"),
+        "density":data.get("density","comfortable"),
         "domain_status":panel_ops.domain_status(domain or None),
     }
 
@@ -567,14 +738,18 @@ def general_settings_get(request:Request):
 def general_settings_put(payload:GeneralSettings,request:Request):
     actor=require_mutation(request)
     language=payload.language if payload.language in {"fa","en"} else "fa"
+    theme=payload.theme if payload.theme in {"midnight","amoled","graphite"} else "midnight"
+    density=payload.density if payload.density in {"comfortable","compact"} else "comfortable"
     domain=(payload.panel_domain or "").strip().lower()
     if domain:
         try: domain=panel_ops.validate_domain(domain)
         except panel_ops.PanelOperationError as e: raise HTTPException(400,str(e))
     set_setting("language",language)
     set_setting("panel_domain",domain)
-    audit(actor,"general_settings_update",domain or "none",f"language={language}",ip(request))
-    return {"ok":True,"language":language,"panel_domain":domain}
+    set_setting("theme",theme)
+    set_setting("density",density)
+    audit(actor,"general_settings_update",domain or "none",f"language={language}; theme={theme}; density={density}",ip(request))
+    return {"ok":True,"language":language,"panel_domain":domain,"theme":theme,"density":density}
 
 class DomainApply(BaseModel):
     domain:str=Field(min_length=3,max_length=253)

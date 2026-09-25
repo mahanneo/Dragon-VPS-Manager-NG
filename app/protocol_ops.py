@@ -72,12 +72,17 @@ def xray_status():
                     continue
                 settings=item.get("settings") or {}
                 clients=settings.get("clients") if isinstance(settings,dict) else None
+                users=settings.get("users") if isinstance(settings,dict) else None
+                client_count=len(clients) if isinstance(clients,list) else (len(users) if isinstance(users,list) else 0)
+                protocol=item.get("protocol") or "unknown"
+                if protocol=="hysteria" and isinstance(settings,dict) and int(settings.get("version") or 0)==2:
+                    protocol="hysteria2"
                 inbounds.append({
                     "tag":item.get("tag") or "",
-                    "protocol":item.get("protocol") or "unknown",
+                    "protocol":protocol,
                     "listen":item.get("listen") or "0.0.0.0",
                     "port":item.get("port"),
-                    "clients":len(clients) if isinstance(clients,list) else 0,
+                    "clients":client_count,
                 })
         except Exception as exc:
             error=str(exc)[:300]
@@ -156,10 +161,18 @@ def catalog():
             {"id":"vmess","engine":"xray","available":x["installed"]},
             {"id":"trojan","engine":"xray","available":x["installed"]},
             {"id":"shadowsocks","engine":"xray","available":x["installed"]},
-            {"id":"wireguard","engine":"wireguard","available":wg["installed"]},
-            {"id":"openvpn","engine":"openvpn","available":ovpn["installed"]},
-            {"id":"ssh","engine":"openssh","available":ssh["installed"]},
-            {"id":"stunnel","engine":"stunnel","available":st["installed"]},
+            {"id":"hysteria2","engine":"xray","available":x["installed"],"mode":"guided"},
+            {"id":"http","engine":"xray","available":x["installed"],"mode":"advanced"},
+            {"id":"socks","engine":"xray","available":x["installed"],"mode":"advanced"},
+            {"id":"tunnel","engine":"xray","available":x["installed"],"mode":"advanced"},
+            {"id":"tun","engine":"xray","available":x["installed"],"mode":"advanced"},
+            {"id":"wireguard","engine":"wireguard","available":wg["installed"],"mode":"guided"},
+            {"id":"openvpn","engine":"openvpn","available":ovpn["installed"],"mode":"guided"},
+            {"id":"ssh","engine":"openssh","available":ssh["installed"],"mode":"guided"},
+            {"id":"stunnel","engine":"stunnel","available":st["installed"],"mode":"service"},
+            {"id":"tuic","engine":"external","available":False,"mode":"unavailable"},
+            {"id":"amneziawg","engine":"external","available":False,"mode":"unavailable"},
+            {"id":"mtproto","engine":"external","available":False,"mode":"unavailable"},
         ]
     }
 
@@ -327,14 +340,14 @@ def bootstrap_openvpn(port=1194, proto="udp"):
     os.chmod(up,0o700); os.chmod(down,0o700)
     server_conf=server_dir/"server.conf"
     server_conf.write_text(
-        f"port {port}\nproto {proto}\ndev tun\n"
+        f"port {port}\nproto {'udp' if proto=='udp' else 'tcp-server'}\ndev tun\n"
         "topology subnet\nserver 10.8.0.0 255.255.255.0\n"
         "ca ca.crt\ncert server.crt\nkey server.key\ndh dh.pem\ncrl-verify crl.pem\n"
         "tls-crypt ta.key\n"
         "push \"redirect-gateway def1 bypass-dhcp\"\n"
         "push \"dhcp-option DNS 1.1.1.1\"\npush \"dhcp-option DNS 8.8.8.8\"\n"
         "keepalive 10 120\npersist-key\npersist-tun\nuser nobody\ngroup nogroup\n"
-        "cipher AES-256-GCM\nauth SHA256\nverb 3\n"
+        "data-ciphers AES-256-GCM:AES-128-GCM\ndata-ciphers-fallback AES-256-GCM\nauth SHA256\nverb 3\n"
         f"script-security 2\nup {up}\ndown {down}\n",
         encoding="utf-8"
     )
@@ -367,7 +380,7 @@ def create_openvpn_client(name, endpoint, port=1194, proto="udp"):
         "client\ndev tun\n"
         f"proto {transport}\nremote {endpoint} {port}\n"
         "resolv-retry infinite\nnobind\npersist-key\npersist-tun\nremote-cert-tls server\n"
-        "cipher AES-256-GCM\nauth SHA256\nverb 3\nkey-direction 1\n"
+        "data-ciphers AES-256-GCM:AES-128-GCM\nauth SHA256\nverb 3\n"
         f"<ca>\n{ca}</ca>\n<cert>\n{cert}</cert>\n<key>\n{key}</key>\n<tls-crypt>\n{ta}</tls-crypt>\n"
     )
     return {"name":name,"config":client}
@@ -384,6 +397,116 @@ def _port_in_use(port):
             s.close()
     return False
 
+def _ensure_xray_stats(data):
+    if not isinstance(data,dict):
+        raise ProtocolError("invalid Xray configuration root")
+    data.setdefault("stats",{})
+    api=data.setdefault("api",{})
+    api["tag"]="api"
+    api["listen"]="127.0.0.1:10085"
+    services=set(api.get("services") or [])
+    services.update(["StatsService","HandlerService"])
+    api["services"]=sorted(services)
+    policy=data.setdefault("policy",{})
+    levels=policy.setdefault("levels",{})
+    level0=levels.setdefault("0",{})
+    level0["statsUserUplink"]=True
+    level0["statsUserDownlink"]=True
+    level0["statsUserOnline"]=True
+    system=policy.setdefault("system",{})
+    system["statsInboundUplink"]=True
+    system["statsInboundDownlink"]=True
+    system["statsOutboundUplink"]=True
+    system["statsOutboundDownlink"]=True
+
+    # Remove only the legacy Makia API tunnel created by earlier RC builds.
+    inbounds=data.get("inbounds")
+    if isinstance(inbounds,list):
+        data["inbounds"]=[
+            item for item in inbounds
+            if not (
+                isinstance(item,dict)
+                and item.get("tag")=="api"
+                and int(item.get("port") or -1)==10085
+                and str(item.get("listen") or "")=="127.0.0.1"
+            )
+        ]
+    routing=data.get("routing")
+    if isinstance(routing,dict) and isinstance(routing.get("rules"),list):
+        routing["rules"]=[
+            rule for rule in routing["rules"]
+            if not (
+                isinstance(rule,dict)
+                and rule.get("inboundTag")==["api"]
+                and rule.get("outboundTag")=="api"
+            )
+        ]
+    return data
+
+def xray_client_traffic(email, reset=False):
+    binary=_binary()
+    if not binary:
+        raise ProtocolError("Xray core is not installed")
+    pattern=f"user>>>{email}>>>traffic>>>"
+    args=[binary,"api","statsquery","--server=127.0.0.1:10085","-pattern",pattern]
+    if reset:
+        args += ["-reset=true"]
+    p=subprocess.run(args,text=True,capture_output=True,timeout=8,check=False)
+    if p.returncode!=0:
+        return {"uplink":0,"downlink":0,"total":0,"available":False,"error":(p.stderr or p.stdout or "")[:240]}
+    text=p.stdout or ""
+    up=down=0
+    parsed=False
+    try:
+        payload=json.loads(text)
+        rows=payload.get("stat") or payload.get("stats") or []
+        if isinstance(rows,list):
+            for item in rows:
+                if not isinstance(item,dict): continue
+                name=str(item.get("name") or "")
+                try: value=int(item.get("value") or 0)
+                except Exception: value=0
+                if name.endswith(">>>uplink"): up+=value
+                elif name.endswith(">>>downlink"): down+=value
+            parsed=True
+    except Exception:
+        pass
+    if not parsed:
+        blocks=re.split(r"\n\s*\n",text)
+        for block in blocks:
+            name_m=re.search(r'["\']?name["\']?\s*:\s*"([^"]+)"',block)
+            value_m=re.search(r'["\']?value["\']?\s*:\s*"?(\d+)"?',block)
+            if not name_m or not value_m:
+                continue
+            name=name_m.group(1); value=int(value_m.group(1))
+            if name.endswith(">>>uplink"): up+=value
+            elif name.endswith(">>>downlink"): down+=value
+    return {"uplink":up,"downlink":down,"total":up+down,"available":True,"error":None}
+def xray_client_online_ips(email):
+    binary=_binary()
+    if not binary:
+        return {"available":False,"ips":[],"error":"Xray core is not installed"}
+    args=[binary,"api","statsonlineiplist","--server=127.0.0.1:10085","--email="+str(email)]
+    p=subprocess.run(args,text=True,capture_output=True,timeout=8,check=False)
+    if p.returncode!=0:
+        err=(p.stderr or p.stdout or "").strip()
+        # Older Xray cores do not expose this RPC/CLI.
+        return {"available":False,"ips":[],"error":err[:240]}
+    text=p.stdout or ""
+    entries=[]
+    try:
+        payload=json.loads(text)
+        raw=payload.get("ips") or {}
+        if isinstance(raw,dict):
+            entries=[{"ip":str(ip),"last_seen":int(ts or 0)} for ip,ts in raw.items()]
+    except Exception:
+        # Fallback for protobuf-text-like command output.
+        for ip,ts in re.findall(r'key:\s*"([^"]+)"[\s\S]*?value:\s*(\d+)',text):
+            entries.append({"ip":ip,"last_seen":int(ts)})
+    entries.sort(key=lambda item:item.get("last_seen",0),reverse=True)
+    return {"available":True,"ips":entries,"error":None}
+
+
 def _xray_default_config(path):
     return {
         "log":{"loglevel":"warning"},
@@ -391,9 +514,85 @@ def _xray_default_config(path):
         "outbounds":[{"protocol":"freedom","tag":"direct"}],
     }
 
-def create_xray_inbound(protocol, port, name, endpoint):
+def _x25519_pair(binary):
+    out=_run([binary,"x25519"],timeout=10)
+    private=None; public=None
+    for line in out.splitlines():
+        if ":" not in line: continue
+        key,value=line.split(":",1)
+        k=key.strip().lower().replace(" ","")
+        value=value.strip()
+        if k in {"privatekey","privatekey"} or k.startswith("private"):
+            private=private or value
+        elif k.startswith("password") or k.startswith("public"):
+            public=public or value
+    if not private or not public:
+        raise ProtocolError("unable to parse Xray x25519 output")
+    return private,public
+
+def _build_xray_stream(binary,protocol,transport,security,path_value,server_name,reality_dest):
+    transport=(transport or "tcp").lower()
+    security=(security or "none").lower()
+    aliases={"tcp":"raw","ws":"websocket","kcp":"mkcp"}
+    transport=aliases.get(transport,transport)
+    if transport not in {"raw","websocket","grpc","httpupgrade","xhttp","mkcp"}:
+        raise ProtocolError("unsupported transport")
+    if security not in {"none","tls","reality"}:
+        raise ProtocolError("unsupported transport security")
+    if security=="reality":
+        if protocol!="vless":
+            raise ProtocolError("Makia currently enables REALITY only for VLESS")
+        if transport not in {"raw","grpc","xhttp"}:
+            raise ProtocolError("REALITY is only compatible with TCP/RAW, gRPC or XHTTP here")
+    stream={"method":transport,"security":security}
+    path_value=(path_value or "/").strip() or "/"
+    if not path_value.startswith("/") and transport in {"websocket","httpupgrade","xhttp"}:
+        path_value="/"+path_value
+    if transport=="websocket":
+        stream["wsSettings"]={"path":path_value}
+    elif transport=="grpc":
+        stream["grpcSettings"]={"serviceName":path_value.strip("/")}
+    elif transport=="httpupgrade":
+        stream["httpupgradeSettings"]={"path":path_value}
+    elif transport=="xhttp":
+        stream["xhttpSettings"]={"path":path_value,"mode":"auto"}
+    elif transport=="mkcp":
+        stream["kcpSettings"]={"seed":path_value.strip("/") or "makia"}
+    reality_meta={}
+    if security=="tls":
+        sni=(server_name or "").strip().lower()
+        if not sni:
+            raise ProtocolError("TLS requires a domain/SNI")
+        cert=Path(f"/etc/letsencrypt/live/{sni}/fullchain.pem")
+        key=Path(f"/etc/letsencrypt/live/{sni}/privkey.pem")
+        if not cert.exists() or not key.exists():
+            raise ProtocolError("TLS certificate not found for this domain; issue HTTPS/Let's Encrypt first")
+        stream["tlsSettings"]={
+            "serverName":sni,
+            "alpn":["h2","http/1.1"],
+            "certificates":[{"certificateFile":str(cert),"keyFile":str(key)}],
+        }
+    elif security=="reality":
+        sni=(server_name or "").strip().lower()
+        target=(reality_dest or "").strip()
+        if not sni or not target:
+            raise ProtocolError("REALITY requires server name and target such as www.cloudflare.com:443")
+        private,public=_x25519_pair(binary)
+        sid=secrets.token_hex(8)
+        stream["realitySettings"]={
+            "show":False,
+            "dest":target,
+            "xver":0,
+            "serverNames":[sni],
+            "privateKey":private,
+            "shortIds":[sid],
+        }
+        reality_meta={"public_key":public,"short_id":sid,"server_name":sni}
+    return stream,reality_meta
+
+def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", security="none", path_value="/", server_name="", reality_dest=""):
     protocol=(protocol or "").lower()
-    if protocol not in {"vless","vmess","trojan","shadowsocks"}:
+    if protocol not in {"vless","vmess","trojan","shadowsocks","hysteria2"}:
         raise ProtocolError("unsupported Xray quick protocol")
     port=_validate_port(port)
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
@@ -413,8 +612,7 @@ def create_xray_inbound(protocol, port, name, endpoint):
             raise ProtocolError(f"cannot parse existing Xray config: {exc}") from exc
     else:
         data=_xray_default_config(path)
-    if not isinstance(data,dict):
-        raise ProtocolError("invalid Xray configuration root")
+    data=_ensure_xray_stats(data)
     inbounds=data.setdefault("inbounds",[])
     if not isinstance(inbounds,list):
         raise ProtocolError("invalid Xray inbounds collection")
@@ -424,25 +622,59 @@ def create_xray_inbound(protocol, port, name, endpoint):
         raise ProtocolError("this port is already in use on the server")
     tag=f"makia-{protocol}-{port}"
     credential=None
+    client_obj=None
+    xray_protocol="hysteria" if protocol=="hysteria2" else protocol
     if protocol in {"vless","vmess"}:
         credential=str(uuid.uuid4())
-        settings={"clients":[{"id":credential,"email":name}]}
+        client_obj={"id":credential,"email":name,"level":0}
         if protocol=="vless":
-            settings["decryption"]="none"
+            settings={"clients":[client_obj],"decryption":"none"}
+        else:
+            settings={"clients":[client_obj]}
     elif protocol=="trojan":
         credential=secrets.token_urlsafe(18)
-        settings={"clients":[{"password":credential,"email":name}]}
+        client_obj={"password":credential,"email":name,"level":0}
+        settings={"clients":[client_obj]}
+    elif protocol=="hysteria2":
+        credential=secrets.token_urlsafe(24)
+        client_obj={"auth":credential,"email":name,"level":0}
+        settings={"version":2,"users":[client_obj]}
+        transport="hysteria"
+        security="tls"
     else:
         credential=secrets.token_urlsafe(18)
         settings={"method":"aes-128-gcm","password":credential,"network":"tcp,udp"}
+    if protocol=="hysteria2":
+        sni=(server_name or "").strip().lower()
+        if not sni:
+            raise ProtocolError("Hysteria2 requires a TLS domain/SNI")
+        cert=Path(f"/etc/letsencrypt/live/{sni}/fullchain.pem")
+        key=Path(f"/etc/letsencrypt/live/{sni}/privkey.pem")
+        if not cert.exists() or not key.exists():
+            raise ProtocolError("Hysteria2 requires a valid Let's Encrypt certificate for the SNI")
+        stream={
+            "method":"hysteria",
+            "security":"tls",
+            "hysteriaSettings":{"version":2},
+            "tlsSettings":{
+                "serverName":sni,
+                "alpn":["h3"],
+                "certificates":[{"certificateFile":str(cert),"keyFile":str(key)}],
+            },
+        }
+        reality_meta={}
+    else:
+        stream,reality_meta=_build_xray_stream(binary,protocol,transport,security,path_value,server_name,reality_dest)
+    if protocol=="vless" and security=="reality" and stream.get("method")=="raw":
+        client_obj["flow"]="xtls-rprx-vision"
     inbound={
         "tag":tag,
         "listen":"0.0.0.0",
         "port":port,
-        "protocol":protocol,
+        "protocol":xray_protocol,
         "settings":settings,
-        "streamSettings":{"network":"tcp","security":"none"},
-        "sniffing":{"enabled":True,"destOverride":["http","tls","quic"]},
+        "streamSettings":stream,
+        "sniffing":{"enabled":True,"destOverride":["http","tls","quic"],"routeOnly":True},
     }
     inbounds.append(inbound)
     tmp=path.with_suffix(path.suffix+".makia-tmp")
@@ -462,8 +694,7 @@ def create_xray_inbound(protocol, port, name, endpoint):
             raise ProtocolError("Xray did not become active after restart")
     except Exception:
         try:
-            if tmp.exists():
-                tmp.unlink()
+            if tmp.exists(): tmp.unlink()
             if backup and backup.exists():
                 shutil.copy2(backup,path)
                 _run(["systemctl","restart","xray"],timeout=30)
@@ -472,17 +703,228 @@ def create_xray_inbound(protocol, port, name, endpoint):
         raise
     label=urllib.parse.quote(name,safe="")
     host=endpoint
-    if protocol=="vless":
-        link=f"vless://{credential}@{host}:{port}?type=tcp&security=none#{label}"
+    method=stream.get("method","raw")
+    link_type={"raw":"tcp","websocket":"ws","mkcp":"kcp"}.get(method,method)
+    q={"type":link_type,"security":security}
+    if method=="websocket": q["path"]=path_value
+    elif method=="grpc": q["serviceName"]=path_value.strip("/")
+    elif method in {"httpupgrade","xhttp"}: q["path"]=path_value
+    if security=="tls":
+        q["sni"]=(server_name or "").strip().lower()
+    elif security=="reality":
+        q.update({"sni":reality_meta["server_name"],"fp":"chrome","pbk":reality_meta["public_key"],"sid":reality_meta["short_id"]})
+        if protocol=="vless" and method=="raw": q["flow"]="xtls-rprx-vision"
+    query=urllib.parse.urlencode(q)
+    if protocol=="hysteria2":
+        hq={"sni":(server_name or "").strip().lower(),"insecure":"0"}
+        link=f"hysteria2://{urllib.parse.quote(credential,safe='')}@{host}:{port}/?{urllib.parse.urlencode(hq)}#{label}"
+    elif protocol=="vless":
+        link=f"vless://{credential}@{host}:{port}?{query}#{label}"
     elif protocol=="trojan":
-        link=f"trojan://{urllib.parse.quote(credential,safe='')}@{host}:{port}?type=tcp&security=none#{label}"
+        link=f"trojan://{urllib.parse.quote(credential,safe='')}@{host}:{port}?{query}#{label}"
     elif protocol=="vmess":
-        obj={"v":"2","ps":name,"add":host,"port":str(port),"id":credential,"aid":"0","scy":"auto","net":"tcp","type":"none","host":"","path":"","tls":""}
+        obj={"v":"2","ps":name,"add":host,"port":str(port),"id":credential,"aid":"0","scy":"auto","net":link_type,"type":"none","host":"","path":path_value if method!="grpc" else "","tls":"tls" if security=="tls" else ""}
+        if method=="grpc": obj["path"]=path_value.strip("/")
         link="vmess://"+base64.b64encode(json.dumps(obj,separators=(",",":")).encode()).decode()
     else:
         userinfo=base64.urlsafe_b64encode(f"aes-128-gcm:{credential}".encode()).decode().rstrip("=")
         link=f"ss://{userinfo}@{host}:{port}#{label}"
-    return {"protocol":protocol,"tag":tag,"port":port,"name":name,"credential":credential,"share_link":link,"backup":str(backup) if backup else None}
+    return {
+        "protocol":protocol,"tag":tag,"port":port,"name":name,"credential":credential,
+        "transport":method,"security":security,"share_link":link,"backup":str(backup) if backup else None,
+        "reality":reality_meta,
+    }
+
+def disable_xray_client(inbound_tag,email):
+    binary=_binary()
+    config_path=_config_path()
+    if not binary or not config_path:
+        raise ProtocolError("Xray core/config is not available")
+    path=Path(config_path)
+    try:
+        data=json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ProtocolError(f"cannot parse Xray config: {exc}") from exc
+    changed=False
+    for inbound in data.get("inbounds",[]) if isinstance(data,dict) else []:
+        if not isinstance(inbound,dict) or inbound.get("tag")!=inbound_tag:
+            continue
+        settings=inbound.get("settings") or {}
+        clients=settings.get("clients")
+        users=settings.get("users")
+        if isinstance(clients,list):
+            before=len(clients)
+            settings["clients"]=[x for x in clients if not (isinstance(x,dict) and x.get("email")==email)]
+            changed=len(settings["clients"])!=before
+        elif isinstance(users,list):
+            before=len(users)
+            settings["users"]=[x for x in users if not (isinstance(x,dict) and x.get("email")==email)]
+            changed=len(settings["users"])!=before
+    if not changed:
+        return {"disabled":False,"reason":"client not found in config"}
+    backup_dir=Path("/var/backups/makia-vps-manager")
+    backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
+    backup=backup_dir/f"xray-policy-{int(time.time())}.json"
+    shutil.copy2(path,backup)
+    tmp=path.with_suffix(path.suffix+".makia-policy-tmp")
+    tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    os.chmod(tmp,0o600)
+    try:
+        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        os.replace(tmp,path)
+        _run(["systemctl","restart","xray"],timeout=30)
+        if not _active("xray"):
+            raise ProtocolError("Xray failed after client disable")
+    except Exception:
+        try:
+            if tmp.exists(): tmp.unlink()
+            shutil.copy2(backup,path)
+            _run(["systemctl","restart","xray"],timeout=30)
+        except Exception:
+            pass
+        raise
+    return {"disabled":True,"backup":str(backup)}
+def enable_xray_client(inbound_tag,email,protocol,credential):
+    binary=_binary()
+    config_path=_config_path()
+    if not binary or not config_path:
+        raise ProtocolError("Xray core/config is not available")
+    path=Path(config_path)
+    try:
+        data=json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ProtocolError(f"cannot parse Xray config: {exc}") from exc
+    target=None
+    for inbound in data.get("inbounds",[]) if isinstance(data,dict) else []:
+        if isinstance(inbound,dict) and inbound.get("tag")==inbound_tag:
+            target=inbound
+            break
+    if not target:
+        raise ProtocolError("target Xray inbound no longer exists")
+    settings=target.setdefault("settings",{})
+    protocol=(protocol or "").lower()
+    if protocol=="vless":
+        clients=settings.setdefault("clients",[])
+        if any(isinstance(x,dict) and x.get("email")==email for x in clients):
+            return {"enabled":True,"already_present":True}
+        item={"id":credential,"email":email,"level":0}
+        stream=target.get("streamSettings") or {}
+        method=stream.get("method") or stream.get("network")
+        if stream.get("security")=="reality" and method in {"raw","tcp"}:
+            item["flow"]="xtls-rprx-vision"
+        clients.append(item)
+    elif protocol=="vmess":
+        clients=settings.setdefault("clients",[])
+        if any(isinstance(x,dict) and x.get("email")==email for x in clients):
+            return {"enabled":True,"already_present":True}
+        clients.append({"id":credential,"email":email,"level":0})
+    elif protocol=="trojan":
+        clients=settings.setdefault("clients",[])
+        if any(isinstance(x,dict) and x.get("email")==email for x in clients):
+            return {"enabled":True,"already_present":True}
+        clients.append({"password":credential,"email":email,"level":0})
+    elif protocol=="hysteria2":
+        users=settings.setdefault("users",[])
+        if any(isinstance(x,dict) and x.get("email")==email for x in users):
+            return {"enabled":True,"already_present":True}
+        users.append({"auth":credential,"email":email,"level":0})
+    else:
+        raise ProtocolError("automatic re-enable is not supported for this protocol")
+
+    backup_dir=Path("/var/backups/makia-vps-manager")
+    backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
+    backup=backup_dir/f"xray-enable-{int(time.time())}.json"
+    shutil.copy2(path,backup)
+    tmp=path.with_suffix(path.suffix+".makia-enable")
+    tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    os.chmod(tmp,0o600)
+    try:
+        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        os.replace(tmp,path)
+        _run(["systemctl","restart","xray"],timeout=30)
+        if not _active("xray"):
+            raise ProtocolError("Xray failed after client enable")
+    except Exception:
+        try:
+            if tmp.exists(): tmp.unlink()
+            shutil.copy2(backup,path)
+            _run(["systemctl","restart","xray"],timeout=30)
+        except Exception:
+            pass
+        raise
+    return {"enabled":True,"backup":str(backup)}
+
+
+def reset_xray_client_traffic(email):
+    return xray_client_traffic(email,reset=True)
+
+def read_xray_config():
+    path=_config_path()
+    if not path:
+        raise ProtocolError("Xray config file is not available")
+    try:
+        raw=Path(path).read_text(encoding="utf-8")
+        data=json.loads(raw)
+    except Exception as exc:
+        raise ProtocolError(f"cannot read Xray config: {exc}") from exc
+    return {"path":path,"config":data}
+
+def validate_xray_config(data):
+    binary=_binary()
+    if not binary:
+        raise ProtocolError("Xray core is not installed")
+    if not isinstance(data,dict):
+        raise ProtocolError("Xray config must be a JSON object")
+    config_path=_config_path() or "/usr/local/etc/xray/config.json"
+    path=Path(config_path)
+    path.parent.mkdir(parents=True,exist_ok=True)
+    tmp=path.with_suffix(path.suffix+".makia-validate")
+    try:
+        tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+        os.chmod(tmp,0o600)
+        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        return {"ok":True}
+    finally:
+        try:
+            if tmp.exists(): tmp.unlink()
+        except Exception:
+            pass
+
+def apply_xray_config(data):
+    binary=_binary()
+    if not binary:
+        raise ProtocolError("Xray core is not installed")
+    if not isinstance(data,dict):
+        raise ProtocolError("Xray config must be a JSON object")
+    config_path=_config_path() or "/usr/local/etc/xray/config.json"
+    path=Path(config_path)
+    path.parent.mkdir(parents=True,exist_ok=True)
+    tmp=path.with_suffix(path.suffix+".makia-apply")
+    backup_dir=Path("/var/backups/makia-vps-manager")
+    backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
+    backup=None
+    if path.exists():
+        backup=backup_dir/f"xray-manual-{int(time.time())}.json"
+        shutil.copy2(path,backup)
+    tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    os.chmod(tmp,0o600)
+    try:
+        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        os.replace(tmp,path)
+        _run(["systemctl","restart","xray"],timeout=30)
+        if not _active("xray"):
+            raise ProtocolError("Xray failed to become active")
+    except Exception:
+        try:
+            if tmp.exists(): tmp.unlink()
+            if backup and backup.exists():
+                shutil.copy2(backup,path)
+                _run(["systemctl","restart","xray"],timeout=30)
+        except Exception:
+            pass
+        raise
+    return {"ok":True,"path":str(path),"backup":str(backup) if backup else None}
+
 
 def status():
     return xray_status()
