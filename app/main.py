@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from .config import APP_NAME, VERSION, COOKIE_NAME, ALLOWED_SERVICES, DATA_DIR
-from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings
+from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client
 from .security import verify_password, make_session, read_session, hash_password, make_preauth, read_preauth
 from . import system_ops, protocol_ops, panel_ops
 
@@ -361,6 +361,9 @@ class XrayQuickInbound(BaseModel):
     port:int=Field(ge=1,le=65535)
     name:str=Field(min_length=1,max_length=48)
     endpoint:str=Field(min_length=1,max_length=255)
+    quota_gb:float=Field(default=0,ge=0,le=100000)
+    expire_days:int=Field(default=0,ge=0,le=3650)
+    ip_limit:int=Field(default=1,ge=1,le=50)
 
 @app.post("/api/protocols/xray/quick-inbound")
 def xray_quick_inbound(payload:XrayQuickInbound,request:Request):
@@ -372,7 +375,69 @@ def xray_quick_inbound(payload:XrayQuickInbound,request:Request):
     qr=qrcode.make(result["share_link"],image_factory=qrcode.image.svg.SvgPathImage)
     buf=io.BytesIO(); qr.save(buf)
     result["qr"]="data:image/svg+xml;base64,"+base64.b64encode(buf.getvalue()).decode()
-    audit(actor,"xray_quick_inbound",result["tag"],f"protocol={payload.protocol}; port={payload.port}",ip(request))
+    quota_bytes=int(payload.quota_gb*1024*1024*1024)
+    expire_at=int(time.time()+payload.expire_days*86400) if payload.expire_days else 0
+    client_id=create_protocol_client(
+        payload.name,"xray",payload.protocol,result["tag"],result["credential"],result["share_link"],
+        quota_bytes,expire_at,payload.ip_limit
+    )
+    result["client_id"]=client_id
+    result["quota_bytes"]=quota_bytes
+    result["expire_at"]=expire_at
+    result["ip_limit"]=payload.ip_limit
+    audit(actor,"xray_quick_inbound",result["tag"],f"protocol={payload.protocol}; port={payload.port}; quota={quota_bytes}; ip_limit={payload.ip_limit}",ip(request))
+    return result
+
+@app.get("/api/protocol-clients")
+def protocol_clients_get(request:Request):
+    require_user(request)
+    rows=[]
+    now_ts=int(time.time())
+    for item in list_protocol_clients():
+        usage={"uplink":0,"downlink":0,"total":0,"available":False,"error":None}
+        if item.get("engine")=="xray" and item.get("protocol") in {"vless","vmess","trojan"} and item.get("enabled"):
+            try: usage=protocol_ops.xray_client_traffic(item["name"])
+            except Exception as exc: usage={"uplink":0,"downlink":0,"total":0,"available":False,"error":str(exc)[:160]}
+        quota=int(item.get("quota_bytes") or 0)
+        expire_at=int(item.get("expire_at") or 0)
+        rows.append({
+            **item,
+            "usage":usage,
+            "quota_percent":round((usage["total"]/quota)*100,1) if quota else 0,
+            "expired":bool(expire_at and expire_at<now_ts),
+            "days_left":max(0,(expire_at-now_ts)//86400) if expire_at and expire_at>=now_ts else (0 if expire_at else None),
+        })
+    return rows
+
+class ProtocolClientPolicy(BaseModel):
+    quota_gb:float|None=Field(default=None,ge=0,le=100000)
+    expire_days:int|None=Field(default=None,ge=0,le=3650)
+    ip_limit:int|None=Field(default=None,ge=1,le=50)
+    enabled:bool|None=None
+
+@app.put("/api/protocol-clients/{client_id}")
+def protocol_client_update(client_id:int,payload:ProtocolClientPolicy,request:Request):
+    actor=require_mutation(request)
+    row=get_protocol_client(client_id)
+    if not row: raise HTTPException(404,"client not found")
+    quota_bytes=int(payload.quota_gb*1024*1024*1024) if payload.quota_gb is not None else None
+    expire_at=int(time.time()+payload.expire_days*86400) if payload.expire_days is not None and payload.expire_days>0 else (0 if payload.expire_days==0 else None)
+    update_protocol_client_state(client_id,payload.enabled,quota_bytes,expire_at,payload.ip_limit)
+    audit(actor,"protocol_client_update",str(client_id),ip=ip(request))
+    return {"ok":True}
+
+@app.post("/api/protocol-clients/{client_id}/reset-traffic")
+def protocol_client_reset_traffic(client_id:int,request:Request):
+    actor=require_mutation(request)
+    row=get_protocol_client(client_id)
+    if not row: raise HTTPException(404,"client not found")
+    if row.get("engine")!="xray":
+        raise HTTPException(400,"traffic reset is only available for Xray clients in this release")
+    try:
+        result=protocol_ops.reset_xray_client_traffic(row["name"])
+    except protocol_ops.ProtocolError as e:
+        raise HTTPException(400,str(e))
+    audit(actor,"protocol_client_reset_traffic",str(client_id),ip=ip(request))
     return result
 
 class ProtocolInstall(BaseModel):
