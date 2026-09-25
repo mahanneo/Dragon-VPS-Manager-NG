@@ -1,4 +1,4 @@
-import os, pwd, shutil, subprocess
+import os, pwd, shutil, socket, subprocess, platform
 from datetime import datetime
 import psutil
 from .config import ALLOWED_SERVICES
@@ -16,15 +16,44 @@ def _run(args: list[str], input_text: str | None = None, timeout: int = 15):
 
 def metrics():
     disk = psutil.disk_usage("/")
+    mem = psutil.virtual_memory()
+    swap = psutil.swap_memory()
     net = psutil.net_io_counters()
     return {
+        "hostname": socket.gethostname(),
+        "platform": platform.platform(),
+        "kernel": platform.release(),
         "cpu": psutil.cpu_percent(interval=0.15),
-        "memory": psutil.virtual_memory().percent,
+        "cpu_cores": psutil.cpu_count(logical=True) or 1,
+        "memory": mem.percent,
+        "memory_used": mem.used,
+        "memory_total": mem.total,
+        "swap": swap.percent,
         "disk": disk.percent,
+        "disk_used": disk.used,
+        "disk_total": disk.total,
         "load": list(os.getloadavg()) if hasattr(os, "getloadavg") else [0,0,0],
         "uptime_seconds": int(datetime.now().timestamp() - psutil.boot_time()),
         "network": {"sent": net.bytes_sent, "recv": net.bytes_recv},
     }
+
+def online_sessions():
+    sessions=[]
+    try:
+        out=_run(["who"], timeout=5)
+    except Exception:
+        return sessions
+    for line in out.splitlines():
+        parts=line.split()
+        if not parts: continue
+        username=parts[0]
+        tty=parts[1] if len(parts)>1 else ""
+        when=" ".join(parts[2:4]) if len(parts)>3 else ""
+        remote=""
+        if "(" in line and ")" in line:
+            remote=line.rsplit("(",1)[-1].rstrip(")")
+        sessions.append({"username":username,"tty":tty,"since":when,"remote":remote})
+    return sessions
 
 def service_status(name: str):
     if name not in ALLOWED_SERVICES:
@@ -57,8 +86,7 @@ def create_ssh_user(username: str, password: str, expire: str | None = None):
     if len(password) < 10:
         raise OperationError("password must be at least 10 characters")
     args = ["useradd", "-m", "-s", "/bin/bash"]
-    if expire:
-        args += ["-e", expire]
+    if expire: args += ["-e", expire]
     args.append(username)
     _run(args)
     try:
