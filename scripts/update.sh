@@ -56,6 +56,7 @@ install -m 0755 "$SRC/scripts/update.sh" /usr/local/sbin/makia-update
 install -m 0755 "$SRC/scripts/backup.sh" /usr/local/sbin/makia-backup
 install -m 0755 "$SRC/scripts/uninstall.sh" /usr/local/sbin/makia-uninstall
 install -m 0755 "$SRC/scripts/doctor.sh" /usr/local/sbin/makia-doctor
+install -m 0755 "$SRC/upgrade.sh" /usr/local/sbin/makia-upgrade
 
 systemctl daemon-reload
 nginx -t
