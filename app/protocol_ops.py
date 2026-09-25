@@ -450,7 +450,83 @@ def _xray_default_config(path):
         "outbounds":[{"protocol":"freedom","tag":"direct"}],
     }
 
-def create_xray_inbound(protocol, port, name, endpoint):
+def _x25519_pair(binary):
+    out=_run([binary,"x25519"],timeout=10)
+    private=None; public=None
+    for line in out.splitlines():
+        if ":" not in line: continue
+        key,value=line.split(":",1)
+        k=key.strip().lower().replace(" ","")
+        value=value.strip()
+        if k in {"privatekey","privatekey"} or k.startswith("private"):
+            private=private or value
+        elif k.startswith("password") or k.startswith("public"):
+            public=public or value
+    if not private or not public:
+        raise ProtocolError("unable to parse Xray x25519 output")
+    return private,public
+
+def _build_xray_stream(binary,protocol,transport,security,path_value,server_name,reality_dest):
+    transport=(transport or "tcp").lower()
+    security=(security or "none").lower()
+    aliases={"raw":"tcp","websocket":"ws"}
+    transport=aliases.get(transport,transport)
+    if transport not in {"tcp","ws","grpc","httpupgrade","xhttp","kcp"}:
+        raise ProtocolError("unsupported transport")
+    if security not in {"none","tls","reality"}:
+        raise ProtocolError("unsupported transport security")
+    if security=="reality":
+        if protocol!="vless":
+            raise ProtocolError("Makia currently enables REALITY only for VLESS")
+        if transport not in {"tcp","grpc","xhttp"}:
+            raise ProtocolError("REALITY is only compatible with TCP/RAW, gRPC or XHTTP here")
+    stream={"network":transport,"security":security}
+    path_value=(path_value or "/").strip() or "/"
+    if not path_value.startswith("/") and transport in {"ws","httpupgrade","xhttp"}:
+        path_value="/"+path_value
+    if transport=="ws":
+        stream["wsSettings"]={"path":path_value}
+    elif transport=="grpc":
+        stream["grpcSettings"]={"serviceName":path_value.strip("/")}
+    elif transport=="httpupgrade":
+        stream["httpupgradeSettings"]={"path":path_value}
+    elif transport=="xhttp":
+        stream["xhttpSettings"]={"path":path_value,"mode":"auto"}
+    elif transport=="kcp":
+        stream["kcpSettings"]={"seed":path_value.strip("/") or "makia"}
+    reality_meta={}
+    if security=="tls":
+        sni=(server_name or "").strip().lower()
+        if not sni:
+            raise ProtocolError("TLS requires a domain/SNI")
+        cert=Path(f"/etc/letsencrypt/live/{sni}/fullchain.pem")
+        key=Path(f"/etc/letsencrypt/live/{sni}/privkey.pem")
+        if not cert.exists() or not key.exists():
+            raise ProtocolError("TLS certificate not found for this domain; issue HTTPS/Let's Encrypt first")
+        stream["tlsSettings"]={
+            "serverName":sni,
+            "alpn":["h2","http/1.1"],
+            "certificates":[{"certificateFile":str(cert),"keyFile":str(key)}],
+        }
+    elif security=="reality":
+        sni=(server_name or "").strip().lower()
+        target=(reality_dest or "").strip()
+        if not sni or not target:
+            raise ProtocolError("REALITY requires server name and target such as www.cloudflare.com:443")
+        private,public=_x25519_pair(binary)
+        sid=secrets.token_hex(8)
+        stream["realitySettings"]={
+            "show":False,
+            "dest":target,
+            "xver":0,
+            "serverNames":[sni],
+            "privateKey":private,
+            "shortIds":[sid],
+        }
+        reality_meta={"public_key":public,"short_id":sid,"server_name":sni}
+    return stream,reality_meta
+
+def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", security="none", path_value="/", server_name="", reality_dest=""):
     protocol=(protocol or "").lower()
     if protocol not in {"vless","vmess","trojan","shadowsocks"}:
         raise ProtocolError("unsupported Xray quick protocol")
@@ -482,25 +558,32 @@ def create_xray_inbound(protocol, port, name, endpoint):
         raise ProtocolError("this port is already in use on the server")
     tag=f"makia-{protocol}-{port}"
     credential=None
+    client_obj=None
     if protocol in {"vless","vmess"}:
         credential=str(uuid.uuid4())
-        settings={"clients":[{"id":credential,"email":name}]}
+        client_obj={"id":credential,"email":name,"level":0}
         if protocol=="vless":
-            settings["decryption"]="none"
+            settings={"clients":[client_obj],"decryption":"none"}
+        else:
+            settings={"clients":[client_obj]}
     elif protocol=="trojan":
         credential=secrets.token_urlsafe(18)
-        settings={"clients":[{"password":credential,"email":name}]}
+        client_obj={"password":credential,"email":name,"level":0}
+        settings={"clients":[client_obj]}
     else:
         credential=secrets.token_urlsafe(18)
         settings={"method":"aes-128-gcm","password":credential,"network":"tcp,udp"}
+    stream,reality_meta=_build_xray_stream(binary,protocol,transport,security,path_value,server_name,reality_dest)
+    if protocol=="vless" and security=="reality" and stream.get("network")=="tcp":
+        client_obj["flow"]="xtls-rprx-vision"
     inbound={
         "tag":tag,
         "listen":"0.0.0.0",
         "port":port,
         "protocol":protocol,
         "settings":settings,
-        "streamSettings":{"network":"tcp","security":"none"},
-        "sniffing":{"enabled":True,"destOverride":["http","tls","quic"]},
+        "streamSettings":stream,
+        "sniffing":{"enabled":True,"destOverride":["http","tls","quic"],"routeOnly":True},
     }
     inbounds.append(inbound)
     tmp=path.with_suffix(path.suffix+".makia-tmp")
@@ -520,8 +603,7 @@ def create_xray_inbound(protocol, port, name, endpoint):
             raise ProtocolError("Xray did not become active after restart")
     except Exception:
         try:
-            if tmp.exists():
-                tmp.unlink()
+            if tmp.exists(): tmp.unlink()
             if backup and backup.exists():
                 shutil.copy2(backup,path)
                 _run(["systemctl","restart","xray"],timeout=30)
@@ -530,17 +612,34 @@ def create_xray_inbound(protocol, port, name, endpoint):
         raise
     label=urllib.parse.quote(name,safe="")
     host=endpoint
+    network=stream.get("network","tcp")
+    q={"type":network,"security":security}
+    if network=="ws": q["path"]=path_value
+    elif network=="grpc": q["serviceName"]=path_value.strip("/")
+    elif network in {"httpupgrade","xhttp"}: q["path"]=path_value
+    if security=="tls":
+        q["sni"]=(server_name or "").strip().lower()
+    elif security=="reality":
+        q.update({"sni":reality_meta["server_name"],"fp":"chrome","pbk":reality_meta["public_key"],"sid":reality_meta["short_id"]})
+        if protocol=="vless" and network=="tcp": q["flow"]="xtls-rprx-vision"
+    query=urllib.parse.urlencode(q)
     if protocol=="vless":
-        link=f"vless://{credential}@{host}:{port}?type=tcp&security=none#{label}"
+        link=f"vless://{credential}@{host}:{port}?{query}#{label}"
     elif protocol=="trojan":
-        link=f"trojan://{urllib.parse.quote(credential,safe='')}@{host}:{port}?type=tcp&security=none#{label}"
+        link=f"trojan://{urllib.parse.quote(credential,safe='')}@{host}:{port}?{query}#{label}"
     elif protocol=="vmess":
-        obj={"v":"2","ps":name,"add":host,"port":str(port),"id":credential,"aid":"0","scy":"auto","net":"tcp","type":"none","host":"","path":"","tls":""}
+        obj={"v":"2","ps":name,"add":host,"port":str(port),"id":credential,"aid":"0","scy":"auto","net":network,"type":"none","host":"","path":path_value if network!="grpc" else "","tls":"tls" if security=="tls" else ""}
+        if network=="grpc": obj["path"]=path_value.strip("/")
         link="vmess://"+base64.b64encode(json.dumps(obj,separators=(",",":")).encode()).decode()
     else:
         userinfo=base64.urlsafe_b64encode(f"aes-128-gcm:{credential}".encode()).decode().rstrip("=")
         link=f"ss://{userinfo}@{host}:{port}#{label}"
-    return {"protocol":protocol,"tag":tag,"port":port,"name":name,"credential":credential,"share_link":link,"backup":str(backup) if backup else None}
+    return {
+        "protocol":protocol,"tag":tag,"port":port,"name":name,"credential":credential,
+        "transport":network,"security":security,"share_link":link,"backup":str(backup) if backup else None,
+        "reality":reality_meta,
+    }
+
 def disable_xray_client(inbound_tag,email):
     binary=_binary()
     config_path=_config_path()
