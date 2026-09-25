@@ -14,7 +14,7 @@ RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=/opt/makia-vps-manager/data /usr/local/etc/xray /etc/xray -/var/backups/makia-vps-manager
+ReadWritePaths=/opt/makia-vps-manager/data -/usr/local/etc/xray -/etc/xray -/var/backups/makia-vps-manager
 
 [Install]
 WantedBy=multi-user.target
