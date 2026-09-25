@@ -15,4 +15,5 @@ ALLOWED_SERVICES = {
     "stunnel4": "Stunnel",
     "fail2ban": "Fail2ban",
     "xray": "Xray",
+    "makia-policy-enforcer": "Policy Enforcer",
 }
