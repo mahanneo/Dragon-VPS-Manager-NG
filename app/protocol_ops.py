@@ -390,6 +390,7 @@ def _ensure_xray_stats(data):
     data.setdefault("stats",{})
     api=data.setdefault("api",{})
     api["tag"]="api"
+    api["listen"]="127.0.0.1:10085"
     services=set(api.get("services") or [])
     services.update(["StatsService","HandlerService"])
     api["services"]=sorted(services)
@@ -404,19 +405,29 @@ def _ensure_xray_stats(data):
     system["statsInboundDownlink"]=True
     system["statsOutboundUplink"]=True
     system["statsOutboundDownlink"]=True
-    inbounds=data.setdefault("inbounds",[])
-    if not any(isinstance(x,dict) and x.get("tag")=="api" for x in inbounds):
-        inbounds.append({
-            "listen":"127.0.0.1",
-            "port":10085,
-            "protocol":"dokodemo-door",
-            "settings":{"address":"127.0.0.1"},
-            "tag":"api"
-        })
-    routing=data.setdefault("routing",{})
-    rules=routing.setdefault("rules",[])
-    if not any(isinstance(x,dict) and x.get("inboundTag")==["api"] and x.get("outboundTag")=="api" for x in rules):
-        rules.insert(0,{"type":"field","inboundTag":["api"],"outboundTag":"api"})
+
+    # Remove only the legacy Makia API tunnel created by earlier RC builds.
+    inbounds=data.get("inbounds")
+    if isinstance(inbounds,list):
+        data["inbounds"]=[
+            item for item in inbounds
+            if not (
+                isinstance(item,dict)
+                and item.get("tag")=="api"
+                and int(item.get("port") or -1)==10085
+                and str(item.get("listen") or "")=="127.0.0.1"
+            )
+        ]
+    routing=data.get("routing")
+    if isinstance(routing,dict) and isinstance(routing.get("rules"),list):
+        routing["rules"]=[
+            rule for rule in routing["rules"]
+            if not (
+                isinstance(rule,dict)
+                and rule.get("inboundTag")==["api"]
+                and rule.get("outboundTag")=="api"
+            )
+        ]
     return data
 
 def xray_client_traffic(email, reset=False):
@@ -485,22 +496,22 @@ def _x25519_pair(binary):
 def _build_xray_stream(binary,protocol,transport,security,path_value,server_name,reality_dest):
     transport=(transport or "tcp").lower()
     security=(security or "none").lower()
-    aliases={"raw":"tcp","websocket":"ws"}
+    aliases={"tcp":"raw","ws":"websocket","kcp":"mkcp"}
     transport=aliases.get(transport,transport)
-    if transport not in {"tcp","ws","grpc","httpupgrade","xhttp","kcp"}:
+    if transport not in {"raw","websocket","grpc","httpupgrade","xhttp","mkcp"}:
         raise ProtocolError("unsupported transport")
     if security not in {"none","tls","reality"}:
         raise ProtocolError("unsupported transport security")
     if security=="reality":
         if protocol!="vless":
             raise ProtocolError("Makia currently enables REALITY only for VLESS")
-        if transport not in {"tcp","grpc","xhttp"}:
+        if transport not in {"raw","grpc","xhttp"}:
             raise ProtocolError("REALITY is only compatible with TCP/RAW, gRPC or XHTTP here")
-    stream={"network":transport,"security":security}
+    stream={"method":transport,"security":security}
     path_value=(path_value or "/").strip() or "/"
-    if not path_value.startswith("/") and transport in {"ws","httpupgrade","xhttp"}:
+    if not path_value.startswith("/") and transport in {"websocket","httpupgrade","xhttp"}:
         path_value="/"+path_value
-    if transport=="ws":
+    if transport=="websocket":
         stream["wsSettings"]={"path":path_value}
     elif transport=="grpc":
         stream["grpcSettings"]={"serviceName":path_value.strip("/")}
@@ -508,7 +519,7 @@ def _build_xray_stream(binary,protocol,transport,security,path_value,server_name
         stream["httpupgradeSettings"]={"path":path_value}
     elif transport=="xhttp":
         stream["xhttpSettings"]={"path":path_value,"mode":"auto"}
-    elif transport=="kcp":
+    elif transport=="mkcp":
         stream["kcpSettings"]={"seed":path_value.strip("/") or "makia"}
     reality_meta={}
     if security=="tls":
@@ -590,7 +601,7 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
         credential=secrets.token_urlsafe(18)
         settings={"method":"aes-128-gcm","password":credential,"network":"tcp,udp"}
     stream,reality_meta=_build_xray_stream(binary,protocol,transport,security,path_value,server_name,reality_dest)
-    if protocol=="vless" and security=="reality" and stream.get("network")=="tcp":
+    if protocol=="vless" and security=="reality" and stream.get("method")=="raw":
         client_obj["flow"]="xtls-rprx-vision"
     inbound={
         "tag":tag,
@@ -628,31 +639,32 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
         raise
     label=urllib.parse.quote(name,safe="")
     host=endpoint
-    network=stream.get("network","tcp")
-    q={"type":network,"security":security}
-    if network=="ws": q["path"]=path_value
-    elif network=="grpc": q["serviceName"]=path_value.strip("/")
-    elif network in {"httpupgrade","xhttp"}: q["path"]=path_value
+    method=stream.get("method","raw")
+    link_type={"raw":"tcp","websocket":"ws","mkcp":"kcp"}.get(method,method)
+    q={"type":link_type,"security":security}
+    if method=="websocket": q["path"]=path_value
+    elif method=="grpc": q["serviceName"]=path_value.strip("/")
+    elif method in {"httpupgrade","xhttp"}: q["path"]=path_value
     if security=="tls":
         q["sni"]=(server_name or "").strip().lower()
     elif security=="reality":
         q.update({"sni":reality_meta["server_name"],"fp":"chrome","pbk":reality_meta["public_key"],"sid":reality_meta["short_id"]})
-        if protocol=="vless" and network=="tcp": q["flow"]="xtls-rprx-vision"
+        if protocol=="vless" and method=="raw": q["flow"]="xtls-rprx-vision"
     query=urllib.parse.urlencode(q)
     if protocol=="vless":
         link=f"vless://{credential}@{host}:{port}?{query}#{label}"
     elif protocol=="trojan":
         link=f"trojan://{urllib.parse.quote(credential,safe='')}@{host}:{port}?{query}#{label}"
     elif protocol=="vmess":
-        obj={"v":"2","ps":name,"add":host,"port":str(port),"id":credential,"aid":"0","scy":"auto","net":network,"type":"none","host":"","path":path_value if network!="grpc" else "","tls":"tls" if security=="tls" else ""}
-        if network=="grpc": obj["path"]=path_value.strip("/")
+        obj={"v":"2","ps":name,"add":host,"port":str(port),"id":credential,"aid":"0","scy":"auto","net":link_type,"type":"none","host":"","path":path_value if method!="grpc" else "","tls":"tls" if security=="tls" else ""}
+        if method=="grpc": obj["path"]=path_value.strip("/")
         link="vmess://"+base64.b64encode(json.dumps(obj,separators=(",",":")).encode()).decode()
     else:
         userinfo=base64.urlsafe_b64encode(f"aes-128-gcm:{credential}".encode()).decode().rstrip("=")
         link=f"ss://{userinfo}@{host}:{port}#{label}"
     return {
         "protocol":protocol,"tag":tag,"port":port,"name":name,"credential":credential,
-        "transport":network,"security":security,"share_link":link,"backup":str(backup) if backup else None,
+        "transport":method,"security":security,"share_link":link,"backup":str(backup) if backup else None,
         "reality":reality_meta,
     }
 
