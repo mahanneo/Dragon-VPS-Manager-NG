@@ -31,6 +31,7 @@ install -m 0644 "$SRC/VERSION" "$APP/VERSION"
 "$APP/.venv/bin/pip" install -r "$APP/requirements.txt"
 
 install -m 0644 "$SRC/systemd/makia-vps-manager.service" /etc/systemd/system/makia-vps-manager.service
+install -m 0644 "$SRC/systemd/makia-policy-enforcer.service" /etc/systemd/system/makia-policy-enforcer.service
 install -m 0644 "$SRC/nginx/makia-vps-manager.conf" /etc/nginx/sites-available/makia-vps-manager
 ln -sfn /etc/nginx/sites-available/makia-vps-manager /etc/nginx/sites-enabled/makia-vps-manager
 install -m 0755 "$SRC/scripts/update.sh" /usr/local/sbin/makia-update
@@ -40,6 +41,8 @@ install -m 0755 "$SRC/scripts/uninstall.sh" /usr/local/sbin/makia-uninstall
 systemctl daemon-reload
 nginx -t
 systemctl restart makia-vps-manager
+systemctl enable --now makia-policy-enforcer
+systemctl restart makia-policy-enforcer
 systemctl reload nginx
 
 for _ in {1..15}; do
