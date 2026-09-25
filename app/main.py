@@ -1,5 +1,5 @@
 from pathlib import Path
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import time, io, base64, secrets, string, urllib.request
 import pyotp, qrcode
 import qrcode.image.svg
@@ -301,7 +301,7 @@ def bulk_account_action(payload:BulkAccountAction,request:Request):
                         if current>base: base=current
                     except Exception:
                         pass
-                new_expire=(base+__import__("datetime").timedelta(days=payload.days)).isoformat()
+                new_expire=(base+timedelta(days=payload.days)).isoformat()
                 system_ops.update_ssh_user(username,expire=new_expire)
                 upsert_profile(username,p.get("plan",""),p.get("note",""),new_expire,p.get("connection_limit",1),p.get("quota_mb",0),p.get("enabled",1))
             else:
