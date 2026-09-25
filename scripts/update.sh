@@ -61,7 +61,9 @@ systemctl restart makia-vps-manager
 systemctl enable --now makia-policy-enforcer
 systemctl restart makia-policy-enforcer
 systemctl enable --now makia-metrics-sampler
+systemctl enable --now makia-protocol-traffic
 systemctl restart makia-metrics-sampler
+systemctl restart makia-protocol-traffic
 systemctl enable --now fail2ban
 systemctl restart fail2ban
 systemctl reload nginx
