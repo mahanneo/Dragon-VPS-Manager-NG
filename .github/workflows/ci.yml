@@ -15,17 +15,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install test dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest
-      - name: Python compile check
-        run: python -m compileall -q app
+      - name: Python compile
+        run: python -m compileall -q app tests
       - name: Unit tests
         run: pytest -q
       - name: Bash syntax
         run: bash -n install.sh scripts/*.sh
-      - name: Guard against dangerous patterns
+      - name: JavaScript syntax
+        run: node --check app/static/app.js
+      - name: Dangerous pattern guard
         run: |
           ! grep -R --line-number -E 'chmod[[:space:]]+777|shell=True|os\.system\(' app scripts install.sh systemd nginx
+      - name: Makia naming contract
+        run: |
+          grep -q 'Makia VPS Manager' app/config.py
+          grep -q '/opt/makia-vps-manager' scripts/install.sh
+          grep -q 'makia-vps-manager.service' scripts/install.sh
