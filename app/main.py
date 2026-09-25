@@ -107,7 +107,11 @@ def account_rows():
 @app.get("/",response_class=HTMLResponse)
 def root(request:Request):
     if not current_user(request): return RedirectResponse("/login",302)
-    return templates.TemplateResponse("dashboard.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"language":get_setting("language","fa"),"panel_domain":get_setting("panel_domain","")})
+    return templates.TemplateResponse("dashboard.html",{
+        "request":request,"app_name":APP_NAME,"version":VERSION,
+        "language":get_setting("language","fa"),"panel_domain":get_setting("panel_domain",""),
+        "theme":get_setting("theme","midnight"),"density":get_setting("density","comfortable")
+    })
 
 @app.get("/login",response_class=HTMLResponse)
 def login_page(request:Request):
@@ -679,6 +683,8 @@ def node_heartbeat(payload:NodeHeartbeat,request:Request):
 class GeneralSettings(BaseModel):
     language:str="fa"
     panel_domain:str=""
+    theme:str="midnight"
+    density:str="comfortable"
 
 @app.get("/api/settings/general")
 def general_settings_get(request:Request):
@@ -688,6 +694,8 @@ def general_settings_get(request:Request):
     return {
         "language":data.get("language","fa"),
         "panel_domain":domain,
+        "theme":data.get("theme","midnight"),
+        "density":data.get("density","comfortable"),
         "domain_status":panel_ops.domain_status(domain or None),
     }
 
@@ -695,14 +703,18 @@ def general_settings_get(request:Request):
 def general_settings_put(payload:GeneralSettings,request:Request):
     actor=require_mutation(request)
     language=payload.language if payload.language in {"fa","en"} else "fa"
+    theme=payload.theme if payload.theme in {"midnight","amoled","graphite"} else "midnight"
+    density=payload.density if payload.density in {"comfortable","compact"} else "comfortable"
     domain=(payload.panel_domain or "").strip().lower()
     if domain:
         try: domain=panel_ops.validate_domain(domain)
         except panel_ops.PanelOperationError as e: raise HTTPException(400,str(e))
     set_setting("language",language)
     set_setting("panel_domain",domain)
-    audit(actor,"general_settings_update",domain or "none",f"language={language}",ip(request))
-    return {"ok":True,"language":language,"panel_domain":domain}
+    set_setting("theme",theme)
+    set_setting("density",density)
+    audit(actor,"general_settings_update",domain or "none",f"language={language}; theme={theme}; density={density}",ip(request))
+    return {"ok":True,"language":language,"panel_domain":domain,"theme":theme,"density":density}
 
 class DomainApply(BaseModel):
     domain:str=Field(min_length=3,max_length=253)
