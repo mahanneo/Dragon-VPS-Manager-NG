@@ -76,6 +76,7 @@ rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/dragon-vps-manag
 install -m 0755 "$SOURCE_DIR/scripts/update.sh" /usr/local/sbin/makia-update
 install -m 0755 "$SOURCE_DIR/scripts/backup.sh" /usr/local/sbin/makia-backup
 install -m 0755 "$SOURCE_DIR/scripts/uninstall.sh" /usr/local/sbin/makia-uninstall
+install -m 0755 "$SOURCE_DIR/scripts/doctor.sh" /usr/local/sbin/makia-doctor
 ln -sfn /usr/local/sbin/makia-update /usr/local/sbin/dragon-update
 ln -sfn /usr/local/sbin/makia-backup /usr/local/sbin/dragon-backup
 ln -sfn /usr/local/sbin/makia-uninstall /usr/local/sbin/dragon-uninstall
@@ -109,4 +110,5 @@ printf 'Panel: http://%s/\n' "${SERVER_IP:-SERVER_IP}"
 printf 'Username: admin\n'
 printf 'Bootstrap password: %s\n' "$ADMIN_PASSWORD"
 printf '\nIMPORTANT: change the administrator password immediately.\n'
-printf 'For public exposure, enable HTTPS and review Security Center first.\n\n'
+printf 'For public exposure, enable HTTPS and review Security Center first.\n'
+printf 'Run makia-doctor for host diagnostics.\n\n'
