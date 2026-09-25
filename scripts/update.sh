@@ -32,6 +32,7 @@ install -m 0644 "$SRC/VERSION" "$APP/VERSION"
 
 install -m 0644 "$SRC/systemd/makia-vps-manager.service" /etc/systemd/system/makia-vps-manager.service
 install -m 0644 "$SRC/systemd/makia-policy-enforcer.service" /etc/systemd/system/makia-policy-enforcer.service
+install -m 0644 "$SRC/systemd/makia-metrics-sampler.service" /etc/systemd/system/makia-metrics-sampler.service
 install -m 0644 "$SRC/nginx/makia-vps-manager.conf" /etc/nginx/sites-available/makia-vps-manager
 ln -sfn /etc/nginx/sites-available/makia-vps-manager /etc/nginx/sites-enabled/makia-vps-manager
 install -m 0755 "$SRC/scripts/update.sh" /usr/local/sbin/makia-update
@@ -43,6 +44,8 @@ nginx -t
 systemctl restart makia-vps-manager
 systemctl enable --now makia-policy-enforcer
 systemctl restart makia-policy-enforcer
+systemctl enable --now makia-metrics-sampler
+systemctl restart makia-metrics-sampler
 systemctl reload nginx
 
 for _ in {1..15}; do
