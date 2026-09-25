@@ -1,12 +1,13 @@
 from pathlib import Path
 from datetime import date, datetime
+import time
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from .config import APP_NAME, VERSION, COOKIE_NAME, ALLOWED_SERVICES, DATA_DIR
-from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile
+from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since
 from .security import verify_password, make_session, read_session, hash_password
 from . import system_ops, protocol_ops
 
@@ -110,6 +111,12 @@ def overview(request:Request):
         "limit_violations":violations,
         "sessions":sessions[:25],
     }
+
+@app.get("/api/metrics/history")
+def metric_history(request:Request,hours:int=24):
+    require_user(request)
+    hours=max(1,min(hours,168))
+    return metrics_since(int(time.time())-hours*3600)
 
 @app.get("/api/accounts")
 def accounts(request:Request):
