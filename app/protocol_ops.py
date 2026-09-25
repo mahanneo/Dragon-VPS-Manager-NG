@@ -432,15 +432,31 @@ def xray_client_traffic(email, reset=False):
         return {"uplink":0,"downlink":0,"total":0,"available":False,"error":(p.stderr or p.stdout or "")[:240]}
     text=p.stdout or ""
     up=down=0
-    blocks=re.split(r"\n\s*\n",text)
-    for block in blocks:
-        name_m=re.search(r'name:\s*"([^"]+)"',block)
-        value_m=re.search(r"value:\s*(\d+)",block)
-        if not name_m or not value_m:
-            continue
-        name=name_m.group(1); value=int(value_m.group(1))
-        if name.endswith(">>>uplink"): up+=value
-        elif name.endswith(">>>downlink"): down+=value
+    parsed=False
+    try:
+        payload=json.loads(text)
+        rows=payload.get("stat") or payload.get("stats") or []
+        if isinstance(rows,list):
+            for item in rows:
+                if not isinstance(item,dict): continue
+                name=str(item.get("name") or "")
+                try: value=int(item.get("value") or 0)
+                except Exception: value=0
+                if name.endswith(">>>uplink"): up+=value
+                elif name.endswith(">>>downlink"): down+=value
+            parsed=True
+    except Exception:
+        pass
+    if not parsed:
+        blocks=re.split(r"\n\s*\n",text)
+        for block in blocks:
+            name_m=re.search(r'["\']?name["\']?\s*:\s*"([^"]+)"',block)
+            value_m=re.search(r'["\']?value["\']?\s*:\s*"?(\d+)"?',block)
+            if not name_m or not value_m:
+                continue
+            name=name_m.group(1); value=int(value_m.group(1))
+            if name.endswith(">>>uplink"): up+=value
+            elif name.endswith(">>>downlink"): down+=value
     return {"uplink":up,"downlink":down,"total":up+down,"available":True,"error":None}
 
 def _xray_default_config(path):
