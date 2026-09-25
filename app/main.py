@@ -482,8 +482,19 @@ def protocol_client_update(client_id:int,payload:ProtocolClientPolicy,request:Re
     if not row: raise HTTPException(404,"client not found")
     quota_bytes=int(payload.quota_gb*1024*1024*1024) if payload.quota_gb is not None else None
     expire_at=int(time.time()+payload.expire_days*86400) if payload.expire_days is not None and payload.expire_days>0 else (0 if payload.expire_days==0 else None)
+
+    if payload.enabled is not None and bool(payload.enabled)!=bool(row.get("enabled")):
+        if row.get("engine")=="xray" and row.get("protocol") in {"vless","vmess","trojan","hysteria2"}:
+            try:
+                if payload.enabled:
+                    protocol_ops.enable_xray_client(row["inbound_tag"],row["name"],row["protocol"],row["credential"])
+                else:
+                    protocol_ops.disable_xray_client(row["inbound_tag"],row["name"])
+            except protocol_ops.ProtocolError as e:
+                raise HTTPException(400,str(e))
+
     update_protocol_client_state(client_id,payload.enabled,quota_bytes,expire_at,payload.ip_limit,payload.reset_days)
-    audit(actor,"protocol_client_update",str(client_id),ip=ip(request))
+    audit(actor,"protocol_client_update",str(client_id),f"enabled={payload.enabled}; reset_days={payload.reset_days}",ip(request))
     return {"ok":True}
 
 @app.post("/api/protocol-clients/{client_id}/reset-traffic")
