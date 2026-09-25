@@ -1,9 +1,15 @@
+import base64
 import ipaddress
 import json
 import os
 import re
 import shutil
 import subprocess
+import secrets
+import socket
+import time
+import urllib.parse
+import uuid
 from pathlib import Path
 
 XRAY_BIN_CANDIDATES=["/usr/local/bin/xray","/usr/bin/xray"]
@@ -365,6 +371,118 @@ def create_openvpn_client(name, endpoint, port=1194, proto="udp"):
         f"<ca>\n{ca}</ca>\n<cert>\n{cert}</cert>\n<key>\n{key}</key>\n<tls-crypt>\n{ta}</tls-crypt>\n"
     )
     return {"name":name,"config":client}
+
+def _port_in_use(port):
+    port=int(port)
+    for kind in (socket.SOCK_STREAM,socket.SOCK_DGRAM):
+        s=socket.socket(socket.AF_INET,kind)
+        try:
+            s.bind(("0.0.0.0",port))
+        except OSError:
+            return True
+        finally:
+            s.close()
+    return False
+
+def _xray_default_config(path):
+    return {
+        "log":{"loglevel":"warning"},
+        "inbounds":[],
+        "outbounds":[{"protocol":"freedom","tag":"direct"}],
+    }
+
+def create_xray_inbound(protocol, port, name, endpoint):
+    protocol=(protocol or "").lower()
+    if protocol not in {"vless","vmess","trojan","shadowsocks"}:
+        raise ProtocolError("unsupported Xray quick protocol")
+    port=_validate_port(port)
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
+        raise ProtocolError("invalid client name")
+    if not re.fullmatch(r"[A-Za-z0-9.:[\\]-]{1,255}",endpoint or ""):
+        raise ProtocolError("invalid endpoint")
+    binary=_binary()
+    if not binary:
+        raise ProtocolError("Xray core is not installed")
+    config_path=_config_path() or "/usr/local/etc/xray/config.json"
+    path=Path(config_path)
+    path.parent.mkdir(parents=True,exist_ok=True)
+    if path.exists():
+        try:
+            data=json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise ProtocolError(f"cannot parse existing Xray config: {exc}") from exc
+    else:
+        data=_xray_default_config(path)
+    if not isinstance(data,dict):
+        raise ProtocolError("invalid Xray configuration root")
+    inbounds=data.setdefault("inbounds",[])
+    if not isinstance(inbounds,list):
+        raise ProtocolError("invalid Xray inbounds collection")
+    if any(isinstance(i,dict) and int(i.get("port") or -1)==port for i in inbounds):
+        raise ProtocolError("this port is already used by another Xray inbound")
+    if _port_in_use(port):
+        raise ProtocolError("this port is already in use on the server")
+    tag=f"makia-{protocol}-{port}"
+    credential=None
+    if protocol in {"vless","vmess"}:
+        credential=str(uuid.uuid4())
+        settings={"clients":[{"id":credential,"email":name}]}
+        if protocol=="vless":
+            settings["decryption"]="none"
+    elif protocol=="trojan":
+        credential=secrets.token_urlsafe(18)
+        settings={"clients":[{"password":credential,"email":name}]}
+    else:
+        credential=secrets.token_urlsafe(18)
+        settings={"method":"aes-128-gcm","password":credential,"network":"tcp,udp"}
+    inbound={
+        "tag":tag,
+        "listen":"0.0.0.0",
+        "port":port,
+        "protocol":protocol,
+        "settings":settings,
+        "streamSettings":{"network":"tcp","security":"none"},
+        "sniffing":{"enabled":True,"destOverride":["http","tls","quic"]},
+    }
+    inbounds.append(inbound)
+    tmp=path.with_suffix(path.suffix+".makia-tmp")
+    backup_dir=Path("/var/backups/makia-vps-manager")
+    backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
+    backup=None
+    if path.exists():
+        backup=backup_dir/f"xray-{int(time.time())}.json"
+        shutil.copy2(path,backup)
+    tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    os.chmod(tmp,0o600)
+    try:
+        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        os.replace(tmp,path)
+        _run(["systemctl","restart","xray"],timeout=30)
+        if not _active("xray"):
+            raise ProtocolError("Xray did not become active after restart")
+    except Exception:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+            if backup and backup.exists():
+                shutil.copy2(backup,path)
+                _run(["systemctl","restart","xray"],timeout=30)
+        except Exception:
+            pass
+        raise
+    label=urllib.parse.quote(name,safe="")
+    host=endpoint
+    if protocol=="vless":
+        link=f"vless://{credential}@{host}:{port}?type=tcp&security=none#{label}"
+    elif protocol=="trojan":
+        link=f"trojan://{urllib.parse.quote(credential,safe='')}@{host}:{port}?type=tcp&security=none#{label}"
+    elif protocol=="vmess":
+        obj={"v":"2","ps":name,"add":host,"port":str(port),"id":credential,"aid":"0","scy":"auto","net":"tcp","type":"none","host":"","path":"","tls":""}
+        link="vmess://"+base64.b64encode(json.dumps(obj,separators=(",",":")).encode()).decode()
+    else:
+        userinfo=base64.urlsafe_b64encode(f"aes-128-gcm:{credential}".encode()).decode().rstrip("=")
+        link=f"ss://{userinfo}@{host}:{port}#{label}"
+    return {"protocol":protocol,"tag":tag,"port":port,"name":name,"credential":credential,"share_link":link,"backup":str(backup) if backup else None}
 
 def status():
     return xray_status()
