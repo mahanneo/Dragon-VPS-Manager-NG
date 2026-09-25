@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.4.0-alpha] - 2026-09-26
+
+### Protocol Center
+- Added real Xray binary/version/service/config discovery.
+- Added safe inbound summary with protocol, listen address, port and client count.
+- Added Xray to the service allowlist.
+- No fabricated protocol data or fake traffic metrics.
+
+### Account policy enforcement
+- Added `makia-policy-enforcer` systemd service.
+- Connection limits are now actively enforced for SSH login sessions.
+- Excess sessions are disconnected and recorded in the audit trail.
+
+### Security
+- State-changing API requests require the Makia management header.
+- Session cookies become Secure automatically when served through HTTPS.
+- User PINs may still be as short as four characters by operator choice; admin credentials remain stronger.
+
+### UI
+- Added Protocol Center navigation.
+- Update Center now references `makia-update`.
+
 ## [0.3.0-alpha] - 2026-09-26
 
 ### Product
