@@ -27,7 +27,7 @@ jobs:
       - name: Unit tests
         run: pytest -q
       - name: Bash syntax
-        run: bash -n install.sh scripts/*.sh
+        run: bash -n install.sh upgrade.sh scripts/*.sh
       - name: JavaScript syntax
         run: node --check app/static/app.js
       - name: Dangerous pattern guard
