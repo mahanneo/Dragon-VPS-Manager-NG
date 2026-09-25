@@ -361,6 +361,11 @@ class XrayQuickInbound(BaseModel):
     port:int=Field(ge=1,le=65535)
     name:str=Field(min_length=1,max_length=48)
     endpoint:str=Field(min_length=1,max_length=255)
+    transport:str="tcp"
+    security:str="none"
+    path_value:str=Field(default="/",max_length=255)
+    server_name:str=Field(default="",max_length=255)
+    reality_dest:str=Field(default="",max_length=255)
     quota_gb:float=Field(default=0,ge=0,le=100000)
     expire_days:int=Field(default=0,ge=0,le=3650)
     ip_limit:int=Field(default=1,ge=1,le=50)
@@ -369,7 +374,10 @@ class XrayQuickInbound(BaseModel):
 def xray_quick_inbound(payload:XrayQuickInbound,request:Request):
     actor=require_mutation(request)
     try:
-        result=protocol_ops.create_xray_inbound(payload.protocol,payload.port,payload.name,payload.endpoint)
+        result=protocol_ops.create_xray_inbound(
+            payload.protocol,payload.port,payload.name,payload.endpoint,
+            payload.transport,payload.security,payload.path_value,payload.server_name,payload.reality_dest
+        )
     except protocol_ops.ProtocolError as e:
         raise HTTPException(400,str(e))
     qr=qrcode.make(result["share_link"],image_factory=qrcode.image.svg.SvgPathImage)
