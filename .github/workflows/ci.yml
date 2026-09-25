@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+      - name: Python compile check
+        run: python -m compileall -q app
+      - name: Unit tests
+        run: pytest -q
+      - name: Bash syntax
+        run: bash -n install.sh scripts/*.sh
+      - name: Guard against dangerous patterns
+        run: |
+          ! grep -R --line-number -E 'chmod[[:space:]]+777|shell=True|os\.system\(' app scripts install.sh systemd nginx
