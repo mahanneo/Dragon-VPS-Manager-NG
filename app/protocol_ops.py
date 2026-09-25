@@ -784,6 +784,76 @@ def disable_xray_client(inbound_tag,email):
             pass
         raise
     return {"disabled":True,"backup":str(backup)}
+def enable_xray_client(inbound_tag,email,protocol,credential):
+    binary=_binary()
+    config_path=_config_path()
+    if not binary or not config_path:
+        raise ProtocolError("Xray core/config is not available")
+    path=Path(config_path)
+    try:
+        data=json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ProtocolError(f"cannot parse Xray config: {exc}") from exc
+    target=None
+    for inbound in data.get("inbounds",[]) if isinstance(data,dict) else []:
+        if isinstance(inbound,dict) and inbound.get("tag")==inbound_tag:
+            target=inbound
+            break
+    if not target:
+        raise ProtocolError("target Xray inbound no longer exists")
+    settings=target.setdefault("settings",{})
+    protocol=(protocol or "").lower()
+    if protocol=="vless":
+        clients=settings.setdefault("clients",[])
+        if any(isinstance(x,dict) and x.get("email")==email for x in clients):
+            return {"enabled":True,"already_present":True}
+        item={"id":credential,"email":email,"level":0}
+        stream=target.get("streamSettings") or {}
+        method=stream.get("method") or stream.get("network")
+        if stream.get("security")=="reality" and method in {"raw","tcp"}:
+            item["flow"]="xtls-rprx-vision"
+        clients.append(item)
+    elif protocol=="vmess":
+        clients=settings.setdefault("clients",[])
+        if any(isinstance(x,dict) and x.get("email")==email for x in clients):
+            return {"enabled":True,"already_present":True}
+        clients.append({"id":credential,"email":email,"level":0})
+    elif protocol=="trojan":
+        clients=settings.setdefault("clients",[])
+        if any(isinstance(x,dict) and x.get("email")==email for x in clients):
+            return {"enabled":True,"already_present":True}
+        clients.append({"password":credential,"email":email,"level":0})
+    elif protocol=="hysteria2":
+        users=settings.setdefault("users",[])
+        if any(isinstance(x,dict) and x.get("email")==email for x in users):
+            return {"enabled":True,"already_present":True}
+        users.append({"auth":credential,"email":email,"level":0})
+    else:
+        raise ProtocolError("automatic re-enable is not supported for this protocol")
+
+    backup_dir=Path("/var/backups/makia-vps-manager")
+    backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
+    backup=backup_dir/f"xray-enable-{int(time.time())}.json"
+    shutil.copy2(path,backup)
+    tmp=path.with_suffix(path.suffix+".makia-enable")
+    tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    os.chmod(tmp,0o600)
+    try:
+        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        os.replace(tmp,path)
+        _run(["systemctl","restart","xray"],timeout=30)
+        if not _active("xray"):
+            raise ProtocolError("Xray failed after client enable")
+    except Exception:
+        try:
+            if tmp.exists(): tmp.unlink()
+            shutil.copy2(backup,path)
+            _run(["systemctl","restart","xray"],timeout=30)
+        except Exception:
+            pass
+        raise
+    return {"enabled":True,"backup":str(backup)}
+
 
 def reset_xray_client_traffic(email):
     return xray_client_traffic(email,reset=True)
