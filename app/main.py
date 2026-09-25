@@ -473,6 +473,29 @@ def protocol_client_reset_traffic(client_id:int,request:Request):
     audit(actor,"protocol_client_reset_traffic",str(client_id),ip=ip(request))
     return {"ok":True,"xray":result}
 
+@app.get("/api/protocols/xray/config")
+def xray_config_get(request:Request):
+    require_user(request)
+    try: return protocol_ops.read_xray_config()
+    except protocol_ops.ProtocolError as e: raise HTTPException(400,str(e))
+
+class XrayConfigPayload(BaseModel):
+    config:dict
+
+@app.post("/api/protocols/xray/config/validate")
+def xray_config_validate(payload:XrayConfigPayload,request:Request):
+    require_mutation(request)
+    try: return protocol_ops.validate_xray_config(payload.config)
+    except protocol_ops.ProtocolError as e: raise HTTPException(400,str(e))
+
+@app.put("/api/protocols/xray/config")
+def xray_config_apply(payload:XrayConfigPayload,request:Request):
+    actor=require_mutation(request)
+    try: result=protocol_ops.apply_xray_config(payload.config)
+    except protocol_ops.ProtocolError as e: raise HTTPException(400,str(e))
+    audit(actor,"xray_config_apply",result.get("path"),f"backup={result.get('backup')}",ip(request))
+    return result
+
 class ProtocolInstall(BaseModel):
     component:str
 
