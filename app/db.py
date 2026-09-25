@@ -87,6 +87,8 @@ def init_db():
           credential TEXT NOT NULL,
           share_link TEXT NOT NULL,
           quota_bytes INTEGER NOT NULL DEFAULT 0,
+          used_up_bytes INTEGER NOT NULL DEFAULT 0,
+          used_down_bytes INTEGER NOT NULL DEFAULT 0,
           expire_at INTEGER NOT NULL DEFAULT 0,
           ip_limit INTEGER NOT NULL DEFAULT 1,
           enabled INTEGER NOT NULL DEFAULT 1,
@@ -121,6 +123,9 @@ def init_db():
         _add_column(con, "account_profiles", "created_at TEXT NOT NULL DEFAULT ''")
         _add_column(con, "account_profiles", "updated_at TEXT NOT NULL DEFAULT ''")
 
+        _add_column(con, "protocol_clients", "used_up_bytes INTEGER NOT NULL DEFAULT 0")
+        _add_column(con, "protocol_clients", "used_down_bytes INTEGER NOT NULL DEFAULT 0")
+        _add_column(con, "protocol_clients", "last_traffic_at TEXT")
         _add_column(con, "admins", "totp_secret TEXT")
         _add_column(con, "admins", "totp_enabled INTEGER NOT NULL DEFAULT 0")
 
@@ -333,3 +338,28 @@ def update_protocol_client_state(client_id,enabled=None,quota_bytes=None,expire_
 def delete_protocol_client(client_id):
     with connect() as con:
         con.execute("DELETE FROM protocol_clients WHERE id=?",(int(client_id),))
+
+
+def add_protocol_traffic(client_id,uplink,downlink):
+    up=max(0,int(uplink or 0)); down=max(0,int(downlink or 0))
+    with connect() as con:
+        con.execute(
+            """UPDATE protocol_clients
+               SET used_up_bytes=used_up_bytes+?,
+                   used_down_bytes=used_down_bytes+?,
+                   last_traffic_at=?,
+                   updated_at=?
+               WHERE id=?""",
+            (up,down,now(),now(),int(client_id))
+        )
+
+def reset_protocol_traffic(client_id):
+    with connect() as con:
+        con.execute(
+            "UPDATE protocol_clients SET used_up_bytes=0,used_down_bytes=0,last_traffic_at=?,updated_at=? WHERE id=?",
+            (now(),now(),int(client_id))
+        )
+
+def set_protocol_client_enabled(client_id,enabled):
+    with connect() as con:
+        con.execute("UPDATE protocol_clients SET enabled=?,updated_at=? WHERE id=?",(1 if enabled else 0,now(),int(client_id)))
