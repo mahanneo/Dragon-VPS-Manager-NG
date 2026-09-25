@@ -43,3 +43,6 @@ body[data-density="compact"] .sidebar nav button{padding-top:8px;padding-bottom:
 body[data-density="compact"] .workspace{padding-top:18px}
 .credential-grid.compact{grid-template-columns:repeat(4,1fr);margin-bottom:10px}
 @media(max-width:720px){.credential-grid.compact{grid-template-columns:repeat(2,1fr)}}
+
+/* v0.8 device/IP and renewal details */
+button.status-chip{cursor:pointer;font:inherit}.ip-list{display:grid;gap:8px}.ip-list>div{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 13px;border:1px solid #22334b;border-radius:12px;background:#08111d}.ip-list b{direction:ltr;text-align:left;color:#c9f2ff}.ip-list span{font-size:10px;color:var(--muted)}.account-row .chips{margin-top:7px}.protocol-client-row .chips{margin-top:7px}.protocol-client-row .status-chip{white-space:nowrap}
