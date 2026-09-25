@@ -12,7 +12,11 @@ Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=full
+# The web service currently performs validated Linux account operations
+# (useradd/usermod/chpasswd). ProtectSystem=full can prevent shadow-utils
+# from acquiring /etc/.pwd.lock on some Ubuntu/systemd combinations.
+# A dedicated privileged helper is planned for the stable architecture.
+ProtectSystem=false
 ReadWritePaths=/opt/makia-vps-manager/data /home /etc -/var/backups/makia-vps-manager
 
 [Install]
