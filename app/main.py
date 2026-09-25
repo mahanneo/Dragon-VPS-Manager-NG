@@ -349,6 +349,25 @@ def protocols(request:Request):
     require_user(request)
     return protocol_ops.catalog()
 
+class XrayQuickInbound(BaseModel):
+    protocol:str
+    port:int=Field(ge=1,le=65535)
+    name:str=Field(min_length=1,max_length=48)
+    endpoint:str=Field(min_length=1,max_length=255)
+
+@app.post("/api/protocols/xray/quick-inbound")
+def xray_quick_inbound(payload:XrayQuickInbound,request:Request):
+    actor=require_mutation(request)
+    try:
+        result=protocol_ops.create_xray_inbound(payload.protocol,payload.port,payload.name,payload.endpoint)
+    except protocol_ops.ProtocolError as e:
+        raise HTTPException(400,str(e))
+    qr=qrcode.make(result["share_link"],image_factory=qrcode.image.svg.SvgPathImage)
+    buf=io.BytesIO(); qr.save(buf)
+    result["qr"]="data:image/svg+xml;base64,"+base64.b64encode(buf.getvalue()).decode()
+    audit(actor,"xray_quick_inbound",result["tag"],f"protocol={payload.protocol}; port={payload.port}",ip(request))
+    return result
+
 class ProtocolInstall(BaseModel):
     component:str
 
