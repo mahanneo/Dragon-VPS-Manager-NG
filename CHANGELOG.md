@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.6.0-alpha] - 2026-09-26
+
+### Account Center V2
+- Added server-side cryptographic generation for 4-digit PIN, 6-digit PIN, Easy-8 and strong user passwords.
+- Added automatic username suggestion.
+- Added 1/7/30/60/90-day expiry presets.
+- Added account search and status filters.
+- Added bulk expiry extension in addition to lock/unlock/disconnect.
+- Added GB-oriented quota entry while preserving MB canonical storage.
+- Added improved one-time credential card for copying account details to the user.
+
+### UX
+- Added global Makia command palette with Ctrl/Cmd + K.
+- Added new provisioning, security and update surfaces.
+- Added richer mobile behavior and visual hierarchy.
+
+### Security
+- Fresh installations now install and enable Fail2ban with an SSH brute-force baseline.
+- Existing installations receive the same Fail2ban baseline through `makia-update`.
+- 4-character user PINs remain optional; administrator password policy is unchanged.
+
+### Update Center
+- Added online VERSION comparison against the main GitHub repository.
+- Web-triggered self-update remains intentionally disabled until atomic rollback/release verification is complete.
+
+
 ## [0.4.0-alpha] - 2026-09-26
 
 ### Protocol Center
