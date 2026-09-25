@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 [[ ${EUID:-$(id -u)} -eq 0 ]] || { echo "Run as root."; exit 1; }
+
 REPO="mahanneo/Makia-VPS-Manager"
 REF="${MAKIA_REF:-${DRAGON_REF:-main}}"
-APP=/opt/dragon-vps-manager-ng
+APP=/opt/makia-vps-manager
+OLD_APP=/opt/dragon-vps-manager-ng
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-[[ -d "$APP" ]] || { echo "Dragon VPS Manager NG is not installed."; exit 1; }
-BACKUP="$(/usr/local/sbin/dragon-backup)"
+if [[ ! -d "$APP" && -d "$OLD_APP" ]]; then
+  echo "Legacy installation detected. Run the latest installer once to migrate to /opt/makia-vps-manager."
+  exit 2
+fi
+[[ -d "$APP" ]] || { echo "Makia VPS Manager is not installed."; exit 1; }
+
+BACKUP="$(/usr/local/sbin/makia-backup)"
 echo "Backup created: $BACKUP"
 
 curl -fL --retry 3 "https://github.com/${REPO}/archive/refs/heads/${REF}.tar.gz" -o "$TMP/source.tar.gz"
@@ -16,21 +23,34 @@ tar -xzf "$TMP/source.tar.gz" -C "$TMP"
 SRC="$(find "$TMP" -mindepth 1 -maxdepth 1 -type d -name 'Makia-VPS-Manager-*' | head -n1)"
 [[ -n "$SRC" ]] || { echo "Unable to locate extracted source."; exit 1; }
 
-systemctl stop dragon-vps-manager
+systemctl stop makia-vps-manager
 rm -rf "$APP/app"
 cp -a "$SRC/app" "$APP/app"
 install -m 0644 "$SRC/requirements.txt" "$APP/requirements.txt"
 install -m 0644 "$SRC/VERSION" "$APP/VERSION"
 "$APP/.venv/bin/pip" install -r "$APP/requirements.txt"
-install -m 0644 "$SRC/systemd/dragon-vps-manager.service" /etc/systemd/system/dragon-vps-manager.service
-install -m 0644 "$SRC/nginx/dragon-vps-manager.conf" /etc/nginx/sites-available/dragon-vps-manager
-install -m 0755 "$SRC/scripts/update.sh" /usr/local/sbin/dragon-update
-install -m 0755 "$SRC/scripts/backup.sh" /usr/local/sbin/dragon-backup
-install -m 0755 "$SRC/scripts/uninstall.sh" /usr/local/sbin/dragon-uninstall
+
+install -m 0644 "$SRC/systemd/makia-vps-manager.service" /etc/systemd/system/makia-vps-manager.service
+install -m 0644 "$SRC/nginx/makia-vps-manager.conf" /etc/nginx/sites-available/makia-vps-manager
+ln -sfn /etc/nginx/sites-available/makia-vps-manager /etc/nginx/sites-enabled/makia-vps-manager
+install -m 0755 "$SRC/scripts/update.sh" /usr/local/sbin/makia-update
+install -m 0755 "$SRC/scripts/backup.sh" /usr/local/sbin/makia-backup
+install -m 0755 "$SRC/scripts/uninstall.sh" /usr/local/sbin/makia-uninstall
+
 systemctl daemon-reload
 nginx -t
-systemctl restart dragon-vps-manager
+systemctl restart makia-vps-manager
 systemctl reload nginx
-curl -fsS http://127.0.0.1:8787/healthz >/dev/null
-printf 'Update complete. Installed version: '
-cat "$APP/VERSION"
+
+for _ in {1..15}; do
+  if curl -fsS http://127.0.0.1:8787/healthz >/dev/null; then
+    printf 'Update complete. Installed version: '
+    cat "$APP/VERSION"
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "Health check failed after update."
+echo "Backup is available at: $BACKUP"
+exit 3
