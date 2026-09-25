@@ -105,6 +105,7 @@ def init_db():
           reset_days INTEGER NOT NULL DEFAULT 0,
           next_reset_at INTEGER NOT NULL DEFAULT 0,
           enabled INTEGER NOT NULL DEFAULT 1,
+          disabled_reason TEXT NOT NULL DEFAULT '',
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           UNIQUE(engine,inbound_tag,name)
@@ -142,6 +143,7 @@ def init_db():
         _add_column(con, "protocol_clients", "last_traffic_at TEXT")
         _add_column(con, "protocol_clients", "reset_days INTEGER NOT NULL DEFAULT 0")
         _add_column(con, "protocol_clients", "next_reset_at INTEGER NOT NULL DEFAULT 0")
+        _add_column(con, "protocol_clients", "disabled_reason TEXT NOT NULL DEFAULT ''")
         _add_column(con, "admins", "totp_secret TEXT")
         _add_column(con, "admins", "totp_enabled INTEGER NOT NULL DEFAULT 0")
 
@@ -349,7 +351,9 @@ def get_protocol_client(client_id):
 
 def update_protocol_client_state(client_id,enabled=None,quota_bytes=None,expire_at=None,ip_limit=None,reset_days=None):
     fields=[]; values=[]
-    if enabled is not None: fields.append("enabled=?"); values.append(1 if enabled else 0)
+    if enabled is not None:
+        fields.append("enabled=?"); values.append(1 if enabled else 0)
+        fields.append("disabled_reason=?"); values.append("" if enabled else "manual")
     if quota_bytes is not None: fields.append("quota_bytes=?"); values.append(max(0,int(quota_bytes)))
     if expire_at is not None: fields.append("expire_at=?"); values.append(max(0,int(expire_at)))
     if ip_limit is not None: fields.append("ip_limit=?"); values.append(max(1,int(ip_limit)))
@@ -387,22 +391,12 @@ def reset_protocol_traffic(client_id):
             (now(),now(),int(client_id))
         )
 
-def set_protocol_client_enabled(client_id,enabled):
+def set_protocol_client_enabled(client_id,enabled,reason=""):
     with connect() as con:
-        con.execute("UPDATE protocol_clients SET enabled=?,updated_at=? WHERE id=?",(1 if enabled else 0,now(),int(client_id)))
-
-
-def ensure_protocol_subscription_ids():
-    with connect() as con:
-        rows=con.execute("SELECT id FROM protocol_clients WHERE subscription_id IS NULL OR subscription_id=''").fetchall()
-        for row in rows:
-            con.execute("UPDATE protocol_clients SET subscription_id=? WHERE id=?",(secrets.token_urlsafe(18),row["id"]))
-
-def protocol_client_by_subscription(sub_id):
-    with connect() as con:
-        row=con.execute("SELECT * FROM protocol_clients WHERE subscription_id=? AND enabled=1",(str(sub_id),)).fetchone()
-        return dict(row) if row else None
-
+        con.execute(
+            "UPDATE protocol_clients SET enabled=?,disabled_reason=?,updated_at=? WHERE id=?",
+            (1 if enabled else 0,"" if enabled else str(reason or "manual"),now(),int(client_id))
+        )
 
 def advance_protocol_reset(client_id,reset_days):
     reset_days=max(0,int(reset_days or 0))
