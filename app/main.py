@@ -4,12 +4,12 @@ import time, io, base64, secrets, string, urllib.request
 import pyotp, qrcode
 import qrcode.image.svg
 from fastapi import FastAPI, Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from .config import APP_NAME, VERSION, COOKIE_NAME, ALLOWED_SERVICES, DATA_DIR
-from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client, reset_protocol_traffic
+from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client, reset_protocol_traffic, protocol_client_by_subscription
 from .security import verify_password, make_session, read_session, hash_password, make_preauth, read_preauth
 from . import system_ops, protocol_ops, panel_ops
 
@@ -395,6 +395,21 @@ def xray_quick_inbound(payload:XrayQuickInbound,request:Request):
     result["ip_limit"]=payload.ip_limit
     audit(actor,"xray_quick_inbound",result["tag"],f"protocol={payload.protocol}; port={payload.port}; quota={quota_bytes}; ip_limit={payload.ip_limit}",ip(request))
     return result
+
+@app.get("/sub/{subscription_id}",response_class=PlainTextResponse)
+def subscription_get(subscription_id:str,format:str="base64"):
+    row=protocol_client_by_subscription(subscription_id)
+    if not row:
+        raise HTTPException(404,"subscription not found")
+    link=(row.get("share_link") or "").strip()
+    if not link:
+        raise HTTPException(404,"subscription is empty")
+    if format=="raw":
+        return PlainTextResponse(link+"\n",media_type="text/plain; charset=utf-8")
+    if format not in {"base64","b64"}:
+        raise HTTPException(400,"supported formats: base64, raw")
+    encoded=base64.b64encode((link+"\n").encode()).decode()
+    return PlainTextResponse(encoded+"\n",media_type="text/plain; charset=utf-8")
 
 @app.get("/api/protocol-clients")
 def protocol_clients_get(request:Request):
