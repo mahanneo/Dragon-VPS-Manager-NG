@@ -86,6 +86,7 @@ def init_db():
           inbound_tag TEXT NOT NULL,
           credential TEXT NOT NULL,
           share_link TEXT NOT NULL,
+          subscription_id TEXT NOT NULL DEFAULT '',
           quota_bytes INTEGER NOT NULL DEFAULT 0,
           used_up_bytes INTEGER NOT NULL DEFAULT 0,
           used_down_bytes INTEGER NOT NULL DEFAULT 0,
@@ -123,11 +124,16 @@ def init_db():
         _add_column(con, "account_profiles", "created_at TEXT NOT NULL DEFAULT ''")
         _add_column(con, "account_profiles", "updated_at TEXT NOT NULL DEFAULT ''")
 
+        _add_column(con, "protocol_clients", "subscription_id TEXT NOT NULL DEFAULT ''")
         _add_column(con, "protocol_clients", "used_up_bytes INTEGER NOT NULL DEFAULT 0")
         _add_column(con, "protocol_clients", "used_down_bytes INTEGER NOT NULL DEFAULT 0")
         _add_column(con, "protocol_clients", "last_traffic_at TEXT")
         _add_column(con, "admins", "totp_secret TEXT")
         _add_column(con, "admins", "totp_enabled INTEGER NOT NULL DEFAULT 0")
+
+        rows_missing_sub=con.execute("SELECT id FROM protocol_clients WHERE subscription_id IS NULL OR subscription_id=''").fetchall()
+        for item in rows_missing_sub:
+            con.execute("UPDATE protocol_clients SET subscription_id=? WHERE id=?",(secrets.token_urlsafe(18),item["id"]))
 
         if not con.execute("SELECT 1 FROM admins LIMIT 1").fetchone():
             initial_password = os.getenv("DRAGON_INITIAL_ADMIN_PASSWORD") or os.getenv("MAKIA_INITIAL_ADMIN_PASSWORD")
@@ -305,11 +311,12 @@ def all_settings():
 
 def create_protocol_client(name,engine,protocol,inbound_tag,credential,share_link,quota_bytes=0,expire_at=0,ip_limit=1):
     ts=now()
+    sub_id=secrets.token_urlsafe(18)
     with connect() as con:
         cur=con.execute(
-            """INSERT INTO protocol_clients(name,engine,protocol,inbound_tag,credential,share_link,quota_bytes,expire_at,ip_limit,enabled,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,1,?,?)""",
-            (name,engine,protocol,inbound_tag,credential,share_link,max(0,int(quota_bytes or 0)),
+            """INSERT INTO protocol_clients(name,engine,protocol,inbound_tag,credential,share_link,subscription_id,quota_bytes,expire_at,ip_limit,enabled,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?)""",
+            (name,engine,protocol,inbound_tag,credential,share_link,sub_id,max(0,int(quota_bytes or 0)),
              max(0,int(expire_at or 0)),max(1,int(ip_limit or 1)),ts,ts)
         )
         return cur.lastrowid
@@ -363,3 +370,15 @@ def reset_protocol_traffic(client_id):
 def set_protocol_client_enabled(client_id,enabled):
     with connect() as con:
         con.execute("UPDATE protocol_clients SET enabled=?,updated_at=? WHERE id=?",(1 if enabled else 0,now(),int(client_id)))
+
+
+def ensure_protocol_subscription_ids():
+    with connect() as con:
+        rows=con.execute("SELECT id FROM protocol_clients WHERE subscription_id IS NULL OR subscription_id=''").fetchall()
+        for row in rows:
+            con.execute("UPDATE protocol_clients SET subscription_id=? WHERE id=?",(secrets.token_urlsafe(18),row["id"]))
+
+def protocol_client_by_subscription(sub_id):
+    with connect() as con:
+        row=con.execute("SELECT * FROM protocol_clients WHERE subscription_id=? AND enabled=1",(str(sub_id),)).fetchone()
+        return dict(row) if row else None
