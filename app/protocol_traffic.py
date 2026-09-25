@@ -1,5 +1,5 @@
 import time
-from .db import list_protocol_clients, add_protocol_traffic, set_protocol_client_enabled, audit
+from .db import list_protocol_clients, add_protocol_traffic, reset_protocol_traffic, advance_protocol_reset, set_protocol_client_enabled, audit
 from . import protocol_ops
 
 POLL_SECONDS=30
@@ -11,6 +11,19 @@ def collect_once():
             continue
         if client.get("engine")!="xray" or client.get("protocol") not in {"vless","vmess","trojan","hysteria2"}:
             continue
+
+        reset_days=max(0,int(client.get("reset_days") or 0))
+        next_reset_at=max(0,int(client.get("next_reset_at") or 0))
+        if reset_days and next_reset_at and now>=next_reset_at:
+            try:
+                protocol_ops.xray_client_traffic(client["name"],reset=True)
+                reset_protocol_traffic(client["id"])
+                advance_protocol_reset(client["id"],reset_days)
+                audit("system","protocol_client_period_reset",client["name"],f"reset_days={reset_days}")
+                continue
+            except Exception as exc:
+                audit("system","protocol_client_period_reset_failed",client["name"],str(exc)[:240])
+
         try:
             stats=protocol_ops.xray_client_traffic(client["name"],reset=True)
         except Exception as exc:
