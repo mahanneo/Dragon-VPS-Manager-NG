@@ -384,6 +384,62 @@ def _port_in_use(port):
             s.close()
     return False
 
+def _ensure_xray_stats(data):
+    if not isinstance(data,dict):
+        raise ProtocolError("invalid Xray configuration root")
+    data.setdefault("stats",{})
+    api=data.setdefault("api",{})
+    api["tag"]="api"
+    services=set(api.get("services") or [])
+    services.update(["StatsService","HandlerService"])
+    api["services"]=sorted(services)
+    policy=data.setdefault("policy",{})
+    levels=policy.setdefault("levels",{})
+    level0=levels.setdefault("0",{})
+    level0["statsUserUplink"]=True
+    level0["statsUserDownlink"]=True
+    level0["statsUserOnline"]=True
+    system=policy.setdefault("system",{})
+    system["statsInboundUplink"]=True
+    system["statsInboundDownlink"]=True
+    system["statsOutboundUplink"]=True
+    system["statsOutboundDownlink"]=True
+    inbounds=data.setdefault("inbounds",[])
+    if not any(isinstance(x,dict) and x.get("tag")=="api" for x in inbounds):
+        inbounds.append({
+            "listen":"127.0.0.1",
+            "port":10085,
+            "protocol":"dokodemo-door",
+            "settings":{"address":"127.0.0.1"},
+            "tag":"api"
+        })
+    routing=data.setdefault("routing",{})
+    rules=routing.setdefault("rules",[])
+    if not any(isinstance(x,dict) and x.get("inboundTag")==["api"] and x.get("outboundTag")=="api" for x in rules):
+        rules.insert(0,{"type":"field","inboundTag":["api"],"outboundTag":"api"})
+    return data
+
+def xray_client_traffic(email):
+    binary=_binary()
+    if not binary:
+        raise ProtocolError("Xray core is not installed")
+    pattern=f"user>>>{email}>>>traffic>>>"
+    p=subprocess.run([binary,"api","statsquery","--server=127.0.0.1:10085","-pattern",pattern],text=True,capture_output=True,timeout=8,check=False)
+    if p.returncode!=0:
+        return {"uplink":0,"downlink":0,"total":0,"available":False,"error":(p.stderr or p.stdout or "")[:240]}
+    text=p.stdout or ""
+    up=down=0
+    blocks=re.split(r"\n\s*\n",text)
+    for block in blocks:
+        name_m=re.search(r'name:\s*"([^"]+)"',block)
+        value_m=re.search(r"value:\s*(\d+)",block)
+        if not name_m or not value_m:
+            continue
+        name=name_m.group(1); value=int(value_m.group(1))
+        if name.endswith(">>>uplink"): up+=value
+        elif name.endswith(">>>downlink"): down+=value
+    return {"uplink":up,"downlink":down,"total":up+down,"available":True,"error":None}
+
 def _xray_default_config(path):
     return {
         "log":{"loglevel":"warning"},
@@ -413,8 +469,7 @@ def create_xray_inbound(protocol, port, name, endpoint):
             raise ProtocolError(f"cannot parse existing Xray config: {exc}") from exc
     else:
         data=_xray_default_config(path)
-    if not isinstance(data,dict):
-        raise ProtocolError("invalid Xray configuration root")
+    data=_ensure_xray_stats(data)
     inbounds=data.setdefault("inbounds",[])
     if not isinstance(inbounds,list):
         raise ProtocolError("invalid Xray inbounds collection")
