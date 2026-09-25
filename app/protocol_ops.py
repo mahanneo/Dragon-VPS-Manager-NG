@@ -419,12 +419,15 @@ def _ensure_xray_stats(data):
         rules.insert(0,{"type":"field","inboundTag":["api"],"outboundTag":"api"})
     return data
 
-def xray_client_traffic(email):
+def xray_client_traffic(email, reset=False):
     binary=_binary()
     if not binary:
         raise ProtocolError("Xray core is not installed")
     pattern=f"user>>>{email}>>>traffic>>>"
-    p=subprocess.run([binary,"api","statsquery","--server=127.0.0.1:10085","-pattern",pattern],text=True,capture_output=True,timeout=8,check=False)
+    args=[binary,"api","statsquery","--server=127.0.0.1:10085","-pattern",pattern]
+    if reset:
+        args += ["-reset=true"]
+    p=subprocess.run(args,text=True,capture_output=True,timeout=8,check=False)
     if p.returncode!=0:
         return {"uplink":0,"downlink":0,"total":0,"available":False,"error":(p.stderr or p.stdout or "")[:240]}
     text=p.stdout or ""
@@ -538,6 +541,54 @@ def create_xray_inbound(protocol, port, name, endpoint):
         userinfo=base64.urlsafe_b64encode(f"aes-128-gcm:{credential}".encode()).decode().rstrip("=")
         link=f"ss://{userinfo}@{host}:{port}#{label}"
     return {"protocol":protocol,"tag":tag,"port":port,"name":name,"credential":credential,"share_link":link,"backup":str(backup) if backup else None}
+def disable_xray_client(inbound_tag,email):
+    binary=_binary()
+    config_path=_config_path()
+    if not binary or not config_path:
+        raise ProtocolError("Xray core/config is not available")
+    path=Path(config_path)
+    try:
+        data=json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ProtocolError(f"cannot parse Xray config: {exc}") from exc
+    changed=False
+    for inbound in data.get("inbounds",[]) if isinstance(data,dict) else []:
+        if not isinstance(inbound,dict) or inbound.get("tag")!=inbound_tag:
+            continue
+        settings=inbound.get("settings") or {}
+        clients=settings.get("clients")
+        if isinstance(clients,list):
+            before=len(clients)
+            settings["clients"]=[x for x in clients if not (isinstance(x,dict) and x.get("email")==email)]
+            changed=len(settings["clients"])!=before
+    if not changed:
+        return {"disabled":False,"reason":"client not found in config"}
+    backup_dir=Path("/var/backups/makia-vps-manager")
+    backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
+    backup=backup_dir/f"xray-policy-{int(time.time())}.json"
+    shutil.copy2(path,backup)
+    tmp=path.with_suffix(path.suffix+".makia-policy-tmp")
+    tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    os.chmod(tmp,0o600)
+    try:
+        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        os.replace(tmp,path)
+        _run(["systemctl","restart","xray"],timeout=30)
+        if not _active("xray"):
+            raise ProtocolError("Xray failed after client disable")
+    except Exception:
+        try:
+            if tmp.exists(): tmp.unlink()
+            shutil.copy2(backup,path)
+            _run(["systemctl","restart","xray"],timeout=30)
+        except Exception:
+            pass
+        raise
+    return {"disabled":True,"backup":str(backup)}
+
+def reset_xray_client_traffic(email):
+    return xray_client_traffic(email,reset=True)
+
 
 def status():
     return xray_status()
