@@ -72,12 +72,17 @@ def xray_status():
                     continue
                 settings=item.get("settings") or {}
                 clients=settings.get("clients") if isinstance(settings,dict) else None
+                users=settings.get("users") if isinstance(settings,dict) else None
+                client_count=len(clients) if isinstance(clients,list) else (len(users) if isinstance(users,list) else 0)
+                protocol=item.get("protocol") or "unknown"
+                if protocol=="hysteria" and isinstance(settings,dict) and int(settings.get("version") or 0)==2:
+                    protocol="hysteria2"
                 inbounds.append({
                     "tag":item.get("tag") or "",
-                    "protocol":item.get("protocol") or "unknown",
+                    "protocol":protocol,
                     "listen":item.get("listen") or "0.0.0.0",
                     "port":item.get("port"),
-                    "clients":len(clients) if isinstance(clients,list) else 0,
+                    "clients":client_count,
                 })
         except Exception as exc:
             error=str(exc)[:300]
