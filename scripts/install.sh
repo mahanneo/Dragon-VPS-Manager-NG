@@ -42,7 +42,7 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y python3 python3-venv python3-pip nginx curl ca-certificates tar
+apt-get install -y python3 python3-venv python3-pip nginx curl ca-certificates tar fail2ban
 
 install -d -m 0750 "$APP"
 if [[ ! -d "$DATA" && -d "$OLD_APP/data" ]]; then
@@ -82,6 +82,20 @@ systemctl daemon-reload
 systemctl enable --now makia-vps-manager
 systemctl enable --now makia-policy-enforcer
 systemctl enable --now makia-metrics-sampler
+
+# Baseline SSH brute-force protection. We do not enable/modify UFW automatically
+# because doing so without knowing the operator's SSH path can lock them out.
+install -d -m 0755 /etc/fail2ban/jail.d
+cat >/etc/fail2ban/jail.d/makia-sshd.local <<'EOF'
+[sshd]
+enabled = true
+backend = systemd
+maxretry = 5
+findtime = 10m
+bantime = 1h
+EOF
+systemctl enable --now fail2ban
+
 nginx -t
 systemctl enable --now nginx
 systemctl reload nginx
