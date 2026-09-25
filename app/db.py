@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import hashlib, secrets
 from datetime import datetime, timezone
 from .config import DB_PATH
 from .security import hash_password
@@ -52,6 +53,31 @@ def init_db():
           tx INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_metrics_history_ts ON metrics_history(ts);
+        CREATE TABLE IF NOT EXISTS api_tokens (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          token_hash TEXT UNIQUE NOT NULL,
+          token_last4 TEXT NOT NULL,
+          scopes TEXT NOT NULL,
+          active INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          last_used_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS nodes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          token_hash TEXT UNIQUE NOT NULL,
+          token_last4 TEXT NOT NULL,
+          active INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          last_seen_at TEXT,
+          hostname TEXT,
+          version TEXT,
+          cpu REAL,
+          memory REAL,
+          disk REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_nodes_last_seen ON nodes(last_seen_at);
         CREATE TABLE IF NOT EXISTS account_profiles (
           username TEXT PRIMARY KEY,
           plan TEXT NOT NULL DEFAULT '',
@@ -159,3 +185,73 @@ def set_admin_totp_enabled(username,enabled):
 def clear_admin_totp(username):
     with connect() as con:
         con.execute("UPDATE admins SET totp_secret=NULL,totp_enabled=0 WHERE username=?",(username,))
+
+
+def _token_hash(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+def create_api_token(name,scopes):
+    token="mk_"+secrets.token_urlsafe(32)
+    ts=now()
+    scopes_text=",".join(sorted(set(scopes)))
+    with connect() as con:
+        cur=con.execute(
+            "INSERT INTO api_tokens(name,token_hash,token_last4,scopes,active,created_at) VALUES(?,?,?,?,1,?)",
+            (name,_token_hash(token),token[-4:],scopes_text,ts)
+        )
+        token_id=cur.lastrowid
+    return {"id":token_id,"token":token,"name":name,"scopes":scopes_text.split(",") if scopes_text else []}
+
+def list_api_tokens():
+    with connect() as con:
+        rows=con.execute("SELECT id,name,token_last4,scopes,active,created_at,last_used_at FROM api_tokens ORDER BY id DESC").fetchall()
+        return [dict(r) for r in rows]
+
+def revoke_api_token(token_id):
+    with connect() as con:
+        con.execute("UPDATE api_tokens SET active=0 WHERE id=?",(int(token_id),))
+
+def verify_api_token(token,required_scope=None):
+    h=_token_hash(token)
+    with connect() as con:
+        row=con.execute("SELECT * FROM api_tokens WHERE token_hash=? AND active=1",(h,)).fetchone()
+        if not row:
+            return None
+        scopes={s for s in (row["scopes"] or "").split(",") if s}
+        if required_scope and required_scope not in scopes and "*" not in scopes:
+            return None
+        con.execute("UPDATE api_tokens SET last_used_at=? WHERE id=?",(now(),row["id"]))
+        return {"id":row["id"],"name":row["name"],"scopes":sorted(scopes)}
+
+def create_node(name):
+    token="mn_"+secrets.token_urlsafe(32)
+    ts=now()
+    with connect() as con:
+        cur=con.execute(
+            "INSERT INTO nodes(name,token_hash,token_last4,active,created_at) VALUES(?,?,?,1,?)",
+            (name,_token_hash(token),token[-4:],ts)
+        )
+        node_id=cur.lastrowid
+    return {"id":node_id,"name":name,"token":token}
+
+def list_nodes():
+    with connect() as con:
+        rows=con.execute("SELECT id,name,token_last4,active,created_at,last_seen_at,hostname,version,cpu,memory,disk FROM nodes ORDER BY id DESC").fetchall()
+        return [dict(r) for r in rows]
+
+def revoke_node(node_id):
+    with connect() as con:
+        con.execute("UPDATE nodes SET active=0 WHERE id=?",(int(node_id),))
+
+def node_by_token(token):
+    h=_token_hash(token)
+    with connect() as con:
+        row=con.execute("SELECT id,name,active FROM nodes WHERE token_hash=? AND active=1",(h,)).fetchone()
+        return dict(row) if row else None
+
+def update_node_heartbeat(node_id,hostname,version,cpu,memory,disk):
+    with connect() as con:
+        con.execute(
+            "UPDATE nodes SET last_seen_at=?,hostname=?,version=?,cpu=?,memory=?,disk=? WHERE id=?",
+            (now(),hostname,version,float(cpu),float(memory),float(disk),int(node_id))
+        )
