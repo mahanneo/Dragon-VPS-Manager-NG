@@ -84,7 +84,9 @@ def init_db():
           note TEXT NOT NULL DEFAULT '',
           expire_date TEXT,
           connection_limit INTEGER NOT NULL DEFAULT 1,
+          device_limit INTEGER NOT NULL DEFAULT 1,
           quota_mb INTEGER NOT NULL DEFAULT 0,
+          renewal_days INTEGER NOT NULL DEFAULT 0,
           enabled INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
@@ -95,7 +97,9 @@ def init_db():
         _add_column(con, "account_profiles", "note TEXT NOT NULL DEFAULT ''")
         _add_column(con, "account_profiles", "expire_date TEXT")
         _add_column(con, "account_profiles", "connection_limit INTEGER NOT NULL DEFAULT 1")
+        _add_column(con, "account_profiles", "device_limit INTEGER NOT NULL DEFAULT 1")
         _add_column(con, "account_profiles", "quota_mb INTEGER NOT NULL DEFAULT 0")
+        _add_column(con, "account_profiles", "renewal_days INTEGER NOT NULL DEFAULT 0")
         _add_column(con, "account_profiles", "enabled INTEGER NOT NULL DEFAULT 1")
         _add_column(con, "account_profiles", "created_at TEXT NOT NULL DEFAULT ''")
         _add_column(con, "account_profiles", "updated_at TEXT NOT NULL DEFAULT ''")
@@ -125,18 +129,20 @@ def audit(actor, action, target=None, detail=None, ip=None):
             (actor, action, target, detail, ip, now())
         )
 
-def upsert_profile(username, plan="", note="", expire_date=None, connection_limit=1, quota_mb=0, enabled=1):
+def upsert_profile(username, plan="", note="", expire_date=None, connection_limit=1, quota_mb=0, enabled=1, device_limit=1, renewal_days=0):
     ts=now()
     with connect() as con:
         con.execute(
-            """INSERT INTO account_profiles(username,plan,note,expire_date,connection_limit,quota_mb,enabled,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?)
+            """INSERT INTO account_profiles(username,plan,note,expire_date,connection_limit,device_limit,quota_mb,renewal_days,enabled,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(username) DO UPDATE SET
                  plan=excluded.plan,note=excluded.note,expire_date=excluded.expire_date,
-                 connection_limit=excluded.connection_limit,quota_mb=excluded.quota_mb,
+                 connection_limit=excluded.connection_limit,device_limit=excluded.device_limit,
+                 quota_mb=excluded.quota_mb,renewal_days=excluded.renewal_days,
                  enabled=excluded.enabled,updated_at=excluded.updated_at""",
             (username, plan or "", note or "", expire_date, max(1,int(connection_limit or 1)),
-             max(0,int(quota_mb or 0)), 1 if enabled else 0, ts, ts)
+             max(1,int(device_limit or 1)), max(0,int(quota_mb or 0)), max(0,int(renewal_days or 0)),
+             1 if enabled else 0, ts, ts)
         )
 
 def get_profile(username):
