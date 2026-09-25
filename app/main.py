@@ -210,6 +210,33 @@ def account_action(username:str,action:str,request:Request):
     audit(actor,f"account_{action}",username,ip=ip(request))
     return result
 
+class BulkAccountAction(BaseModel):
+    usernames:list[str]=Field(min_length=1,max_length=200)
+    action:str
+
+@app.post("/api/accounts/bulk")
+def bulk_account_action(payload:BulkAccountAction,request:Request):
+    actor=require_mutation(request)
+    if payload.action not in {"lock","unlock","disconnect"}:
+        raise HTTPException(400,"bulk action not allowed")
+    done=[]; failed=[]
+    for username in payload.usernames:
+        try:
+            system_ops.validate_username(username)
+            if payload.action=="lock":
+                system_ops.lock_user(username,True)
+            elif payload.action=="unlock":
+                system_ops.lock_user(username,False)
+            else:
+                for s in [x for x in system_ops.online_sessions() if x["username"]==username and x["tty"]]:
+                    try: system_ops.disconnect_session(s["tty"])
+                    except system_ops.OperationError: pass
+            done.append(username)
+        except Exception as exc:
+            failed.append({"username":username,"error":str(exc)[:160]})
+    audit(actor,f"accounts_bulk_{payload.action}",",".join(done[:30]),f"done={len(done)}; failed={len(failed)}",ip(request))
+    return {"done":done,"failed":failed}
+
 @app.get("/api/sessions")
 def sessions(request:Request):
     require_user(request)
