@@ -14,6 +14,7 @@ if [[ ! -d "$APP" && -d "$OLD_APP" ]]; then
   exit 2
 fi
 [[ -d "$APP" ]] || { echo "Makia VPS Manager is not installed."; exit 1; }
+install -d -m 0700 /var/backups/makia-vps-manager
 
 BACKUP="$(/usr/local/sbin/makia-backup)"
 echo "Backup created: $BACKUP"
