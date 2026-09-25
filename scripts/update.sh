@@ -30,6 +30,21 @@ install -m 0644 "$SRC/requirements.txt" "$APP/requirements.txt"
 install -m 0644 "$SRC/VERSION" "$APP/VERSION"
 "$APP/.venv/bin/pip" install -r "$APP/requirements.txt"
 
+# Keep the weak-PIN mitigation baseline consistent on upgraded installs.
+if ! command -v fail2ban-client >/dev/null 2>&1; then
+  apt-get update
+  apt-get install -y fail2ban
+fi
+install -d -m 0755 /etc/fail2ban/jail.d
+cat >/etc/fail2ban/jail.d/makia-sshd.local <<'EOF'
+[sshd]
+enabled = true
+backend = systemd
+maxretry = 5
+findtime = 10m
+bantime = 1h
+EOF
+
 install -m 0644 "$SRC/systemd/makia-vps-manager.service" /etc/systemd/system/makia-vps-manager.service
 install -m 0644 "$SRC/systemd/makia-policy-enforcer.service" /etc/systemd/system/makia-policy-enforcer.service
 install -m 0644 "$SRC/systemd/makia-metrics-sampler.service" /etc/systemd/system/makia-metrics-sampler.service
@@ -46,6 +61,8 @@ systemctl enable --now makia-policy-enforcer
 systemctl restart makia-policy-enforcer
 systemctl enable --now makia-metrics-sampler
 systemctl restart makia-metrics-sampler
+systemctl enable --now fail2ban
+systemctl restart fail2ban
 systemctl reload nginx
 
 for _ in {1..15}; do
