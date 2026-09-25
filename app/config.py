@@ -16,4 +16,5 @@ ALLOWED_SERVICES = {
     "fail2ban": "Fail2ban",
     "xray": "Xray",
     "makia-policy-enforcer": "Policy Enforcer",
+    "makia-metrics-sampler": "Metrics Sampler",
 }
