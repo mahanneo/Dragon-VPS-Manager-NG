@@ -9,7 +9,7 @@ def collect_once():
     for client in list_protocol_clients():
         if not int(client.get("enabled",1)):
             continue
-        if client.get("engine")!="xray" or client.get("protocol") not in {"vless","vmess","trojan"}:
+        if client.get("engine")!="xray" or client.get("protocol") not in {"vless","vmess","trojan","hysteria2"}:
             continue
         try:
             stats=protocol_ops.xray_client_traffic(client["name"],reset=True)
