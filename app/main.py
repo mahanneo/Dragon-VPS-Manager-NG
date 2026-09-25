@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from .config import APP_NAME, VERSION, COOKIE_NAME, ALLOWED_SERVICES, DATA_DIR
-from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client
+from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client, reset_protocol_traffic
 from .security import verify_password, make_session, read_session, hash_password, make_preauth, read_preauth
 from . import system_ops, protocol_ops, panel_ops
 
@@ -398,12 +398,21 @@ def protocol_clients_get(request:Request):
         if item.get("engine")=="xray" and item.get("protocol") in {"vless","vmess","trojan"} and item.get("enabled"):
             try: usage=protocol_ops.xray_client_traffic(item["name"])
             except Exception as exc: usage={"uplink":0,"downlink":0,"total":0,"available":False,"error":str(exc)[:160]}
+        stored_up=int(item.get("used_up_bytes") or 0)
+        stored_down=int(item.get("used_down_bytes") or 0)
+        cumulative={
+            "uplink":stored_up+int(usage.get("uplink") or 0),
+            "downlink":stored_down+int(usage.get("downlink") or 0),
+            "total":stored_up+stored_down+int(usage.get("total") or 0),
+            "available":bool(usage.get("available") or stored_up or stored_down),
+            "error":usage.get("error"),
+        }
         quota=int(item.get("quota_bytes") or 0)
         expire_at=int(item.get("expire_at") or 0)
         rows.append({
             **item,
-            "usage":usage,
-            "quota_percent":round((usage["total"]/quota)*100,1) if quota else 0,
+            "usage":cumulative,
+            "quota_percent":round((cumulative["total"]/quota)*100,1) if quota else 0,
             "expired":bool(expire_at and expire_at<now_ts),
             "days_left":max(0,(expire_at-now_ts)//86400) if expire_at and expire_at>=now_ts else (0 if expire_at else None),
         })
@@ -435,10 +444,11 @@ def protocol_client_reset_traffic(client_id:int,request:Request):
         raise HTTPException(400,"traffic reset is only available for Xray clients in this release")
     try:
         result=protocol_ops.reset_xray_client_traffic(row["name"])
+        reset_protocol_traffic(client_id)
     except protocol_ops.ProtocolError as e:
         raise HTTPException(400,str(e))
     audit(actor,"protocol_client_reset_traffic",str(client_id),ip=ip(request))
-    return result
+    return {"ok":True,"xray":result}
 
 class ProtocolInstall(BaseModel):
     component:str
