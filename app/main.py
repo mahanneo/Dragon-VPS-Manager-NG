@@ -387,6 +387,8 @@ class XrayQuickInbound(BaseModel):
 @app.post("/api/protocols/xray/quick-inbound")
 def xray_quick_inbound(payload:XrayQuickInbound,request:Request):
     actor=require_mutation(request)
+    if any(row.get("engine")=="xray" and row.get("name")==payload.name for row in list_protocol_clients()):
+        raise HTTPException(400,"Xray client name must be unique because traffic accounting uses the client email/name identity")
     try:
         result=protocol_ops.create_xray_inbound(
             payload.protocol,payload.port,payload.name,payload.endpoint,
@@ -452,8 +454,10 @@ def protocol_clients_get(request:Request):
         quota=int(item.get("quota_bytes") or 0)
         expire_at=int(item.get("expire_at") or 0)
         ip_limit=max(1,int(item.get("ip_limit") or 1))
+        accounting_supported=item.get("protocol") in {"vless","vmess","trojan","hysteria2"}
         rows.append({
             **item,
+            "accounting_supported":accounting_supported,
             "usage":cumulative,
             "online":online,
             "online_ip_count":len(online.get("ips") or []),
