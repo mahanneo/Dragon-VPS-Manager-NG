@@ -1,6 +1,6 @@
 from pathlib import Path
 from datetime import date, datetime
-import time, io, base64
+import time, io, base64, secrets, string, urllib.request
 import pyotp, qrcode
 import qrcode.image.svg
 from fastapi import FastAPI, Request, Form, HTTPException
@@ -54,6 +54,29 @@ def days_left(expire_date):
     if not expire_date: return None
     try: return (date.fromisoformat(str(expire_date))-date.today()).days
     except Exception: return None
+
+
+def generate_user_secret(mode:str="strong"):
+    mode=(mode or "strong").lower()
+    if mode=="pin4":
+        return "".join(secrets.choice(string.digits) for _ in range(4))
+    if mode=="pin6":
+        return "".join(secrets.choice(string.digits) for _ in range(6))
+    if mode=="easy8":
+        alphabet="ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        return "".join(secrets.choice(alphabet) for _ in range(8))
+    if mode=="strong":
+        alphabet="ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%"
+        return "".join(secrets.choice(alphabet) for _ in range(14))
+    raise HTTPException(400,"unknown password mode")
+
+def suggested_username():
+    used={u["username"] for u in system_ops.ssh_users()}
+    for i in range(1,10000):
+        name=f"user{i:03d}"
+        if name not in used:
+            return name
+    return "user"+secrets.token_hex(2)
 
 def account_rows():
     profiles=all_profiles()
@@ -162,22 +185,45 @@ def accounts(request:Request):
 
 class AccountCreate(BaseModel):
     username:str
-    password:str=Field(min_length=4,max_length=128)
+    password:str|None=Field(default=None,min_length=4,max_length=128)
+    password_mode:str="manual"
     expire_date:str|None=None
     plan:str=""
     note:str=""
     connection_limit:int=Field(default=1,ge=1,le=50)
     quota_mb:int=Field(default=0,ge=0,le=10_000_000)
 
+@app.get("/api/accounts/new-defaults")
+def account_new_defaults(request:Request):
+    require_user(request)
+    return {
+        "username":suggested_username(),
+        "password_modes":["pin4","pin6","easy8","strong"],
+        "recommended_mode":"pin6",
+        "expiry_presets":[1,7,30,60,90],
+    }
+
+@app.get("/api/accounts/generate-secret")
+def account_generate_secret(request:Request,mode:str="strong"):
+    require_user(request)
+    return {"mode":mode,"secret":generate_user_secret(mode)}
+
 @app.post("/api/accounts")
 def create_account(payload:AccountCreate,request:Request):
     actor=require_mutation(request)
+    generated=False
+    password=payload.password
+    if payload.password_mode!="manual":
+        password=generate_user_secret(payload.password_mode)
+        generated=True
+    if not password:
+        raise HTTPException(400,"password is required")
     try:
-        system_ops.create_ssh_user(payload.username,payload.password,payload.expire_date)
+        system_ops.create_ssh_user(payload.username,password,payload.expire_date)
         upsert_profile(payload.username,payload.plan,payload.note,payload.expire_date,payload.connection_limit,payload.quota_mb,1)
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
-    audit(actor,"account_create",payload.username,f"plan={payload.plan}; limit={payload.connection_limit}; quota_mb={payload.quota_mb}",ip(request))
-    return {"ok":True,"username":payload.username}
+    audit(actor,"account_create",payload.username,f"plan={payload.plan}; limit={payload.connection_limit}; quota_mb={payload.quota_mb}; password_mode={payload.password_mode}",ip(request))
+    return {"ok":True,"username":payload.username,"password":password if generated else None,"generated":generated}
 
 class AccountUpdate(BaseModel):
     password:str|None=Field(default=None,min_length=4,max_length=128)
@@ -228,12 +274,16 @@ def account_action(username:str,action:str,request:Request):
 class BulkAccountAction(BaseModel):
     usernames:list[str]=Field(min_length=1,max_length=200)
     action:str
+    days:int=Field(default=0,ge=0,le=3650)
 
 @app.post("/api/accounts/bulk")
 def bulk_account_action(payload:BulkAccountAction,request:Request):
     actor=require_mutation(request)
-    if payload.action not in {"lock","unlock","disconnect"}:
+    if payload.action not in {"lock","unlock","disconnect","extend"}:
         raise HTTPException(400,"bulk action not allowed")
+    if payload.action=="extend" and payload.days<1:
+        raise HTTPException(400,"days must be at least 1")
+    profiles=all_profiles()
     done=[]; failed=[]
     for username in payload.usernames:
         try:
@@ -242,6 +292,18 @@ def bulk_account_action(payload:BulkAccountAction,request:Request):
                 system_ops.lock_user(username,True)
             elif payload.action=="unlock":
                 system_ops.lock_user(username,False)
+            elif payload.action=="extend":
+                p=profiles.get(username,{})
+                base=date.today()
+                if p.get("expire_date"):
+                    try:
+                        current=date.fromisoformat(str(p.get("expire_date")))
+                        if current>base: base=current
+                    except Exception:
+                        pass
+                new_expire=(base+__import__("datetime").timedelta(days=payload.days)).isoformat()
+                system_ops.update_ssh_user(username,expire=new_expire)
+                upsert_profile(username,p.get("plan",""),p.get("note",""),new_expire,p.get("connection_limit",1),p.get("quota_mb",0),p.get("enabled",1))
             else:
                 for s in [x for x in system_ops.online_sessions() if x["username"]==username and x["tty"]]:
                     try: system_ops.disconnect_session(s["tty"])
@@ -249,7 +311,7 @@ def bulk_account_action(payload:BulkAccountAction,request:Request):
             done.append(username)
         except Exception as exc:
             failed.append({"username":username,"error":str(exc)[:160]})
-    audit(actor,f"accounts_bulk_{payload.action}",",".join(done[:30]),f"done={len(done)}; failed={len(failed)}",ip(request))
+    audit(actor,f"accounts_bulk_{payload.action}",",".join(done[:30]),f"done={len(done)}; failed={len(failed)}; days={payload.days}",ip(request))
     return {"done":done,"failed":failed}
 
 @app.get("/api/sessions")
@@ -443,6 +505,22 @@ def twofa_disable(payload:TwoFADisable,request:Request):
     clear_admin_totp(actor)
     audit(actor,"admin_2fa_disable",actor,ip=ip(request))
     return {"ok":True}
+
+@app.get("/api/update/status")
+def update_status(request:Request):
+    require_user(request)
+    latest=None
+    error=None
+    try:
+        req=urllib.request.Request(
+            "https://raw.githubusercontent.com/mahanneo/Makia-VPS-Manager/main/VERSION",
+            headers={"User-Agent":"Makia-VPS-Manager"}
+        )
+        with urllib.request.urlopen(req,timeout=4) as resp:
+            latest=resp.read(64).decode("utf-8","replace").strip()
+    except Exception as exc:
+        error=str(exc)[:160]
+    return {"current":VERSION,"latest":latest,"update_available":bool(latest and latest!=VERSION),"error":error}
 
 @app.get("/healthz")
 def healthz(): return {"ok":True,"version":VERSION,"product":APP_NAME}
