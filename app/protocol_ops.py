@@ -161,11 +161,18 @@ def catalog():
             {"id":"vmess","engine":"xray","available":x["installed"]},
             {"id":"trojan","engine":"xray","available":x["installed"]},
             {"id":"shadowsocks","engine":"xray","available":x["installed"]},
-            {"id":"hysteria2","engine":"xray","available":x["installed"]},
-            {"id":"wireguard","engine":"wireguard","available":wg["installed"]},
-            {"id":"openvpn","engine":"openvpn","available":ovpn["installed"]},
-            {"id":"ssh","engine":"openssh","available":ssh["installed"]},
-            {"id":"stunnel","engine":"stunnel","available":st["installed"]},
+            {"id":"hysteria2","engine":"xray","available":x["installed"],"mode":"guided"},
+            {"id":"http","engine":"xray","available":x["installed"],"mode":"advanced"},
+            {"id":"socks","engine":"xray","available":x["installed"],"mode":"advanced"},
+            {"id":"tunnel","engine":"xray","available":x["installed"],"mode":"advanced"},
+            {"id":"tun","engine":"xray","available":x["installed"],"mode":"advanced"},
+            {"id":"wireguard","engine":"wireguard","available":wg["installed"],"mode":"guided"},
+            {"id":"openvpn","engine":"openvpn","available":ovpn["installed"],"mode":"guided"},
+            {"id":"ssh","engine":"openssh","available":ssh["installed"],"mode":"guided"},
+            {"id":"stunnel","engine":"stunnel","available":st["installed"],"mode":"service"},
+            {"id":"tuic","engine":"external","available":False,"mode":"unavailable"},
+            {"id":"amneziawg","engine":"external","available":False,"mode":"unavailable"},
+            {"id":"mtproto","engine":"external","available":False,"mode":"unavailable"},
         ]
     }
 
