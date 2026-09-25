@@ -138,3 +138,26 @@ def security_status():
     fail2ban=cmd_state("systemctl",["systemctl","is-active","fail2ban"])
     ssh=cmd_state("systemctl",["systemctl","is-active","ssh"])
     return {"ufw":ufw,"fail2ban":fail2ban,"ssh":ssh}
+
+
+def backup_list():
+    root="/var/backups/makia-vps-manager"
+    if not os.path.isdir(root): return []
+    items=[]
+    for name in sorted(os.listdir(root),reverse=True):
+        path=os.path.join(root,name)
+        if os.path.isfile(path) and name.endswith(".tar.gz"):
+            st=os.stat(path)
+            items.append({"name":name,"size":st.st_size,"created_at":int(st.st_mtime)})
+    return items[:50]
+
+def create_backup(data_dir: str):
+    root="/var/backups/makia-vps-manager"
+    os.makedirs(root,mode=0o700,exist_ok=True)
+    stamp=datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    out=os.path.join(root,f"makia-data-{stamp}.tar.gz")
+    if not os.path.isdir(data_dir):
+        raise OperationError("data directory not found")
+    _run(["tar","-C",os.path.dirname(data_dir),"-czf",out,os.path.basename(data_dir)],timeout=60)
+    os.chmod(out,0o600)
+    return {"name":os.path.basename(out),"path":out,"size":os.path.getsize(out)}
