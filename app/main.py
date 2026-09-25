@@ -1,14 +1,16 @@
 from pathlib import Path
 from datetime import date, datetime
-import time
+import time, io, base64
+import pyotp, qrcode
+import qrcode.image.svg
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from .config import APP_NAME, VERSION, COOKIE_NAME, ALLOWED_SERVICES, DATA_DIR
-from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since
-from .security import verify_password, make_session, read_session, hash_password
+from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp
+from .security import verify_password, make_session, read_session, hash_password, make_preauth, read_preauth
 from . import system_ops, protocol_ops
 
 BASE=Path(__file__).resolve().parent
@@ -77,7 +79,27 @@ def login(request:Request,username:str=Form(...),password:str=Form(...)):
     if not row or not verify_password(password,row["password_hash"]):
         audit(username or "unknown","login_failed",ip=ip(request))
         return templates.TemplateResponse("login.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"error":"نام کاربری یا رمز عبور صحیح نیست."},status_code=401)
+    twofa=get_admin_2fa(username)
+    if twofa and twofa.get("totp_enabled"):
+        audit(username,"login_password_success_2fa_required",ip=ip(request))
+        return templates.TemplateResponse("login_2fa.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"token":make_preauth(username),"error":None})
     audit(username,"login_success",ip=ip(request))
+    r=RedirectResponse("/",302)
+    secure_cookie=request.headers.get("x-forwarded-proto","").lower()=="https"
+    r.set_cookie(COOKIE_NAME,make_session(username),httponly=True,secure=secure_cookie,samesite="strict",max_age=43200)
+    return r
+
+@app.post("/login/2fa")
+def login_2fa(request:Request,token:str=Form(...),code:str=Form(...)):
+    username=read_preauth(token)
+    if not username:
+        return RedirectResponse("/login",302)
+    state=get_admin_2fa(username)
+    valid=bool(state and state.get("totp_enabled") and state.get("totp_secret") and pyotp.TOTP(state["totp_secret"]).verify(code.strip(),valid_window=1))
+    if not valid:
+        audit(username,"login_2fa_failed",ip=ip(request))
+        return templates.TemplateResponse("login_2fa.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"token":token,"error":"کد تایید صحیح نیست."},status_code=401)
+    audit(username,"login_success_2fa",ip=ip(request))
     r=RedirectResponse("/",302)
     secure_cookie=request.headers.get("x-forwarded-proto","").lower()=="https"
     r.set_cookie(COOKIE_NAME,make_session(username),httponly=True,secure=secure_cookie,samesite="strict",max_age=43200)
@@ -254,6 +276,55 @@ def change_password(payload:PasswordChange,request:Request):
         if not row or not verify_password(payload.current_password,row["password_hash"]): raise HTTPException(400,"current password is incorrect")
         con.execute("UPDATE admins SET password_hash=? WHERE username=?",(hash_password(payload.new_password),actor))
     audit(actor,"admin_password_change",actor,ip=ip(request))
+    return {"ok":True}
+
+@app.get("/api/admin/2fa/status")
+def twofa_status(request:Request):
+    actor=require_user(request)
+    state=get_admin_2fa(actor) or {}
+    return {"enabled":bool(state.get("totp_enabled")),"configured":bool(state.get("totp_secret"))}
+
+@app.post("/api/admin/2fa/setup")
+def twofa_setup(request:Request):
+    actor=require_mutation(request)
+    secret=pyotp.random_base32()
+    set_admin_totp_secret(actor,secret)
+    uri=pyotp.TOTP(secret).provisioning_uri(name=actor,issuer_name="Makia VPS Manager")
+    qr=qrcode.make(uri,image_factory=qrcode.image.svg.SvgPathImage)
+    buf=io.BytesIO(); qr.save(buf)
+    qr_data="data:image/svg+xml;base64,"+base64.b64encode(buf.getvalue()).decode()
+    audit(actor,"admin_2fa_setup",actor,ip=ip(request))
+    return {"secret":secret,"uri":uri,"qr":qr_data}
+
+class TwoFACode(BaseModel):
+    code:str
+
+@app.post("/api/admin/2fa/enable")
+def twofa_enable(payload:TwoFACode,request:Request):
+    actor=require_mutation(request)
+    state=get_admin_2fa(actor)
+    if not state or not state.get("totp_secret") or not pyotp.TOTP(state["totp_secret"]).verify(payload.code.strip(),valid_window=1):
+        raise HTTPException(400,"invalid authenticator code")
+    set_admin_totp_enabled(actor,True)
+    audit(actor,"admin_2fa_enable",actor,ip=ip(request))
+    return {"ok":True}
+
+class TwoFADisable(BaseModel):
+    password:str
+    code:str
+
+@app.post("/api/admin/2fa/disable")
+def twofa_disable(payload:TwoFADisable,request:Request):
+    actor=require_mutation(request)
+    with connect() as con:
+        row=con.execute("SELECT password_hash FROM admins WHERE username=?",(actor,)).fetchone()
+    state=get_admin_2fa(actor)
+    if not row or not verify_password(payload.password,row["password_hash"]):
+        raise HTTPException(400,"current password is incorrect")
+    if state and state.get("totp_enabled") and (not state.get("totp_secret") or not pyotp.TOTP(state["totp_secret"]).verify(payload.code.strip(),valid_window=1)):
+        raise HTTPException(400,"invalid authenticator code")
+    clear_admin_totp(actor)
+    audit(actor,"admin_2fa_disable",actor,ip=ip(request))
     return {"ok":True}
 
 @app.get("/healthz")
