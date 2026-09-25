@@ -74,6 +74,9 @@ def init_db():
         _add_column(con, "account_profiles", "created_at TEXT NOT NULL DEFAULT ''")
         _add_column(con, "account_profiles", "updated_at TEXT NOT NULL DEFAULT ''")
 
+        _add_column(con, "admins", "totp_secret TEXT")
+        _add_column(con, "admins", "totp_enabled INTEGER NOT NULL DEFAULT 0")
+
         if not con.execute("SELECT 1 FROM admins LIMIT 1").fetchone():
             initial_password = os.getenv("DRAGON_INITIAL_ADMIN_PASSWORD") or os.getenv("MAKIA_INITIAL_ADMIN_PASSWORD")
             if not initial_password or len(initial_password) < 16:
@@ -138,3 +141,21 @@ def metrics_since(since_ts,limit=2000):
             (int(since_ts),max(1,min(int(limit),10000)))
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_admin_2fa(username):
+    with connect() as con:
+        row=con.execute("SELECT username,totp_secret,totp_enabled FROM admins WHERE username=?",(username,)).fetchone()
+        return dict(row) if row else None
+
+def set_admin_totp_secret(username,secret):
+    with connect() as con:
+        con.execute("UPDATE admins SET totp_secret=?,totp_enabled=0 WHERE username=?",(secret,username))
+
+def set_admin_totp_enabled(username,enabled):
+    with connect() as con:
+        con.execute("UPDATE admins SET totp_enabled=? WHERE username=?",(1 if enabled else 0,username))
+
+def clear_admin_totp(username):
+    with connect() as con:
+        con.execute("UPDATE admins SET totp_secret=NULL,totp_enabled=0 WHERE username=?",(username,))
