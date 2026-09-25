@@ -24,7 +24,7 @@ A modern, web-based VPS management foundation inspired by the operational goals 
 Use a **fresh test VPS** first. Run as root:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/mahanneo/Dragon-VPS-Manager-NG/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/mahanneo/Makia-VPS-Manager/main/install.sh)
 ```
 
 At the end of installation the terminal prints:
