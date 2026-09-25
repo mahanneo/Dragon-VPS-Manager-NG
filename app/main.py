@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from .config import APP_NAME, VERSION, COOKIE_NAME, ALLOWED_SERVICES, DATA_DIR
-from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp
+from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat
 from .security import verify_password, make_session, read_session, hash_password, make_preauth, read_preauth
 from . import system_ops, protocol_ops
 
@@ -34,6 +34,21 @@ def require_mutation(request:Request):
     return user
 
 def ip(request:Request): return request.client.host if request.client else None
+
+def bearer(request:Request):
+    auth=request.headers.get("authorization","")
+    if auth.lower().startswith("bearer "):
+        return auth.split(" ",1)[1].strip()
+    return None
+
+def require_api_scope(request:Request,scope:str):
+    token=bearer(request)
+    if not token:
+        raise HTTPException(status_code=401,detail="bearer token required")
+    identity=verify_api_token(token,scope)
+    if not identity:
+        raise HTTPException(status_code=403,detail="invalid token or scope")
+    return identity
 
 def days_left(expire_date):
     if not expire_date: return None
@@ -304,6 +319,81 @@ def change_password(payload:PasswordChange,request:Request):
         con.execute("UPDATE admins SET password_hash=? WHERE username=?",(hash_password(payload.new_password),actor))
     audit(actor,"admin_password_change",actor,ip=ip(request))
     return {"ok":True}
+
+@app.get("/api/v1/status")
+def api_v1_status(request:Request):
+    require_api_scope(request,"status:read")
+    return {"product":APP_NAME,"version":VERSION,"metrics":system_ops.metrics(),"sessions":len(system_ops.online_sessions())}
+
+@app.get("/api/v1/accounts")
+def api_v1_accounts(request:Request):
+    require_api_scope(request,"accounts:read")
+    return account_rows()
+
+class APITokenCreate(BaseModel):
+    name:str=Field(min_length=1,max_length=80)
+    scopes:list[str]=Field(default_factory=lambda:["status:read"])
+
+@app.get("/api/admin/tokens")
+def admin_tokens(request:Request):
+    require_user(request)
+    return list_api_tokens()
+
+@app.post("/api/admin/tokens")
+def admin_token_create(payload:APITokenCreate,request:Request):
+    actor=require_mutation(request)
+    allowed={"status:read","accounts:read"}
+    scopes=[x for x in payload.scopes if x in allowed]
+    if not scopes:
+        raise HTTPException(400,"at least one valid scope is required")
+    result=create_api_token(payload.name,scopes)
+    audit(actor,"api_token_create",payload.name,",".join(scopes),ip(request))
+    return result
+
+@app.post("/api/admin/tokens/{token_id}/revoke")
+def admin_token_revoke(token_id:int,request:Request):
+    actor=require_mutation(request)
+    revoke_api_token(token_id)
+    audit(actor,"api_token_revoke",str(token_id),ip=ip(request))
+    return {"ok":True}
+
+class NodeCreate(BaseModel):
+    name:str=Field(min_length=1,max_length=80)
+
+class NodeHeartbeat(BaseModel):
+    hostname:str=Field(min_length=1,max_length=255)
+    version:str=Field(default="",max_length=80)
+    cpu:float=Field(ge=0,le=100)
+    memory:float=Field(ge=0,le=100)
+    disk:float=Field(ge=0,le=100)
+
+@app.get("/api/nodes")
+def nodes_get(request:Request):
+    require_user(request)
+    return list_nodes()
+
+@app.post("/api/nodes")
+def nodes_create(payload:NodeCreate,request:Request):
+    actor=require_mutation(request)
+    result=create_node(payload.name)
+    audit(actor,"node_create",payload.name,ip=ip(request))
+    return result
+
+@app.post("/api/nodes/{node_id}/revoke")
+def nodes_revoke(node_id:int,request:Request):
+    actor=require_mutation(request)
+    revoke_node(node_id)
+    audit(actor,"node_revoke",str(node_id),ip=ip(request))
+    return {"ok":True}
+
+@app.post("/api/node/heartbeat")
+def node_heartbeat(payload:NodeHeartbeat,request:Request):
+    token=bearer(request)
+    node=node_by_token(token or "")
+    if not node:
+        raise HTTPException(403,"invalid node token")
+    update_node_heartbeat(node["id"],payload.hostname,payload.version,payload.cpu,payload.memory,payload.disk)
+    return {"ok":True,"node_id":node["id"]}
 
 @app.get("/api/admin/2fa/status")
 def twofa_status(request:Request):
