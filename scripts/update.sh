@@ -49,11 +49,13 @@ EOF
 install -m 0644 "$SRC/systemd/makia-vps-manager.service" /etc/systemd/system/makia-vps-manager.service
 install -m 0644 "$SRC/systemd/makia-policy-enforcer.service" /etc/systemd/system/makia-policy-enforcer.service
 install -m 0644 "$SRC/systemd/makia-metrics-sampler.service" /etc/systemd/system/makia-metrics-sampler.service
+install -m 0644 "$SRC/systemd/makia-protocol-traffic.service" /etc/systemd/system/makia-protocol-traffic.service
 install -m 0644 "$SRC/nginx/makia-vps-manager.conf" /etc/nginx/sites-available/makia-vps-manager
 ln -sfn /etc/nginx/sites-available/makia-vps-manager /etc/nginx/sites-enabled/makia-vps-manager
 install -m 0755 "$SRC/scripts/update.sh" /usr/local/sbin/makia-update
 install -m 0755 "$SRC/scripts/backup.sh" /usr/local/sbin/makia-backup
 install -m 0755 "$SRC/scripts/uninstall.sh" /usr/local/sbin/makia-uninstall
+install -m 0755 "$SRC/scripts/doctor.sh" /usr/local/sbin/makia-doctor
 
 systemctl daemon-reload
 nginx -t
@@ -72,6 +74,8 @@ for _ in {1..15}; do
   if curl -fsS http://127.0.0.1:8787/healthz >/dev/null; then
     printf 'Update complete. Installed version: '
     cat "$APP/VERSION"
+    echo
+    /usr/local/sbin/makia-doctor || true
     exit 0
   fi
   sleep 1
