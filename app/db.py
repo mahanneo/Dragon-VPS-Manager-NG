@@ -255,3 +255,21 @@ def update_node_heartbeat(node_id,hostname,version,cpu,memory,disk):
             "UPDATE nodes SET last_seen_at=?,hostname=?,version=?,cpu=?,memory=?,disk=? WHERE id=?",
             (now(),hostname,version,float(cpu),float(memory),float(disk),int(node_id))
         )
+
+
+def get_setting(key, default=None):
+    with connect() as con:
+        row=con.execute("SELECT value FROM settings WHERE key=?",(str(key),)).fetchone()
+        return row["value"] if row else default
+
+def set_setting(key, value):
+    with connect() as con:
+        con.execute(
+            """INSERT INTO settings(key,value) VALUES(?,?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+            (str(key), str(value))
+        )
+
+def all_settings():
+    with connect() as con:
+        return {r["key"]:r["value"] for r in con.execute("SELECT key,value FROM settings").fetchall()}
