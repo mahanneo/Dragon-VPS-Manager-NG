@@ -2,7 +2,7 @@
 
 Modern, web-first VPS control center for Linux servers.
 
-> **Current release:** `v0.3.0-alpha`  
+> **Current release:** `v0.4.0-alpha`  
 > This is an active alpha. Use a disposable VPS for first installation and validate host behavior before production use.
 
 ## Highlights
@@ -11,8 +11,10 @@ Modern, web-first VPS control center for Linux servers.
 - Live CPU / RAM / disk / swap / load / network telemetry
 - Professional SSH Account Center
 - Easy 4-digit PIN, 6-digit PIN or strong password generation
-- Account expiry, plan, notes, connection-limit policy and quota policy
+- Account expiry, plan, notes, enforced connection limit and quota policy
 - Live session visibility and controlled disconnect
+- Background Policy Enforcer for concurrent SSH connection limits
+- Xray Protocol Center with real binary/service/config/inbound discovery
 - Service start / stop / restart through an allowlist
 - Security Center status for UFW, Fail2ban and OpenSSH
 - Audit trail
