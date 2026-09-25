@@ -44,3 +44,26 @@ def read_session(token: str | None) -> str | None:
         return str(payload["u"])
     except Exception:
         return None
+
+
+def make_preauth(username: str) -> str:
+    payload = {"u": username, "exp": int(time.time()) + 300, "k": "2fa", "n": secrets.token_hex(8)}
+    raw = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+    sig = hmac.new(ensure_secret(), raw.encode(), hashlib.sha256).hexdigest()
+    return f"{raw}.{sig}"
+
+def read_preauth(token: str | None) -> str | None:
+    if not token or "." not in token:
+        return None
+    raw, sig = token.rsplit(".", 1)
+    expected = hmac.new(ensure_secret(), raw.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        return None
+    try:
+        padded = raw + "=" * (-len(raw) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode())
+        if payload.get("k") != "2fa" or int(payload["exp"]) < int(time.time()):
+            return None
+        return str(payload["u"])
+    except Exception:
+        return None
