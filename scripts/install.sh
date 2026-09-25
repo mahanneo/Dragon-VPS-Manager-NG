@@ -50,6 +50,7 @@ if [[ ! -d "$DATA" && -d "$OLD_APP/data" ]]; then
   cp -a "$OLD_APP/data" "$DATA"
 fi
 install -d -m 0750 "$DATA"
+install -d -m 0700 /var/backups/makia-vps-manager
 
 cp -a "$SOURCE_DIR/app" "$SOURCE_DIR/requirements.txt" "$SOURCE_DIR/VERSION" "$APP/"
 python3 -m venv "$APP/.venv"
