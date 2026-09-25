@@ -68,6 +68,7 @@ rm -f /etc/systemd/system/dragon-vps-manager.service
 install -m 0644 "$SOURCE_DIR/systemd/makia-vps-manager.service" /etc/systemd/system/makia-vps-manager.service
 install -m 0644 "$SOURCE_DIR/systemd/makia-policy-enforcer.service" /etc/systemd/system/makia-policy-enforcer.service
 install -m 0644 "$SOURCE_DIR/systemd/makia-metrics-sampler.service" /etc/systemd/system/makia-metrics-sampler.service
+install -m 0644 "$SOURCE_DIR/systemd/makia-protocol-traffic.service" /etc/systemd/system/makia-protocol-traffic.service
 install -m 0644 "$SOURCE_DIR/nginx/makia-vps-manager.conf" /etc/nginx/sites-available/makia-vps-manager
 ln -sfn /etc/nginx/sites-available/makia-vps-manager /etc/nginx/sites-enabled/makia-vps-manager
 rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/dragon-vps-manager /etc/nginx/sites-available/dragon-vps-manager
@@ -83,6 +84,7 @@ systemctl daemon-reload
 systemctl enable --now makia-vps-manager
 systemctl enable --now makia-policy-enforcer
 systemctl enable --now makia-metrics-sampler
+systemctl enable --now makia-protocol-traffic
 
 # Baseline SSH brute-force protection. We do not enable/modify UFW automatically
 # because doing so without knowing the operator's SSH path can lock them out.
