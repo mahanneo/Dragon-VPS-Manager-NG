@@ -94,7 +94,10 @@ def account_rows():
             "expire_date":p.get("expire_date"),
             "days_left":left,
             "connection_limit":int(p.get("connection_limit",1) or 1),
+            "device_limit":int(p.get("device_limit",1) or 1),
             "quota_mb":int(p.get("quota_mb",0) or 0),
+            "renewal_days":int(p.get("renewal_days",0) or 0),
+            "online_ips":sorted({s.get("remote") for s in sessions if s.get("username")==u["username"] and s.get("remote")}),
             "enabled":bool(p.get("enabled",1)),
             "online":counts.get(u["username"],0),
             "expired":left is not None and left<0,
@@ -191,7 +194,9 @@ class AccountCreate(BaseModel):
     plan:str=""
     note:str=""
     connection_limit:int=Field(default=1,ge=1,le=50)
+    device_limit:int=Field(default=1,ge=1,le=50)
     quota_mb:int=Field(default=0,ge=0,le=10_000_000)
+    renewal_days:int=Field(default=0,ge=0,le=3650)
 
 @app.get("/api/accounts/new-defaults")
 def account_new_defaults(request:Request):
@@ -220,7 +225,7 @@ def create_account(payload:AccountCreate,request:Request):
         raise HTTPException(400,"password is required")
     try:
         system_ops.create_ssh_user(payload.username,password,payload.expire_date)
-        upsert_profile(payload.username,payload.plan,payload.note,payload.expire_date,payload.connection_limit,payload.quota_mb,1)
+        upsert_profile(payload.username,payload.plan,payload.note,payload.expire_date,payload.connection_limit,payload.quota_mb,1,payload.device_limit,payload.renewal_days)
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
     audit(actor,"account_create",payload.username,f"plan={payload.plan}; limit={payload.connection_limit}; quota_mb={payload.quota_mb}; password_mode={payload.password_mode}",ip(request))
     return {"ok":True,"username":payload.username,"password":password if generated else None,"generated":generated}
@@ -232,7 +237,9 @@ class AccountUpdate(BaseModel):
     plan:str=""
     note:str=""
     connection_limit:int=Field(default=1,ge=1,le=50)
+    device_limit:int=Field(default=1,ge=1,le=50)
     quota_mb:int=Field(default=0,ge=0,le=10_000_000)
+    renewal_days:int=Field(default=0,ge=0,le=3650)
     enabled:bool=True
 
 @app.put("/api/accounts/{username}")
@@ -241,7 +248,7 @@ def update_account(username:str,payload:AccountUpdate,request:Request):
     try:
         system_ops.update_ssh_user(username,payload.password,payload.expire_date,payload.clear_expire)
         system_ops.lock_user(username,not payload.enabled)
-        upsert_profile(username,payload.plan,payload.note,None if payload.clear_expire else payload.expire_date,payload.connection_limit,payload.quota_mb,1 if payload.enabled else 0)
+        upsert_profile(username,payload.plan,payload.note,None if payload.clear_expire else payload.expire_date,payload.connection_limit,payload.quota_mb,1 if payload.enabled else 0,payload.device_limit,payload.renewal_days)
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
     audit(actor,"account_update",username,f"enabled={payload.enabled}; limit={payload.connection_limit}; quota_mb={payload.quota_mb}",ip(request))
     return {"ok":True}
@@ -253,11 +260,11 @@ def account_action(username:str,action:str,request:Request):
         if action=="lock":
             result=system_ops.lock_user(username,True)
             p=next((a for a in account_rows() if a["username"]==username),None)
-            if p: upsert_profile(username,p["plan"],p["note"],p["expire_date"],p["connection_limit"],p["quota_mb"],0)
+            if p: upsert_profile(username,p["plan"],p["note"],p["expire_date"],p["connection_limit"],p["quota_mb"],0,p.get("device_limit",1),p.get("renewal_days",0))
         elif action=="unlock":
             result=system_ops.lock_user(username,False)
             p=next((a for a in account_rows() if a["username"]==username),None)
-            if p: upsert_profile(username,p["plan"],p["note"],p["expire_date"],p["connection_limit"],p["quota_mb"],1)
+            if p: upsert_profile(username,p["plan"],p["note"],p["expire_date"],p["connection_limit"],p["quota_mb"],1,p.get("device_limit",1),p.get("renewal_days",0))
         elif action=="disconnect":
             targets=[s for s in system_ops.online_sessions() if s["username"]==username and s["tty"]]
             for s in targets:
@@ -303,7 +310,7 @@ def bulk_account_action(payload:BulkAccountAction,request:Request):
                         pass
                 new_expire=(base+timedelta(days=payload.days)).isoformat()
                 system_ops.update_ssh_user(username,expire=new_expire)
-                upsert_profile(username,p.get("plan",""),p.get("note",""),new_expire,p.get("connection_limit",1),p.get("quota_mb",0),p.get("enabled",1))
+                upsert_profile(username,p.get("plan",""),p.get("note",""),new_expire,p.get("connection_limit",1),p.get("quota_mb",0),p.get("enabled",1),p.get("device_limit",1),p.get("renewal_days",0))
             else:
                 for s in [x for x in system_ops.online_sessions() if x["username"]==username and x["tty"]]:
                     try: system_ops.disconnect_session(s["tty"])
