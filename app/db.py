@@ -41,6 +41,17 @@ def init_db():
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS metrics_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ts INTEGER NOT NULL,
+          cpu REAL NOT NULL,
+          memory REAL NOT NULL,
+          disk REAL NOT NULL,
+          load1 REAL NOT NULL,
+          rx INTEGER NOT NULL,
+          tx INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_metrics_history_ts ON metrics_history(ts);
         CREATE TABLE IF NOT EXISTS account_profiles (
           username TEXT PRIMARY KEY,
           plan TEXT NOT NULL DEFAULT '',
@@ -111,3 +122,19 @@ def all_profiles():
 def delete_profile(username):
     with connect() as con:
         con.execute("DELETE FROM account_profiles WHERE username=?",(username,))
+
+
+def add_metric(ts,cpu,memory,disk,load1,rx,tx):
+    with connect() as con:
+        con.execute("INSERT INTO metrics_history(ts,cpu,memory,disk,load1,rx,tx) VALUES(?,?,?,?,?,?,?)",
+                    (int(ts),float(cpu),float(memory),float(disk),float(load1),int(rx),int(tx)))
+        # Keep 7 days at one-minute sampling with a small safety margin.
+        con.execute("DELETE FROM metrics_history WHERE ts < ?",(int(ts)-8*86400,))
+
+def metrics_since(since_ts,limit=2000):
+    with connect() as con:
+        rows=con.execute(
+            "SELECT ts,cpu,memory,disk,load1,rx,tx FROM metrics_history WHERE ts>=? ORDER BY ts ASC LIMIT ?",
+            (int(since_ts),max(1,min(int(limit),10000)))
+        ).fetchall()
+        return [dict(r) for r in rows]
