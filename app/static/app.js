@@ -118,7 +118,7 @@ async function protocols(){
     <div><div class="eyebrow">UNIFIED ACCESS STACK</div><h2>Protocol Hub</h2><p class="muted">Makia فقط قابلیت‌هایی را فعال نشان می‌دهد که Backend واقعی دارند. Xray برای VLESS/VMess/Trojan/Shadowsocks، WireGuard و OpenVPN به‌صورت ماژول‌های مستقل مدیریت می‌شوند.</p></div>
     <div class="protocol-count"><b>${d.capabilities.filter(x=>x.available).length}</b><span>capabilities ready</span></div>
   </div>
-  <div class="capability-strip">${d.capabilities.map(x=>`<span class="capability ${x.available?'ready':''}">${x.id}<small>${x.engine}</small></span>`).join('')}</div>
+  <div class="capability-strip">${d.capabilities.map(x=>`<span class="capability ${x.available?'ready':''} ${x.mode||''}">${x.id}<small>${x.available?(x.mode==='advanced'?'ADVANCED':x.engine):'UNAVAILABLE'}</small></span>`).join('')}</div>
   <div class="protocol-grid">
     ${protocolTile('X','Xray Core','VLESS · VMess · Trojan · Shadowsocks · transport/TLS/REALITY via Xray configuration',protocolState(x.installed,x.service_active),xActions)}
     ${protocolTile('W','WireGuard',`${w.interfaces.length} interface · ${w.peers} peers · native kernel/userspace tooling`,protocolState(w.installed,w.service_active),wActions)}
