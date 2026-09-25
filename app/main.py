@@ -434,11 +434,19 @@ def protocol_clients_get(request:Request):
             "available":bool(usage.get("available") or stored_up or stored_down),
             "error":usage.get("error"),
         }
+        online={"available":False,"ips":[],"error":None}
+        if item.get("engine")=="xray" and item.get("enabled"):
+            try: online=protocol_ops.xray_client_online_ips(item["name"])
+            except Exception as exc: online={"available":False,"ips":[],"error":str(exc)[:160]}
         quota=int(item.get("quota_bytes") or 0)
         expire_at=int(item.get("expire_at") or 0)
+        ip_limit=max(1,int(item.get("ip_limit") or 1))
         rows.append({
             **item,
             "usage":cumulative,
+            "online":online,
+            "online_ip_count":len(online.get("ips") or []),
+            "ip_violation":bool(online.get("available") and len(online.get("ips") or [])>ip_limit),
             "quota_percent":round((cumulative["total"]/quota)*100,1) if quota else 0,
             "expired":bool(expire_at and expire_at<now_ts),
             "days_left":max(0,(expire_at-now_ts)//86400) if expire_at and expire_at>=now_ts else (0 if expire_at else None),
