@@ -12,7 +12,7 @@ systemctl disable --now makia-metrics-sampler 2>/dev/null || true
 systemctl disable --now makia-protocol-traffic 2>/dev/null || true
 rm -f /etc/systemd/system/makia-vps-manager.service /etc/systemd/system/makia-policy-enforcer.service /etc/systemd/system/makia-metrics-sampler.service /etc/systemd/system/makia-protocol-traffic.service
 rm -f /etc/nginx/sites-enabled/makia-vps-manager /etc/nginx/sites-available/makia-vps-manager
-rm -f /usr/local/sbin/makia-update /usr/local/sbin/makia-backup /usr/local/sbin/makia-uninstall /usr/local/sbin/makia-doctor
+rm -f /usr/local/sbin/makia-update /usr/local/sbin/makia-backup /usr/local/sbin/makia-uninstall /usr/local/sbin/makia-doctor /usr/local/sbin/makia-upgrade
 rm -f /usr/local/sbin/dragon-update /usr/local/sbin/dragon-backup /usr/local/sbin/dragon-uninstall
 systemctl daemon-reload
 nginx -t >/dev/null 2>&1 && systemctl reload nginx || true

@@ -27,7 +27,7 @@ jobs:
       - name: Unit tests
         run: pytest -q
       - name: Bash syntax
-        run: bash -n install.sh scripts/*.sh
+        run: bash -n install.sh upgrade.sh scripts/*.sh
       - name: JavaScript syntax
         run: node --check app/static/app.js
       - name: Dangerous pattern guard
@@ -48,6 +48,9 @@ jobs:
           grep -q 'makia-protocol-traffic' scripts/uninstall.sh
           test -f systemd/makia-protocol-traffic.service
           test -f scripts/doctor.sh
+          test -f upgrade.sh
+          grep -q 'makia-upgrade' scripts/install.sh
+          grep -q 'makia-upgrade' scripts/update.sh
           test -f app/static/manifest.webmanifest
           test -f app/static/sw.js
-          test -f docs/UAT-0.8.0-RC1.md
+          test -f docs/UAT-0.8.0-RC2.md
