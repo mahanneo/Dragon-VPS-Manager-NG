@@ -9,9 +9,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from .config import APP_NAME, VERSION, COOKIE_NAME, ALLOWED_SERVICES, DATA_DIR
-from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat
+from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings
 from .security import verify_password, make_session, read_session, hash_password, make_preauth, read_preauth
-from . import system_ops, protocol_ops
+from . import system_ops, protocol_ops, panel_ops
 
 BASE=Path(__file__).resolve().parent
 app=FastAPI(title=APP_NAME,version=VERSION,docs_url=None,redoc_url=None)
@@ -104,7 +104,7 @@ def account_rows():
 @app.get("/",response_class=HTMLResponse)
 def root(request:Request):
     if not current_user(request): return RedirectResponse("/login",302)
-    return templates.TemplateResponse("dashboard.html",{"request":request,"app_name":APP_NAME,"version":VERSION})
+    return templates.TemplateResponse("dashboard.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"language":get_setting("language","fa"),"panel_domain":get_setting("panel_domain","")})
 
 @app.get("/login",response_class=HTMLResponse)
 def login_page(request:Request):
@@ -347,7 +347,79 @@ def security(request:Request):
 @app.get("/api/protocols")
 def protocols(request:Request):
     require_user(request)
-    return {"xray":protocol_ops.status()}
+    return protocol_ops.catalog()
+
+class ProtocolInstall(BaseModel):
+    component:str
+
+@app.post("/api/protocols/install")
+def protocol_install(payload:ProtocolInstall,request:Request):
+    actor=require_mutation(request)
+    try:
+        result=protocol_ops.install_component(payload.component)
+    except protocol_ops.ProtocolError as e:
+        raise HTTPException(400,str(e))
+    audit(actor,"protocol_install",payload.component,ip=ip(request))
+    return result
+
+class WireGuardBootstrap(BaseModel):
+    port:int=Field(default=51820,ge=1,le=65535)
+    cidr:str="10.66.66.1/24"
+
+@app.post("/api/protocols/wireguard/bootstrap")
+def wireguard_bootstrap(payload:WireGuardBootstrap,request:Request):
+    actor=require_mutation(request)
+    try:
+        result=protocol_ops.bootstrap_wireguard(payload.port,payload.cidr)
+    except protocol_ops.ProtocolError as e:
+        raise HTTPException(400,str(e))
+    audit(actor,"wireguard_bootstrap","wg0",f"port={payload.port}; cidr={payload.cidr}",ip(request))
+    return result
+
+class WireGuardPeer(BaseModel):
+    name:str=Field(min_length=1,max_length=48)
+    endpoint:str=Field(min_length=1,max_length=255)
+    dns:str=Field(default="1.1.1.1",max_length=64)
+
+@app.post("/api/protocols/wireguard/peers")
+def wireguard_peer_create(payload:WireGuardPeer,request:Request):
+    actor=require_mutation(request)
+    try:
+        result=protocol_ops.create_wireguard_peer(payload.name,payload.endpoint,dns=payload.dns)
+    except protocol_ops.ProtocolError as e:
+        raise HTTPException(400,str(e))
+    audit(actor,"wireguard_peer_create",payload.name,ip=ip(request))
+    return result
+
+class OpenVPNBootstrap(BaseModel):
+    port:int=Field(default=1194,ge=1,le=65535)
+    proto:str="udp"
+
+@app.post("/api/protocols/openvpn/bootstrap")
+def openvpn_bootstrap(payload:OpenVPNBootstrap,request:Request):
+    actor=require_mutation(request)
+    try:
+        result=protocol_ops.bootstrap_openvpn(payload.port,payload.proto)
+    except protocol_ops.ProtocolError as e:
+        raise HTTPException(400,str(e))
+    audit(actor,"openvpn_bootstrap","server",f"port={payload.port}; proto={payload.proto}",ip(request))
+    return result
+
+class OpenVPNClient(BaseModel):
+    name:str=Field(min_length=1,max_length=48)
+    endpoint:str=Field(min_length=1,max_length=255)
+    port:int=Field(default=1194,ge=1,le=65535)
+    proto:str="udp"
+
+@app.post("/api/protocols/openvpn/clients")
+def openvpn_client_create(payload:OpenVPNClient,request:Request):
+    actor=require_mutation(request)
+    try:
+        result=protocol_ops.create_openvpn_client(payload.name,payload.endpoint,payload.port,payload.proto)
+    except protocol_ops.ProtocolError as e:
+        raise HTTPException(400,str(e))
+    audit(actor,"openvpn_client_create",payload.name,ip=ip(request))
+    return result
 
 @app.get("/api/backups")
 def backups(request:Request):
@@ -456,6 +528,59 @@ def node_heartbeat(payload:NodeHeartbeat,request:Request):
         raise HTTPException(403,"invalid node token")
     update_node_heartbeat(node["id"],payload.hostname,payload.version,payload.cpu,payload.memory,payload.disk)
     return {"ok":True,"node_id":node["id"]}
+
+class GeneralSettings(BaseModel):
+    language:str="fa"
+    panel_domain:str=""
+
+@app.get("/api/settings/general")
+def general_settings_get(request:Request):
+    require_user(request)
+    data=all_settings()
+    domain=data.get("panel_domain","")
+    return {
+        "language":data.get("language","fa"),
+        "panel_domain":domain,
+        "domain_status":panel_ops.domain_status(domain or None),
+    }
+
+@app.put("/api/settings/general")
+def general_settings_put(payload:GeneralSettings,request:Request):
+    actor=require_mutation(request)
+    language=payload.language if payload.language in {"fa","en"} else "fa"
+    domain=(payload.panel_domain or "").strip().lower()
+    if domain:
+        try: domain=panel_ops.validate_domain(domain)
+        except panel_ops.PanelOperationError as e: raise HTTPException(400,str(e))
+    set_setting("language",language)
+    set_setting("panel_domain",domain)
+    audit(actor,"general_settings_update",domain or "none",f"language={language}",ip(request))
+    return {"ok":True,"language":language,"panel_domain":domain}
+
+class DomainApply(BaseModel):
+    domain:str=Field(min_length=3,max_length=253)
+
+@app.post("/api/settings/domain/apply")
+def domain_apply(payload:DomainApply,request:Request):
+    actor=require_mutation(request)
+    try: result=panel_ops.apply_domain(payload.domain)
+    except panel_ops.PanelOperationError as e: raise HTTPException(400,str(e))
+    set_setting("panel_domain",result["domain"])
+    audit(actor,"domain_apply",result["domain"],ip=ip(request))
+    return result
+
+class CertificateIssue(BaseModel):
+    domain:str=Field(min_length=3,max_length=253)
+    email:str=Field(min_length=5,max_length=254)
+
+@app.post("/api/settings/domain/certificate")
+def certificate_issue(payload:CertificateIssue,request:Request):
+    actor=require_mutation(request)
+    try: result=panel_ops.issue_certificate(payload.domain,payload.email)
+    except panel_ops.PanelOperationError as e: raise HTTPException(400,str(e))
+    set_setting("panel_domain",result["domain"])
+    audit(actor,"certificate_issue",result["domain"],ip=ip(request))
+    return result
 
 @app.get("/api/admin/2fa/status")
 def twofa_status(request:Request):
