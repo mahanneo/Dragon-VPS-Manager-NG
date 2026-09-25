@@ -333,14 +333,14 @@ def bootstrap_openvpn(port=1194, proto="udp"):
     os.chmod(up,0o700); os.chmod(down,0o700)
     server_conf=server_dir/"server.conf"
     server_conf.write_text(
-        f"port {port}\nproto {proto}\ndev tun\n"
+        f"port {port}\nproto {'udp' if proto=='udp' else 'tcp-server'}\ndev tun\n"
         "topology subnet\nserver 10.8.0.0 255.255.255.0\n"
         "ca ca.crt\ncert server.crt\nkey server.key\ndh dh.pem\ncrl-verify crl.pem\n"
         "tls-crypt ta.key\n"
         "push \"redirect-gateway def1 bypass-dhcp\"\n"
         "push \"dhcp-option DNS 1.1.1.1\"\npush \"dhcp-option DNS 8.8.8.8\"\n"
         "keepalive 10 120\npersist-key\npersist-tun\nuser nobody\ngroup nogroup\n"
-        "cipher AES-256-GCM\nauth SHA256\nverb 3\n"
+        "data-ciphers AES-256-GCM:AES-128-GCM\ndata-ciphers-fallback AES-256-GCM\nauth SHA256\nverb 3\n"
         f"script-security 2\nup {up}\ndown {down}\n",
         encoding="utf-8"
     )
@@ -373,7 +373,7 @@ def create_openvpn_client(name, endpoint, port=1194, proto="udp"):
         "client\ndev tun\n"
         f"proto {transport}\nremote {endpoint} {port}\n"
         "resolv-retry infinite\nnobind\npersist-key\npersist-tun\nremote-cert-tls server\n"
-        "cipher AES-256-GCM\nauth SHA256\nverb 3\nkey-direction 1\n"
+        "data-ciphers AES-256-GCM:AES-128-GCM\nauth SHA256\nverb 3\n"
         f"<ca>\n{ca}</ca>\n<cert>\n{cert}</cert>\n<key>\n{key}</key>\n<tls-crypt>\n{ta}</tls-crypt>\n"
     )
     return {"name":name,"config":client}
