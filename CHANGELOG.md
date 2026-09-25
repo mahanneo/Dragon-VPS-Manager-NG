@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.0-rc2] - 2026-09-26
+
+### Upgrade reliability
+- Added root `upgrade.sh` bootstrap updater.
+- Added installed `makia-upgrade` command that always downloads the latest updater before applying an upgrade.
+- This closes the old-updater/new-service gap when upgrading from releases that predate `makia-protocol-traffic.service`.
+- Update Center now recommends `makia-upgrade`.
+- Installer and updater keep `makia-upgrade` current.
+- Uninstaller removes the bootstrap command.
+
+### Release status
+RC2 supersedes RC1 for host testing. It contains the same v0.8 capability set plus the safe transition path from older installed updaters.
+
+
 ## [0.8.0-rc1] - 2026-09-26
 
 ### Account Center V3
