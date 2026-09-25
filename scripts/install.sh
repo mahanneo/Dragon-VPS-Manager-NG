@@ -65,6 +65,7 @@ systemctl disable --now dragon-vps-manager 2>/dev/null || true
 rm -f /etc/systemd/system/dragon-vps-manager.service
 
 install -m 0644 "$SOURCE_DIR/systemd/makia-vps-manager.service" /etc/systemd/system/makia-vps-manager.service
+install -m 0644 "$SOURCE_DIR/systemd/makia-policy-enforcer.service" /etc/systemd/system/makia-policy-enforcer.service
 install -m 0644 "$SOURCE_DIR/nginx/makia-vps-manager.conf" /etc/nginx/sites-available/makia-vps-manager
 ln -sfn /etc/nginx/sites-available/makia-vps-manager /etc/nginx/sites-enabled/makia-vps-manager
 rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/dragon-vps-manager /etc/nginx/sites-available/dragon-vps-manager
@@ -78,6 +79,7 @@ ln -sfn /usr/local/sbin/makia-uninstall /usr/local/sbin/dragon-uninstall
 
 systemctl daemon-reload
 systemctl enable --now makia-vps-manager
+systemctl enable --now makia-policy-enforcer
 nginx -t
 systemctl enable --now nginx
 systemctl reload nginx
