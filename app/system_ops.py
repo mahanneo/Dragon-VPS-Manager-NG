@@ -1,4 +1,4 @@
-import os, pwd, shutil, socket, subprocess, platform, re
+import os, pwd, shutil, socket, subprocess, platform, re, time
 from datetime import datetime
 import psutil
 from .config import ALLOWED_SERVICES
@@ -8,13 +8,21 @@ class OperationError(RuntimeError): pass
 TTY_RE=re.compile(r"^[A-Za-z0-9._/-]{1,64}$")
 
 def _run(args: list[str], input_text: str | None = None, timeout: int = 15):
-    try:
-        p = subprocess.run(args, input=input_text, text=True, capture_output=True, timeout=timeout, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise OperationError(str(exc)) from exc
-    if p.returncode != 0:
-        raise OperationError((p.stderr or p.stdout or "operation failed").strip()[:500])
-    return p.stdout.strip()
+    last_error = "operation failed"
+    for attempt in range(3):
+        try:
+            p = subprocess.run(args, input=input_text, text=True, capture_output=True, timeout=timeout, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise OperationError(str(exc)) from exc
+        if p.returncode == 0:
+            return p.stdout.strip()
+        last_error = (p.stderr or p.stdout or "operation failed").strip()[:500]
+        # shadow-utils can briefly contend on /etc/.pwd.lock during package/user operations.
+        if "cannot lock /etc/passwd" in last_error.lower() and attempt < 2:
+            time.sleep(1.0 + attempt)
+            continue
+        break
+    raise OperationError(last_error)
 
 def metrics():
     disk=psutil.disk_usage("/")
