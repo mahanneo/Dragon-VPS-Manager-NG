@@ -1170,6 +1170,32 @@ def diagnostics_self_test(request:Request):
     except Exception as exc:
         add("protocol_catalog",False,exc,"error")
 
+    try:
+        wg=protocol_ops.wireguard_status()
+        if wg.get("config"):
+            add("wireguard_runtime",bool(wg.get("service_active")),f"UDP {wg.get('listen_port') or '?'}; MTU {wg.get('mtu') or 'auto'}; peers={wg.get('peers',0)}","error")
+        else:
+            add("wireguard_runtime",True,"not configured")
+    except Exception as exc:
+        add("wireguard_runtime",False,exc,"warn")
+
+    try:
+        domain=(get_setting("panel_domain","") or "").strip()
+        if domain:
+            edge=panel_ops.domain_status(domain)
+            add("panel_domain_dns",bool(edge.get("resolved_ipv4")),f"{domain}: {', '.join(edge.get('resolved_ipv4') or []) or 'not resolved'}","warn")
+            add("panel_https",bool(edge.get("certificate")),f"{domain}: certificate {'present' if edge.get('certificate') else 'missing'}","warn")
+        else:
+            add("panel_domain_dns",True,"IP mode; domain not configured")
+    except Exception as exc:
+        add("panel_domain_dns",False,exc,"warn")
+
+    try:
+        portable=system_ops.portable_backup_status(str(DATA_DIR))
+        add("portable_backup_sources",bool(portable.get("has_data")),f"{len(portable.get('sources') or [])} portable source(s) available","error")
+    except Exception as exc:
+        add("portable_backup_sources",False,exc,"error")
+
     critical=[x for x in checks if not x["ok"] and x["level"]=="error"]
     warnings=[x for x in checks if not x["ok"] and x["level"]=="warn"]
     return {
