@@ -154,3 +154,13 @@ def test_xray_share_payload_has_qr_source():
     payload=access_ops.xray_payload("u1","vless","vless://abc@example.com:443","https://example.com/sub/a","https://example.com/client/a")
     assert payload["share_type"]=="xray"
     assert payload["share_text"]=="vless://abc@example.com:443"
+
+
+def test_protected_zip_preserves_safe_relative_paths():
+    data=access_ops.protected_zip({"payload/data.tar.gz":b"data","../escape.txt":b"nope"},"583921")
+    with pyzipper.AESZipFile(io.BytesIO(data),"r") as zf:
+        zf.setpassword(b"583921")
+        names=zf.namelist()
+        assert "payload/data.tar.gz" in names
+        assert "escape.txt" in names
+        assert all(".." not in name for name in names)
