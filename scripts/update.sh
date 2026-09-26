@@ -150,6 +150,8 @@ install -m 0755 "$SRC/scripts/uninstall.sh" /usr/local/sbin/makia-uninstall
 install -m 0755 "$SRC/scripts/doctor.sh" /usr/local/sbin/makia-doctor
 install -m 0755 "$SRC/scripts/uat-smoke.sh" /usr/local/sbin/makia-uat-smoke
 install -m 0755 "$SRC/scripts/restore-portable.py" /usr/local/sbin/makia-restore-portable
+install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
+install -m 0755 "$SRC/scripts/xray-cert-sync.sh" /etc/letsencrypt/renewal-hooks/deploy/makia-xray-sync
 install -m 0755 "$SRC/scripts/reset-admin.sh" /usr/local/sbin/makia-reset-admin
 install -m 0755 "$SRC/upgrade.sh" /usr/local/sbin/makia-upgrade
 
