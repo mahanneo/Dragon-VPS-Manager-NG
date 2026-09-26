@@ -48,3 +48,8 @@ body[data-density="compact"] .workspace{padding-top:18px}
 button.status-chip{cursor:pointer;font:inherit}.ip-list{display:grid;gap:8px}.ip-list>div{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 13px;border:1px solid #22334b;border-radius:12px;background:#08111d}.ip-list b{direction:ltr;text-align:left;color:#c9f2ff}.ip-list span{font-size:10px;color:var(--muted)}.account-row .chips{margin-top:7px}.protocol-client-row .chips{margin-top:7px}.protocol-client-row .status-chip{white-space:nowrap}
 
 .capability.advanced{border-color:#5a4a28;background:#18140b;color:#efd08b}.capability.advanced small{color:#a98d56}.capability.unavailable{opacity:.45;border-style:dashed}.capability.unavailable small{color:#6b7280}.capability.guided small{color:#4fb9d9}
+
+/* v0.9 policy controls */
+.policy-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px}.policy-summary>div{padding:12px;border:1px solid #243650;border-radius:13px;background:#08111d}.policy-summary span{display:block;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:1px}.policy-summary b{display:block;margin-top:6px;font-size:14px}.quota-tools{flex-wrap:wrap}.password-tools button:disabled,.soft:disabled{opacity:.38;cursor:not-allowed}.form-grid input:disabled{opacity:.55;background:#070b12}
+@media(max-width:780px){.policy-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:480px){.policy-summary{grid-template-columns:1fr}}
