@@ -51,6 +51,15 @@ def _config_path():
             return p
     return None
 
+
+def _xray_temp_json_path(path, purpose="validate"):
+    path=Path(path)
+    safe=re.sub(r"[^A-Za-z0-9_.-]+","-",str(purpose or "validate")).strip("-") or "validate"
+    return path.with_name(f".{path.stem}.makia-{safe}-{os.getpid()}-{secrets.token_hex(4)}.json")
+
+def _xray_test_config(binary, path):
+    return _run([binary,"run","-test","-format=json","-config",str(path)],timeout=30)
+
 def xray_status():
     binary=_binary()
     config=_config_path()
@@ -867,7 +876,7 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
         "sniffing":{"enabled":True,"destOverride":["http","tls","quic"],"routeOnly":True},
     }
     inbounds.append(inbound)
-    tmp=path.with_suffix(path.suffix+".makia-tmp")
+    tmp=_xray_temp_json_path(path,"create")
     backup_dir=Path("/var/backups/makia-vps-manager")
     backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
     backup=None
@@ -877,7 +886,7 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
     tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     os.chmod(tmp,0o600)
     try:
-        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        _xray_test_config(binary,tmp)
         os.replace(tmp,path)
         _run(["systemctl","restart","xray"],timeout=30)
         if not _active("xray"):
@@ -968,7 +977,7 @@ def create_xray_tunnel(listen_port, target_host, target_port, network="tcp,udp",
             "followRedirect":False,
         },
     })
-    tmp=path.with_suffix(path.suffix+".makia-tunnel")
+    tmp=_xray_temp_json_path(path,"tunnel")
     backup_dir=Path("/var/backups/makia-vps-manager"); backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
     backup=None
     if path.exists():
@@ -976,7 +985,7 @@ def create_xray_tunnel(listen_port, target_host, target_port, network="tcp,udp",
         shutil.copy2(path,backup)
     tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8"); os.chmod(tmp,0o600)
     try:
-        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        _xray_test_config(binary,tmp)
         os.replace(tmp,path)
         _run(["systemctl","restart","xray"],timeout=30)
         if not _active("xray"):
@@ -1014,11 +1023,11 @@ def remove_xray_inbound(inbound_tag):
     backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
     backup=backup_dir/f"xray-remove-{int(time.time())}.json"
     shutil.copy2(path,backup)
-    tmp=path.with_suffix(path.suffix+".makia-remove")
+    tmp=_xray_temp_json_path(path,"remove")
     tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     os.chmod(tmp,0o600)
     try:
-        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        _xray_test_config(binary,tmp)
         os.replace(tmp,path)
         _run(["systemctl","restart","xray"],timeout=30)
         if not _active("xray"):
@@ -1069,11 +1078,11 @@ def disable_xray_client(inbound_tag,email):
     backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
     backup=backup_dir/f"xray-policy-{int(time.time())}.json"
     shutil.copy2(path,backup)
-    tmp=path.with_suffix(path.suffix+".makia-policy-tmp")
+    tmp=_xray_temp_json_path(path,"policy")
     tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     os.chmod(tmp,0o600)
     try:
-        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        _xray_test_config(binary,tmp)
         os.replace(tmp,path)
         _run(["systemctl","restart","xray"],timeout=30)
         if not _active("xray"):
@@ -1149,11 +1158,11 @@ def enable_xray_client(inbound_tag,email,protocol,credential):
     backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
     backup=backup_dir/f"xray-enable-{int(time.time())}.json"
     shutil.copy2(path,backup)
-    tmp=path.with_suffix(path.suffix+".makia-enable")
+    tmp=_xray_temp_json_path(path,"enable")
     tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     os.chmod(tmp,0o600)
     try:
-        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        _xray_test_config(binary,tmp)
         os.replace(tmp,path)
         _run(["systemctl","restart","xray"],timeout=30)
         if not _active("xray"):
@@ -1192,11 +1201,11 @@ def validate_xray_config(data):
     config_path=_config_path() or "/usr/local/etc/xray/config.json"
     path=Path(config_path)
     path.parent.mkdir(parents=True,exist_ok=True)
-    tmp=path.with_suffix(path.suffix+".makia-validate")
+    tmp=_xray_temp_json_path(path,"validate")
     try:
         tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
         os.chmod(tmp,0o600)
-        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        _xray_test_config(binary,tmp)
         return {"ok":True}
     finally:
         try:
@@ -1213,7 +1222,7 @@ def apply_xray_config(data):
     config_path=_config_path() or "/usr/local/etc/xray/config.json"
     path=Path(config_path)
     path.parent.mkdir(parents=True,exist_ok=True)
-    tmp=path.with_suffix(path.suffix+".makia-apply")
+    tmp=_xray_temp_json_path(path,"apply")
     backup_dir=Path("/var/backups/makia-vps-manager")
     backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
     backup=None
@@ -1223,7 +1232,7 @@ def apply_xray_config(data):
     tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     os.chmod(tmp,0o600)
     try:
-        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        _xray_test_config(binary,tmp)
         os.replace(tmp,path)
         _run(["systemctl","restart","xray"],timeout=30)
         if not _active("xray"):
