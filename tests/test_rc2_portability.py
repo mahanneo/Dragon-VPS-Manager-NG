@@ -1,4 +1,5 @@
 import io
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -74,7 +75,10 @@ def test_portable_backup_roundtrip(tmp_path):
     data=tmp_path/"data"
     data.mkdir()
     (data/".secret").write_bytes(b"secret-material")
-    (data/"makia.db").write_bytes(b"sqlite-placeholder")
+    con=sqlite3.connect(data/"makia.db")
+    con.execute("CREATE TABLE probe(id INTEGER PRIMARY KEY, value TEXT)")
+    con.execute("INSERT INTO probe(value) VALUES('ok')")
+    con.commit();con.close()
     wg=tmp_path/"wg0.conf"
     wg.write_text("[Interface]\nPrivateKey = server-key\n",encoding="utf-8")
 
@@ -94,7 +98,9 @@ def test_portable_backup_roundtrip(tmp_path):
 def test_portable_backup_wrong_password_rejected(tmp_path):
     data=tmp_path/"data"
     data.mkdir()
-    (data/"makia.db").write_bytes(b"db")
+    con=sqlite3.connect(data/"makia.db")
+    con.execute("CREATE TABLE probe(id INTEGER PRIMARY KEY)")
+    con.commit();con.close()
     result=system_ops.create_portable_backup(
         str(data),"StrongBackupPass123",sources=[(data,"data")]
     )
