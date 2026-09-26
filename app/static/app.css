@@ -193,3 +193,15 @@ html[dir="rtl"] .settings-nav-v2 button.active{box-shadow:inset -3px 0 0 #42d5ff
 @media(max-width:1100px){.xray-share-details{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:780px){.xray-share-details{grid-template-columns:repeat(2,minmax(0,1fr))}.share-advanced{grid-template-columns:1fr}.share-advanced>b{grid-row:auto}.client-share-box{grid-template-columns:1fr}}
 @media(max-width:460px){.xray-share-details{grid-template-columns:1fr}.share-modal{width:98vw}.share-subscription{grid-template-columns:1fr}.share-subscription .share-qr.small{margin:auto}}
+
+
+/* v0.12.0-rc2 network resilience + portable recovery */
+.portable-source-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0}
+.portable-source-grid>div{display:flex;align-items:center;gap:8px;padding:10px 11px;border:1px solid #22374f;border-radius:11px;background:#09131f}
+.portable-source-grid i{display:grid;place-items:center;width:21px;height:21px;border-radius:7px;font-style:normal;font-size:10px}
+.portable-source-grid i.ok{color:#7ff0cf;background:#0e342d;border:1px solid #286858}
+.portable-source-grid i.warn{color:#f4ce7c;background:#33270f;border:1px solid #66501f}
+.portable-source-grid span{font-size:8px;color:#9aacc1}
+.wizard-note.warn{border-color:#604b23;background:#1a1409}
+@media(max-width:900px){.portable-source-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:520px){.portable-source-grid{grid-template-columns:1fr}}
