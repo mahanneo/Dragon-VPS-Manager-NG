@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.9.0-rc1] - 2026-09-26
+
+### Account and client policy UX
+- Standardized quota presets, expiry presets, device/IP presets and reset-cycle presets across protocol-client creation and editing.
+- Preserved the distinction between SSH Session Limit and SSH Device/IP Limit.
+- Kept SSH traffic quota explicitly non-enforced until a reliable per-user host accounting layer exists.
+
+### Xray guided parity
+- Promoted HTTP Proxy and SOCKS5 from Advanced-only to guided profiles with real Xray account credentials.
+- Added guided Dokodemo/Tunnel port forwarding for TCP, UDP or TCP+UDP with port validation, config test, backup, restart gate and rollback.
+- Kept VLESS, VMess, Trojan, Shadowsocks and Hysteria2 guided workflows plus TLS/REALITY and current transport options.
+- Kept routing, outbounds, fallbacks and TUN available through the validated Advanced Xray editor.
+
+### Subscription and API
+- Added JSON subscription output in addition to Base64 and raw formats.
+- Added a public per-client status page with quota, usage, expiry and device-limit information.
+- Inactive, expired or quota-exhausted clients no longer receive active subscription payloads.
+- Added `protocols:read` and `nodes:read` API token scopes and read endpoints.
+- Replaced the prompt-based API token flow with a scoped selector UI.
+
+### Product governance
+- Added an explicit 3x-ui parity matrix.
+- TUIC v5, AmneziaWG and MTProto remain intentionally unavailable until dedicated sidecar/runtime adapters have deterministic install, validation, health, recovery and host UAT.
+
+### Quality
+- Added v0.9 host UAT matrix.
+- Added protocol catalog tests for guided HTTP/SOCKS/Tunnel capabilities.
+- CI continues to gate Python, unit tests, Bash, JavaScript, dangerous patterns, naming and packaging contracts.
+
+### Release status
+Release candidate only. Stable promotion requires the real-host matrix in `docs/UAT-0.9.0-RC1.md`.
+
 ## [0.8.0-rc2] - 2026-09-26
 
 ### Upgrade reliability
