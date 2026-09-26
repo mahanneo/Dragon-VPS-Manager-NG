@@ -23,9 +23,9 @@ import secrets
 print(secrets.token_urlsafe(32))
 PY
 )"; fi
-TOTP_SECRET="$(PYTHONPATH="$SOURCE_DIR" python3 - <<'PY'
-import pyotp
-print(pyotp.random_base32())
+TOTP_SECRET="$(python3 - <<'PY'
+import base64,secrets
+print(base64.b32encode(secrets.token_bytes(20)).decode().rstrip("="))
 PY
 )"
 
