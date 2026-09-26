@@ -104,90 +104,410 @@ function setExpiryPreset(id,days){const el=document.getElementById(id);if(!el)re
 function shiftExpiry(id,days){const el=document.getElementById(id);if(!el)return;const today=new Date();today.setHours(12,0,0,0);let base=today;if(el.value){const current=new Date(el.value+'T12:00:00');if(!Number.isNaN(current.getTime())&&current>today)base=current}base.setDate(base.getDate()+Number(days));el.value=base.toISOString().slice(0,10)}
 function stepNumber(id,delta,min=1,max=50){const el=document.getElementById(id);if(!el)return;el.value=Math.max(min,Math.min(max,Number(el.value||min)+delta))}
 let accessCache=[];
+let provisionState=null;
+
 async function access(){
-  title.textContent='Access Center';
-  content.innerHTML='<div class="empty">در حال جمع‌آوری کاربران و پروفایل‌های دسترسی…</div>';
+  title.textContent='Access Center';setPageContext('IDENTITY & DELIVERY');
+  content.innerHTML='<div class="loading-state"><span class="spinner"></span><b>در حال همگام‌سازی دسترسی‌ها…</b></div>';
   const [rows,stack,sshRows,pcRows]=await Promise.all([api('/api/access'),api('/api/protocols'),api('/api/accounts'),api('/api/protocol-clients')]);
   accessCache=rows;accountCache=sshRows;window.__protocolClients=pcRows;window.__protocolData=stack;
-  const x=stack.xray,w=stack.wireguard,o=stack.openvpn;
-  const xAction=x.installed?'<button class="primary" onclick="createXrayInbound()">+ VLESS / VMess / Xray</button>':'<button class="primary" onclick="installProtocolAndReturn(\'xray\')">Install Xray Core</button>';
-  const wAction=!w.installed?'<button class="primary" onclick="installProtocolAndReturn(\'wireguard\')">Install</button>':(!w.config?'<button class="primary" onclick="bootstrapWireGuardFromAccess()">Bootstrap</button>':'<button class="primary" onclick="createWireGuardPeer()">+ Peer</button>');
-  const oAction=!o.installed?'<button class="primary" onclick="installProtocolAndReturn(\'openvpn\')">Install</button>':(!o.config?'<button class="primary" onclick="bootstrapOpenVPNFromAccess()">Bootstrap</button>':'<button class="primary" onclick="createOpenVPNClient()">+ Client</button>');
-  content.innerHTML=`
-  <div class="panel access-hero"><div><div class="eyebrow">ONE PLACE · ALL ACCESS TYPES</div><h2>Access Center</h2><p class="muted">ساخت، مدیریت، تمدید و تحویل کانفیگ‌های SSH، Xray، WireGuard و OpenVPN از یک صفحه. فایل Native برای Import و بسته ZIP رمزدار برای تحویل امن در دسترس است.</p></div><div class="access-total"><b>${rows.length}</b><span>managed access profiles</span></div></div>
-  <div class="access-create-grid">
-    <article class="access-create-card"><div class="access-protocol-icon">S</div><div><h3>SSH</h3><p>PIN/Password · Expiry · Sessions · Device/IP</p><button class="primary" onclick="createSshAccessModal()">+ SSH User</button></div></article>
-    <article class="access-create-card"><div class="access-protocol-icon">X</div><div><h3>Xray</h3><p>VLESS · VMess · Trojan · Shadowsocks · Hysteria2</p>${xAction}</div></article>
-    <article class="access-create-card"><div class="access-protocol-icon">W</div><div><h3>WireGuard</h3><p>Native .conf + QR + encrypted delivery bundle</p>${wAction}</div></article>
-    <article class="access-create-card"><div class="access-protocol-icon">O</div><div><h3>OpenVPN</h3><p>Native .ovpn + encrypted delivery bundle</p>${oAction}</div></article>
-  </div>
-  <div class="panel"><div class="panel-head access-head"><div><h3>همه دسترسی‌ها</h3><span id="accessCount">${rows.length} PROFILES</span></div><div class="filterbar"><input id="accessSearch" placeholder="جستجو نام / پروتکل / پلن" oninput="renderAccessRows()"><select id="accessFilter" onchange="renderAccessRows()"><option value="all">همه</option><option value="ssh">SSH</option><option value="xray">Xray</option><option value="wireguard">WireGuard</option><option value="openvpn">OpenVPN</option><option value="active">فعال</option><option value="expired">منقضی</option></select></div></div><div class="delivery-legend"><span>Native = فایل قابل Import مستقیم</span><span>Protected ZIP = AES-256 با رمز جداگانه</span><span>Legacy = اطلاعات قدیمی که Secret قابل بازیابی ندارد</span></div><div id="accessRows" class="access-table"></div></div>`;
-  renderAccessRows();
+  const counts={ssh:0,xray:0,wireguard:0,openvpn:0};rows.forEach(x=>{if(counts[x.kind]!==undefined)counts[x.kind]++});
+  const active=rows.filter(x=>x.status==='active').length,legacy=rows.filter(x=>x.legacy).length;
+  content.innerHTML=[
+    '<section class="access-command">',
+      '<div class="access-command-copy"><div class="eyebrow">UNIFIED ACCESS OPERATIONS</div><h2>مرکز دسترسی Makia</h2>',
+      '<p>ساخت، سیاست‌گذاری، خروجی Native و تحویل رمزدار برای تمام دسترسی‌های واقعی سرور؛ بدون دکمه نمایشی.</p>',
+      '<div class="hero-actions"><button class="primary action-lg" data-action="wizard-open">＋ ساخت دسترسی جدید</button>',
+      '<button class="ghost action-lg" data-action="self-test">بررسی سلامت</button></div></div>',
+      '<div class="access-command-stats"><div><b>'+rows.length+'</b><span>Total</span></div><div><b>'+active+'</b><span>Active</span></div><div><b>'+legacy+'</b><span>Legacy</span></div></div>',
+    '</section>',
+    '<section class="protocol-launch-grid">',
+      accessLaunchCard('ssh','SSH','Password / PIN · Expiry · Session / Device',counts.ssh,true),
+      accessLaunchCard('xray','Xray','VLESS · VMess · Trojan · Shadowsocks · Hysteria2',counts.xray,Boolean(stack.xray?.installed)),
+      accessLaunchCard('wireguard','WireGuard','Native .conf · QR · encrypted delivery',counts.wireguard,Boolean(stack.wireguard?.installed&&stack.wireguard?.config)),
+      accessLaunchCard('openvpn','OpenVPN','Inline .ovpn · PKI · encrypted delivery',counts.openvpn,Boolean(stack.openvpn?.installed&&stack.openvpn?.config)),
+    '</section>',
+    '<section class="panel access-directory">',
+      '<div class="panel-head directory-head"><div><h3>Directory</h3><span id="accessCount">'+rows.length+' PROFILES</span></div>',
+      '<div class="directory-tools"><div class="segmented" id="accessSegments">',
+        '<button class="active" data-filter-value="all">همه</button><button data-filter-value="ssh">SSH</button><button data-filter-value="xray">Xray</button><button data-filter-value="wireguard">WG</button><button data-filter-value="openvpn">OpenVPN</button>',
+      '</div><input id="accessSearch" class="search-input" placeholder="جستجو نام، پلن یا پروتکل…"></div></div>',
+      '<div class="directory-summary"><span><i class="legend-native"></i> Native export</span><span><i class="legend-protected"></i> Protected AES ZIP</span><span><i class="legend-legacy"></i> Legacy / reissue required</span></div>',
+      '<div id="accessRows" class="access-cards"></div>',
+    '</section>'
+  ].join('');
+  document.getElementById('accessSearch')?.addEventListener('input',renderAccessRows);
+  document.getElementById('accessSegments')?.addEventListener('click',e=>{
+    const b=e.target.closest('[data-filter-value]');if(!b)return;
+    document.querySelectorAll('#accessSegments [data-filter-value]').forEach(x=>x.classList.toggle('active',x===b));
+    window.__accessFilter=b.dataset.filterValue||'all';renderAccessRows();
+  });
+  window.__accessFilter='all';renderAccessRows();
 }
+
+function accessLaunchCard(kind,name,desc,count,ready){
+  let action='';
+  if(kind==='ssh') action='<button class="launch-action" data-action="wizard-open" data-kind="ssh">Create</button>';
+  else if(ready) action='<button class="launch-action" data-action="wizard-open" data-kind="'+kind+'">Create</button>';
+  else action='<button class="launch-action setup" data-action="protocol-setup" data-kind="'+kind+'">Setup</button>';
+  return '<article class="launch-card '+kind+'"><div class="launch-top"><span class="access-protocol-icon">'+name.slice(0,1)+'</span><span class="launch-count">'+count+'</span></div><h3>'+htmlEsc(name)+'</h3><p>'+htmlEsc(desc)+'</p>'+action+'</article>';
+}
+
 function renderAccessRows(){
   const root=document.getElementById('accessRows');if(!root)return;
-  const q=(document.getElementById('accessSearch')?.value||'').trim().toLowerCase(),f=document.getElementById('accessFilter')?.value||'all';
-  const rows=accessCache.filter(x=>{
-    const hay=(x.name+' '+x.protocol+' '+(x.plan||'')).toLowerCase();
-    if(q&&!hay.includes(q))return false;
-    if(['ssh','xray','wireguard','openvpn'].includes(f)&&x.kind!==f)return false;
-    if(f==='active'&&x.status!=='active')return false;
-    if(f==='expired'&&x.status!=='expired')return false;
-    return true;
+  const q=(document.getElementById('accessSearch')?.value||'').trim().toLowerCase();
+  const filter=window.__accessFilter||'all';
+  const rows=accessCache.filter(a=>{
+    const hay=(String(a.name||'')+' '+String(a.protocol||'')+' '+String(a.plan||'')).toLowerCase();
+    return (!q||hay.includes(q))&&(filter==='all'||a.kind===filter);
   });
-  document.getElementById('accessCount').textContent=rows.length+' / '+accessCache.length+' PROFILES';
-  root.innerHTML=rows.length?rows.map(accessRow).join(''):'<div class="empty">پروفایلی پیدا نشد.</div>';
+  const counter=document.getElementById('accessCount');if(counter)counter.textContent=rows.length+' / '+accessCache.length+' PROFILES';
+  root.innerHTML=rows.length?rows.map(accessCard).join(''):'<div class="empty">دسترسی مطابق فیلتر پیدا نشد.</div>';
 }
-function accessRow(a){
-  const quota=a.quota_bytes?fmtBytes(a.quota_bytes):'—',used=a.used_bytes?fmtBytes(a.used_bytes):'0 B';
-  const detail=a.kind==='ssh'?('Sessions '+(a.online||0)+'/'+(a.connection_limit||1)+' · Devices '+(a.device_limit||1)):a.kind==='xray'?('Used '+used+' / '+(a.quota_bytes?quota:'Unlimited')+' · IP '+(a.online||0)+'/'+(a.device_limit||1)):a.kind==='wireguard'?(a.address||'Native peer'):'Certificate profile';
-  const native=a.can_export?`<button class="ghost" onclick="downloadAccessNative('${a.kind}',${JSON.stringify(a.key)})">Native file</button>`:(a.kind==='wireguard'?`<button class="ghost" onclick="reissueWireGuard(${JSON.stringify(a.key)})">Reissue config</button>`:`<span class="status-chip warn">Reset credential</span>`);
-  const protectedBtn=a.can_export?`<button class="primary" onclick="downloadProtectedAccess('${a.kind}',${JSON.stringify(a.key)},${JSON.stringify(a.name)})">Protected ZIP</button>`:'';
-  const manage=(a.kind==='ssh'||a.kind==='xray')?`<button class="soft" onclick="manageAccess(${JSON.stringify(a.id)})">Manage</button>`:'';
-  return `<div class="access-row"><div><div class="client-main"><b>${a.name}</b><span class="protocol-pill">${String(a.protocol).toUpperCase()}</span><span class="status-chip ${a.status==='active'?'ok':a.status==='expired'?'bad':'warn'}">${a.status}</span>${a.legacy?'<span class="status-chip">Legacy</span>':''}</div><div class="muted">${detail}</div></div><div><b>${a.kind==='ssh'?(a.expire_date||'No expiry'):a.kind==='xray'?(a.expire_at?new Date(a.expire_at*1000).toLocaleDateString():'No expiry'):'Native config'}</b><div class="muted">${a.plan||a.kind}</div></div><div class="toolbar export-actions">${native}${protectedBtn}</div><div class="toolbar">${manage}<button class="danger" onclick="revokeAccess('${a.kind}',${JSON.stringify(a.key)},${JSON.stringify(a.name)})">Revoke</button></div></div>`;
+
+function accessCard(a){
+  const kind=htmlEsc(a.kind),name=htmlEsc(a.name),proto=htmlEsc(String(a.protocol||a.kind).toUpperCase());
+  const key=dataEnc(a.key),id=dataEnc(a.id),label=dataEnc(a.name);
+  const stateClass=a.status==='active'?'ok':a.status==='expired'?'bad':'warn';
+  let meta='',policy='';
+  if(a.kind==='ssh'){
+    meta=(a.expire_date||'بدون انقضا')+(a.plan?' · '+htmlEsc(a.plan):'');
+    policy='Sessions '+Number(a.online||0)+'/'+Number(a.connection_limit||1)+' · Devices '+Number(a.device_limit||1);
+  }else if(a.kind==='xray'){
+    const quota=a.quota_bytes?fmtBytes(a.quota_bytes):'Unlimited';
+    meta=a.expire_at?new Date(a.expire_at*1000).toLocaleDateString():'بدون انقضا';
+    policy=fmtBytes(a.used_bytes||0)+' / '+quota+' · IP '+Number(a.online||0)+'/'+Number(a.device_limit||1);
+  }else if(a.kind==='wireguard'){
+    meta=htmlEsc(a.address||'WireGuard peer');policy='Native tunnel profile';
+  }else{meta='Certificate profile';policy='OpenVPN PKI access'}
+  const exportAction=a.can_export
+    ? '<button class="icon-action primaryish" data-action="protected-export" data-kind="'+kind+'" data-key="'+key+'" data-name="'+label+'">Protected ZIP</button><button class="icon-action" data-action="native-export" data-kind="'+kind+'" data-key="'+key+'">Native</button>'
+    : (a.kind==='wireguard'
+      ? '<button class="icon-action warnish" data-action="wg-reissue" data-key="'+key+'">Reissue</button>'
+      : '<button class="icon-action warnish" data-action="manage-access" data-id="'+id+'">Reset credential</button>');
+  const manage=(a.kind==='ssh'||a.kind==='xray')?'<button class="more-action" data-action="manage-access" data-id="'+id+'">Manage</button>':'';
+  return [
+    '<article class="access-profile '+kind+'">',
+      '<div class="profile-identity"><div class="profile-avatar">'+htmlEsc(String(a.name||'?').slice(0,1).toUpperCase())+'</div><div><div class="profile-name"><b>'+name+'</b><span class="protocol-pill">'+proto+'</span>',
+      '<span class="status-chip '+stateClass+'">'+htmlEsc(a.status)+'</span>'+(a.legacy?'<span class="status-chip">Legacy</span>':'')+'</div><span>'+policy+'</span></div></div>',
+      '<div class="profile-meta"><span>Expiry / Type</span><b>'+meta+'</b></div>',
+      '<div class="profile-delivery">'+exportAction+'</div>',
+      '<div class="profile-actions">'+manage+'<button class="more-action dangerish" data-action="revoke-access" data-kind="'+kind+'" data-key="'+key+'" data-name="'+label+'">Revoke</button></div>',
+    '</article>'
+  ].join('');
 }
-async function installProtocolAndReturn(component){if(!confirm('Install '+component+' on this server?'))return;try{await api('/api/protocols/install',{method:'POST',body:JSON.stringify({component})});toast(component+' installed');await access()}catch(e){alert(e.message)}}
-async function bootstrapWireGuardFromAccess(){await bootstrapWireGuard();setTimeout(()=>access(),350)}
-async function bootstrapOpenVPNFromAccess(){await bootstrapOpenVPN();setTimeout(()=>access(),350)}
-function createSshAccessModal(){
-  modalRoot.innerHTML=`<div class="modal-backdrop" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-head"><div><div class="eyebrow">SSH ACCESS</div><h3>ساخت کاربر SSH</h3></div><button class="close-btn" onclick="closeModal()">×</button></div><div class="form-grid"><label>Username<input id="acSshUser" placeholder="user001"></label><label>Password / PIN<div class="input-action"><input id="acSshPass" type="text"><button class="soft" onclick="setPass('acSshPass',6)">PIN 6</button></div><div class="password-tools"><button class="soft" onclick="setPass('acSshPass',4)">PIN 4</button><button class="soft recommended" onclick="setPass('acSshPass',6)">PIN 6</button><button class="soft" onclick="setPass('acSshPass','easy8')">Easy 8</button><button class="soft" onclick="setPass('acSshPass','strong')">Strong</button></div></label><label>Expire<input id="acSshExpire" type="date"><div class="password-tools duration-tools"><button class="soft" onclick="setExpiryPreset('acSshExpire',7)">7D</button><button class="soft recommended" onclick="setExpiryPreset('acSshExpire',30)">30D</button><button class="soft" onclick="setExpiryPreset('acSshExpire',60)">60D</button><button class="soft" onclick="setExpiryPreset('acSshExpire',90)">90D</button><button class="soft" onclick="setExpiryPreset('acSshExpire',0)">∞</button></div></label><label>Plan<input id="acSshPlan" placeholder="VIP / Trial"></label><label>Session Limit<input id="acSshSessions" type="number" min="1" max="50" value="1"></label><label>Device/IP Limit<input id="acSshDevices" type="number" min="1" max="50" value="1"></label></div><label class="single-label">Note<textarea id="acSshNote"></textarea></label><div class="toolbar" style="margin-top:16px"><button class="primary" onclick="submitSshAccess()">Create SSH Access</button><button class="ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
-  setExpiryPreset('acSshExpire',30);setPass('acSshPass',6);suggestAccessUsername();
+
+async function openProvisionWizard(protocol){
+  if(!window.__protocolData) window.__protocolData=await api('/api/protocols');
+  const defs=await api('/api/accounts/new-defaults').catch(()=>({username:'user001'}));
+  provisionState={
+    step:protocol?2:1,protocol:protocol||'',name:defs.username||'user001',
+    endpoint:window.PANEL_DOMAIN||location.hostname,password:'',passwordMode:'pin6',
+    expireDate:'',plan:'',note:'',sessions:1,devices:1,
+    xrayProtocol:'vless',port:2087,transport:'tcp',security:'none',path:'/makia',
+    sni:window.PANEL_DOMAIN||'',realityDest:'www.cloudflare.com:443',
+    quota:50,expireDays:30,resetDays:30,dns:'1.1.1.1',ovpnProto:'udp',ovpnPort:1194,
+    packagePassword:''
+  };
+  if(protocol==='ssh'){
+    const sec=await api('/api/accounts/generate-secret?mode=pin6').catch(()=>({secret:''}));provisionState.password=sec.secret||'';
+    provisionState.expireDate=dateAfterDays(30);
+  }
+  renderProvisionWizard();
 }
-async function suggestAccessUsername(){try{const d=await api('/api/accounts/new-defaults');const el=document.getElementById('acSshUser');if(el)el.value=d.username||''}catch{}}
-async function submitSshAccess(){
-  const p={username:acSshUser.value.trim(),password:acSshPass.value,password_mode:'manual',expire_date:acSshExpire.value||null,plan:acSshPlan.value,note:acSshNote.value,connection_limit:Number(acSshSessions.value||1),device_limit:Number(acSshDevices.value||1),quota_mb:0,renewal_days:0};
-  if(!p.username||!p.password){alert('Username و Password لازم است.');return}
-  try{const r=await api('/api/accounts',{method:'POST',body:JSON.stringify(p)});closeModal();credentialModal({...p,password:r.password||p.password});setTimeout(()=>access(),250)}catch(e){alert(e.message)}
+
+function dateAfterDays(days){const d=new Date();d.setHours(12,0,0,0);d.setDate(d.getDate()+Number(days));return d.toISOString().slice(0,10)}
+
+function wizardProtocolReady(kind){
+  const s=window.__protocolData||{};
+  if(kind==='ssh')return true;
+  if(kind==='xray')return Boolean(s.xray?.installed);
+  if(kind==='wireguard')return Boolean(s.wireguard?.installed&&s.wireguard?.config);
+  if(kind==='openvpn')return Boolean(s.openvpn?.installed&&s.openvpn?.config);
+  return false;
 }
+
+function renderProvisionWizard(){
+  const s=provisionState;if(!s)return;
+  const steps=['Protocol','Identity','Policy','Review'];
+  let body='';
+  if(s.step===1){
+    body='<div class="wizard-protocols">'+['ssh','xray','wireguard','openvpn'].map(k=>{
+      const names={ssh:'SSH',xray:'Xray',wireguard:'WireGuard',openvpn:'OpenVPN'};
+      const desc={ssh:'PIN / Password + Session policy',xray:'VLESS / VMess / Trojan / …',wireguard:'Native .conf + QR',openvpn:'Inline .ovpn profile'};
+      const ready=wizardProtocolReady(k);
+      return '<button class="wizard-protocol '+(ready?'ready':'not-ready')+'" data-action="'+(ready?'wizard-protocol':'protocol-setup')+'" data-kind="'+k+'"><span>'+names[k].slice(0,1)+'</span><div><b>'+names[k]+'</b><small>'+desc[k]+'</small></div><em>'+(ready?'READY':'SETUP')+'</em></button>';
+    }).join('')+'</div>';
+  }else if(s.step===2){
+    body=wizardIdentityFields(s);
+  }else if(s.step===3){
+    body=wizardPolicyFields(s);
+  }else{
+    body=wizardReview(s);
+  }
+  const footer=s.step===1
+    ? '<button class="ghost" data-action="modal-close">انصراف</button>'
+    : '<button class="ghost" data-action="wizard-prev">قبلی</button>'+(s.step<4?'<button class="primary" data-action="wizard-next">ادامه</button>':'<button class="primary action-lg" data-action="wizard-create">ساخت و آماده‌سازی</button>');
+  modalRoot.innerHTML=[
+    '<div class="modal-backdrop wizard-backdrop"><div class="modal provision-wizard">',
+      '<div class="wizard-head"><div><div class="eyebrow">SMART PROVISIONING</div><h3>ساخت دسترسی جدید</h3></div><button class="close-btn" data-action="modal-close">×</button></div>',
+      '<div class="wizard-steps">'+steps.map((x,i)=>'<div class="'+(s.step===i+1?'active':s.step>i+1?'done':'')+'"><i>'+(s.step>i+1?'✓':i+1)+'</i><span>'+x+'</span></div>').join('')+'</div>',
+      '<div class="wizard-body">'+body+'</div>',
+      '<div class="wizard-footer">'+footer+'</div>',
+    '</div></div>'
+  ].join('');
+}
+
+function wizardIdentityFields(s){
+  if(s.protocol==='ssh') return [
+    '<div class="wizard-section-title"><h4>هویت کاربر</h4><p>اطلاعاتی که برای ورود SSH استفاده می‌شود.</p></div>',
+    '<div class="wizard-form two"><label>Username<input id="wizName" value="'+htmlEsc(s.name)+'"></label>',
+    '<label>Password / PIN<div class="input-action"><input id="wizPassword" value="'+htmlEsc(s.password)+'"><button class="soft" data-action="wizard-secret" data-mode="pin6">Generate</button></div>',
+    '<div class="preset-row"><button data-action="wizard-secret" data-mode="pin4">PIN 4</button><button data-action="wizard-secret" data-mode="pin6">PIN 6</button><button data-action="wizard-secret" data-mode="easy8">Easy 8</button><button data-action="wizard-secret" data-mode="strong">Strong</button></div></label>',
+    '<label>Plan<input id="wizPlan" value="'+htmlEsc(s.plan)+'" placeholder="VIP / Trial / 30D"></label>',
+    '<label>Internal note<input id="wizNote" value="'+htmlEsc(s.note)+'" placeholder="نام مشتری / سفارش"></label></div>'
+  ].join('');
+  if(s.protocol==='xray') return [
+    '<div class="wizard-section-title"><h4>پروفایل Xray</h4><p>Protocol و Endpoint عمومی را مشخص کن.</p></div>',
+    '<div class="wizard-form two"><label>Protocol<select id="wizXrayProtocol">',
+    ['vless','vmess','trojan','shadowsocks','hysteria2','http','socks'].map(x=>'<option value="'+x+'" '+(s.xrayProtocol===x?'selected':'')+'>'+x.toUpperCase()+'</option>').join(''),
+    '</select></label><label>Client name<input id="wizName" value="'+htmlEsc(s.name)+'"></label>',
+    '<label>Public domain / IP<input id="wizEndpoint" value="'+htmlEsc(s.endpoint)+'"></label>',
+    '<label>Port<input id="wizPort" type="number" min="1" max="65535" value="'+Number(s.port)+'"></label></div>'
+  ].join('');
+  if(s.protocol==='wireguard') return [
+    '<div class="wizard-section-title"><h4>WireGuard Peer</h4><p>برای هر دستگاه یک Peer مستقل بساز.</p></div>',
+    '<div class="wizard-form two"><label>Peer name<input id="wizName" value="'+htmlEsc(s.name)+'"></label>',
+    '<label>Public domain / IP<input id="wizEndpoint" value="'+htmlEsc(s.endpoint)+'"></label>',
+    '<label>DNS<input id="wizDns" value="'+htmlEsc(s.dns)+'"></label></div>'
+  ].join('');
+  return [
+    '<div class="wizard-section-title"><h4>OpenVPN Client</h4><p>Certificate مستقل برای این Client ساخته می‌شود.</p></div>',
+    '<div class="wizard-form two"><label>Client name<input id="wizName" value="'+htmlEsc(s.name)+'"></label>',
+    '<label>Public domain / IP<input id="wizEndpoint" value="'+htmlEsc(s.endpoint)+'"></label>',
+    '<label>Port<input id="wizOvpnPort" type="number" min="1" max="65535" value="'+Number(s.ovpnPort)+'"></label>',
+    '<label>Transport<select id="wizOvpnProto"><option value="udp" '+(s.ovpnProto==='udp'?'selected':'')+'>UDP</option><option value="tcp" '+(s.ovpnProto==='tcp'?'selected':'')+'>TCP</option></select></label></div>'
+  ].join('');
+}
+
+function wizardPolicyFields(s){
+  if(s.protocol==='ssh') return [
+    '<div class="wizard-section-title"><h4>Policy</h4><p>انقضا، نشست همزمان و تعداد IP/دستگاه را تنظیم کن.</p></div>',
+    '<div class="wizard-form three"><label>Expire date<input id="wizExpireDate" type="date" value="'+htmlEsc(s.expireDate)+'"><div class="preset-row"><button data-action="wizard-expiry" data-days="7">7D</button><button data-action="wizard-expiry" data-days="30">30D</button><button data-action="wizard-expiry" data-days="60">60D</button><button data-action="wizard-expiry" data-days="90">90D</button><button data-action="wizard-expiry" data-days="0">∞</button></div></label>',
+    '<label>Concurrent Sessions<input id="wizSessions" type="number" min="1" max="50" value="'+Number(s.sessions)+'"></label>',
+    '<label>Device / IP Limit<input id="wizDevices" type="number" min="1" max="50" value="'+Number(s.devices)+'"></label></div>',
+    '<div class="wizard-note"><b>Security</b><span>PIN 4 مجاز است، اما برای سرویس عمومی PIN 6 یا Strong توصیه می‌شود.</span></div>'
+  ].join('');
+  if(s.protocol==='xray') return [
+    '<div class="wizard-section-title"><h4>Network & Limits</h4><p>Transport، Security و محدودیت‌های Client را تعیین کن.</p></div>',
+    '<div class="wizard-form three"><label>Transport<select id="wizTransport">',
+    ['tcp','ws','grpc','httpupgrade','xhttp','kcp'].map(x=>'<option value="'+x+'" '+(s.transport===x?'selected':'')+'>'+x.toUpperCase()+'</option>').join(''),
+    '</select></label><label>Security<select id="wizSecurity"><option value="none" '+(s.security==='none'?'selected':'')+'>None</option><option value="tls" '+(s.security==='tls'?'selected':'')+'>TLS</option><option value="reality" '+(s.security==='reality'?'selected':'')+'>REALITY</option></select></label>',
+    '<label>Path / Service<input id="wizPath" value="'+htmlEsc(s.path)+'"></label>',
+    '<label>SNI / Domain<input id="wizSni" value="'+htmlEsc(s.sni)+'"></label>',
+    '<label>REALITY target<input id="wizReality" value="'+htmlEsc(s.realityDest)+'"></label>',
+    '<label>Quota GB<input id="wizQuota" type="number" min="0" value="'+Number(s.quota)+'"><small>0 = Unlimited</small></label>',
+    '<label>Expiry days<input id="wizExpireDays" type="number" min="0" max="3650" value="'+Number(s.expireDays)+'"></label>',
+    '<label>Device / IP Limit<input id="wizDevices" type="number" min="1" max="50" value="'+Number(s.devices)+'"></label>',
+    '<label>Traffic reset days<input id="wizResetDays" type="number" min="0" max="3650" value="'+Number(s.resetDays)+'"></label></div>'
+  ].join('');
+  return '<div class="wizard-review-hint"><div class="review-icon">✓</div><h4>تنظیمات پایه آماده است</h4><p>برای '+htmlEsc(s.protocol)+' تنظیم اضافی لازم نیست. در مرحله بعد اطلاعات و رمز بسته تحویل را بررسی کن.</p></div>';
+}
+
+function wizardReview(s){
+  const summary=[];
+  summary.push(['Protocol',s.protocol==='xray'?s.xrayProtocol.toUpperCase():s.protocol.toUpperCase()]);
+  summary.push(['Name',s.name]);
+  if(s.endpoint)summary.push(['Endpoint',s.endpoint]);
+  if(s.protocol==='ssh'){summary.push(['Expire',s.expireDate||'No expiry']);summary.push(['Sessions',s.sessions]);summary.push(['Devices',s.devices])}
+  if(s.protocol==='xray'){summary.push(['Port',s.port]);summary.push(['Transport',s.transport]);summary.push(['Security',s.security]);summary.push(['Quota',s.quota?String(s.quota)+' GB':'Unlimited']);summary.push(['Days',s.expireDays||'Unlimited'])}
+  return [
+    '<div class="wizard-section-title"><h4>Review & Delivery</h4><p>قبل از ساخت، اطلاعات نهایی را کنترل کن.</p></div>',
+    '<div class="review-grid">'+summary.map(x=>'<div><span>'+htmlEsc(x[0])+'</span><b>'+htmlEsc(x[1])+'</b></div>').join('')+'</div>',
+    '<div class="delivery-box"><div><b>Protected delivery package</b><span>پس از ساخت می‌توانی Native file یا ZIP رمزدار AES-256 را دانلود کنی.</span></div>',
+    '<label>Package PIN<div class="input-action"><input id="wizPackagePassword" value="'+htmlEsc(s.packagePassword)+'" minlength="4"><button class="soft" data-action="wizard-package-pin">Generate</button></div></label></div>'
+  ].join('');
+}
+
+function captureWizard(){
+  const s=provisionState;if(!s)return;
+  const val=id=>document.getElementById(id)?.value;
+  if(val('wizName')!==undefined)s.name=val('wizName').trim();
+  if(val('wizEndpoint')!==undefined)s.endpoint=val('wizEndpoint').trim();
+  if(val('wizPassword')!==undefined)s.password=val('wizPassword');
+  if(val('wizPlan')!==undefined)s.plan=val('wizPlan');
+  if(val('wizNote')!==undefined)s.note=val('wizNote');
+  if(val('wizExpireDate')!==undefined)s.expireDate=val('wizExpireDate');
+  if(val('wizSessions')!==undefined)s.sessions=Number(val('wizSessions')||1);
+  if(val('wizDevices')!==undefined)s.devices=Number(val('wizDevices')||1);
+  if(val('wizXrayProtocol')!==undefined)s.xrayProtocol=val('wizXrayProtocol');
+  if(val('wizPort')!==undefined)s.port=Number(val('wizPort')||2087);
+  if(val('wizTransport')!==undefined)s.transport=val('wizTransport');
+  if(val('wizSecurity')!==undefined)s.security=val('wizSecurity');
+  if(val('wizPath')!==undefined)s.path=val('wizPath');
+  if(val('wizSni')!==undefined)s.sni=val('wizSni');
+  if(val('wizReality')!==undefined)s.realityDest=val('wizReality');
+  if(val('wizQuota')!==undefined)s.quota=Number(val('wizQuota')||0);
+  if(val('wizExpireDays')!==undefined)s.expireDays=Number(val('wizExpireDays')||0);
+  if(val('wizResetDays')!==undefined)s.resetDays=Number(val('wizResetDays')||0);
+  if(val('wizDns')!==undefined)s.dns=val('wizDns');
+  if(val('wizOvpnPort')!==undefined)s.ovpnPort=Number(val('wizOvpnPort')||1194);
+  if(val('wizOvpnProto')!==undefined)s.ovpnProto=val('wizOvpnProto');
+  if(val('wizPackagePassword')!==undefined)s.packagePassword=val('wizPackagePassword');
+}
+
+function validateWizardStep(){
+  const s=provisionState;
+  if(s.step===2){
+    if(!s.name)return 'نام کاربر/Client لازم است.';
+    if(s.protocol==='ssh'&&(!s.password||s.password.length<4))return 'Password/PIN حداقل ۴ کاراکتر باشد.';
+    if(s.protocol!=='ssh'&&!s.endpoint)return 'دامنه یا IP عمومی لازم است.';
+    if(s.protocol==='xray'&&(!s.port||s.port<1||s.port>65535))return 'Port معتبر وارد کن.';
+  }
+  if(s.step===3&&s.protocol==='xray'&&s.security==='reality'&&s.xrayProtocol!=='vless')return 'REALITY در Wizard فقط برای VLESS فعال است.';
+  return '';
+}
+
+async function wizardNext(){
+  captureWizard();const err=validateWizardStep();if(err){alert(err);return}
+  provisionState.step=Math.min(4,provisionState.step+1);
+  if(provisionState.step===4&&!provisionState.packagePassword){
+    const r=await api('/api/accounts/generate-secret?mode=pin6').catch(()=>({secret:''}));provisionState.packagePassword=r.secret||'';
+  }
+  renderProvisionWizard();
+}
+function wizardPrev(){captureWizard();provisionState.step=Math.max(1,provisionState.step-1);renderProvisionWizard()}
+
+async function createProvisionedAccess(){
+  captureWizard();const s=provisionState;if(!s)return;
+  if(!s.packagePassword||s.packagePassword.length<4){alert('Package PIN حداقل ۴ کاراکتر باشد.');return}
+  const createBtn=document.querySelector('[data-action="wizard-create"]');if(createBtn){createBtn.disabled=true;createBtn.textContent='در حال ساخت…'}
+  try{
+    let r,kind=s.protocol,key=s.name;
+    if(s.protocol==='ssh'){
+      r=await api('/api/accounts',{method:'POST',body:JSON.stringify({username:s.name,password:s.password,password_mode:'manual',expire_date:s.expireDate||null,plan:s.plan,note:s.note,connection_limit:s.sessions,device_limit:s.devices,quota_mb:0,renewal_days:0})});
+      key=s.name;
+    }else if(s.protocol==='xray'){
+      r=await api('/api/protocols/xray/quick-inbound',{method:'POST',body:JSON.stringify({protocol:s.xrayProtocol,port:s.port,name:s.name,endpoint:s.endpoint,transport:s.transport,security:s.security,path_value:s.path,server_name:s.sni,reality_dest:s.realityDest,quota_gb:s.quota,expire_days:s.expireDays,ip_limit:s.devices,reset_days:s.resetDays})});
+      kind='xray';key=String(r.client_id);
+    }else if(s.protocol==='wireguard'){
+      r=await api('/api/protocols/wireguard/peers',{method:'POST',body:JSON.stringify({name:s.name,endpoint:s.endpoint,dns:s.dns})});key=s.name;
+    }else{
+      r=await api('/api/protocols/openvpn/clients',{method:'POST',body:JSON.stringify({name:s.name,endpoint:s.endpoint,port:s.ovpnPort,proto:s.ovpnProto})});key=s.name;
+    }
+    showProvisionSuccess(kind,key,s.name,s.packagePassword,s.protocol==='ssh'?s.password:null,r);
+  }catch(e){alert(e.message);if(createBtn){createBtn.disabled=false;createBtn.textContent='ساخت و آماده‌سازی'}}
+}
+
+function showProvisionSuccess(kind,key,name,packagePassword,loginSecret,result){
+  provisionState=null;
+  modalRoot.innerHTML=[
+    '<div class="modal-backdrop"><div class="modal provision-success">',
+      '<div class="success-mark">✓</div><div class="eyebrow centered">ACCESS READY</div><h3>'+htmlEsc(name)+' آماده شد</h3>',
+      '<p>پروفایل روی سرور ساخته شده و بسته‌های تحویل آماده دانلود هستند.</p>',
+      '<div class="success-grid"><div><span>Protocol</span><b>'+htmlEsc(kind.toUpperCase())+'</b></div><div><span>Package PIN</span><b class="credential-secret">'+htmlEsc(packagePassword)+'</b></div>',
+      (loginSecret?'<div><span>Login Password</span><b class="credential-secret">'+htmlEsc(loginSecret)+'</b></div>':'')+'</div>',
+      '<div class="delivery-actions"><button class="primary action-lg" data-action="protected-download-now" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'" data-name="'+dataEnc(name)+'" data-password="'+dataEnc(packagePassword)+'">Download Protected ZIP</button>',
+      '<button class="ghost action-lg" data-action="native-export" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'">Native file</button></div>',
+      '<div class="wizard-note"><b>تحویل امن</b><span>فایل و PIN را در دو پیام/کانال جداگانه برای کاربر بفرست.</span></div>',
+      '<button class="soft wide-btn" data-action="success-done">بازگشت به Access Center</button>',
+    '</div></div>'
+  ].join('');
+}
+
+async function openProtectedExport(kind,key,name){
+  const r=await api('/api/accounts/generate-secret?mode=pin6').catch(()=>({secret:''}));
+  modalRoot.innerHTML=[
+    '<div class="modal-backdrop"><div class="modal export-modal">',
+      '<div class="wizard-head"><div><div class="eyebrow">ENCRYPTED DELIVERY</div><h3>Protected ZIP · '+htmlEsc(name)+'</h3></div><button class="close-btn" data-action="modal-close">×</button></div>',
+      '<div class="export-shield">◆</div><p>فایل‌های Client با AES-256 داخل ZIP رمزدار قرار می‌گیرند.</p>',
+      '<label class="single-label">Package PIN / Password<input id="protectedPassword" value="'+htmlEsc(r.secret||'')+'" minlength="4"></label>',
+      '<div class="wizard-note"><b>نکته</b><span>این رمز فقط برای باز کردن بسته است و با Password سرویس یکی نیست.</span></div>',
+      '<div class="wizard-footer"><button class="ghost" data-action="modal-close">Cancel</button><button class="primary" data-action="protected-download-confirm" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'" data-name="'+dataEnc(name)+'">Download ZIP</button></div>',
+    '</div></div>'
+  ].join('');
+}
+
+async function performProtectedDownload(kind,key,name,password){
+  if(!password||password.length<4){alert('رمز بسته حداقل ۴ کاراکتر باشد.');return}
+  try{
+    await fetchDownload('/api/access/'+encodeURIComponent(kind)+'/'+encodeURIComponent(key)+'/package',{
+      method:'POST',headers:{'Content-Type':'application/json','X-Makia-Request':'1'},body:JSON.stringify({password})
+    },'makia-'+kind+'-'+name+'.zip');
+    toast('Protected ZIP دانلود شد');
+  }catch(e){alert('Protected ZIP: '+e.message)}
+}
+
+async function downloadAccessNative(kind,key){
+  try{await fetchDownload('/api/access/'+encodeURIComponent(kind)+'/'+encodeURIComponent(key)+'/native',{},'makia-'+kind+'-'+key);toast('Native file دانلود شد')}
+  catch(e){alert('Native export: '+e.message)}
+}
+
 function manageAccess(id){
-  const a=accessCache.find(x=>x.id===id);if(!a)return;
+  const a=accessCache.find(x=>String(x.id)===String(id));if(!a)return;
   if(a.kind==='ssh'){const row=accountCache.find(x=>x.username===a.key);if(row)return editAccount(row)}
   if(a.kind==='xray'){const row=(window.__protocolClients||[]).find(x=>String(x.id)===String(a.key));if(row)return editProtocolClient(row.id)}
 }
-function downloadAccessNative(kind,key){location.href='/api/access/'+encodeURIComponent(kind)+'/'+encodeURIComponent(key)+'/native'}
-async function downloadProtectedAccess(kind,key,name){
-  let generated;try{generated=(await api('/api/accounts/generate-secret?mode=pin6')).secret}catch{generated=''}
-  const password=prompt('رمز بسته ZIP را تعیین کن؛ این رمز را جدا از فایل برای کاربر بفرست.',generated||'');
-  if(!password)return;
-  try{
-    const r=await fetch('/api/access/'+encodeURIComponent(kind)+'/'+encodeURIComponent(key)+'/package',{method:'POST',headers:{'Content-Type':'application/json','X-Makia-Request':'1'},body:JSON.stringify({password})});
-    if(!r.ok){let j={};try{j=await r.json()}catch{}throw new Error(j.detail||'Export failed')}
-    const blob=await r.blob(),cd=r.headers.get('content-disposition')||'',m=cd.match(/filename="([^"]+)"/),file=m?m[1]:('makia-'+name+'.zip');
-    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=file;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),500);
-    alert('Protected ZIP ساخته شد. رمز بسته: '+password+'\nرمز را جداگانه برای کاربر ارسال کن.');
-  }catch(e){alert(e.message)}
+
+async function revokeAccess(kind,key,name){
+  if(!confirm('دسترسی '+name+' لغو شود؟ این عملیات روی سرویس واقعی اعمال می‌شود.'))return;
+  try{await api('/api/access/'+encodeURIComponent(kind)+'/'+encodeURIComponent(key),{method:'DELETE'});toast('Access revoked');await access()}catch(e){alert(e.message)}
 }
-async function revokeAccess(kind,key,name){if(!confirm('دسترسی '+name+' لغو/حذف شود؟'))return;try{await api('/api/access/'+encodeURIComponent(kind)+'/'+encodeURIComponent(key),{method:'DELETE'});toast('Access revoked');await access()}catch(e){alert(e.message)}}
 
 async function reissueWireGuard(name){
-  if(!confirm('Reissue، کانفیگ قدیمی '+name+' را باطل می‌کند. ادامه می‌دهی؟'))return;
-  const endpoint=prompt('Public domain or server IP',window.PANEL_DOMAIN||location.hostname);if(!endpoint)return;
-  const dns=prompt('Client DNS','1.1.1.1')||'1.1.1.1';
+  if(!confirm('Peer قدیمی '+name+' باطل و Key جدید ساخته شود؟'))return;
+  const endpoint=window.PANEL_DOMAIN||location.hostname;
   try{
     await api('/api/access/wireguard/'+encodeURIComponent(name),{method:'DELETE'});
-    const r=await api('/api/protocols/wireguard/peers',{method:'POST',body:JSON.stringify({name,endpoint,dns})});
-    configModal('WireGuard · '+name,r.config,name+'.conf','wireguard',name);
+    const r=await api('/api/protocols/wireguard/peers',{method:'POST',body:JSON.stringify({name,endpoint,dns:'1.1.1.1'})});
+    showProvisionSuccess('wireguard',name,name,(await api('/api/accounts/generate-secret?mode=pin6')).secret,null,r);
   }catch(e){alert(e.message)}
+}
+
+async function openProtocolSetup(kind){
+  if(kind==='xray'){
+    modalRoot.innerHTML='<div class="modal-backdrop"><div class="modal setup-modal"><div class="wizard-head"><div><div class="eyebrow">ENGINE SETUP</div><h3>Install Xray Core</h3></div><button class="close-btn" data-action="modal-close">×</button></div><p>هسته Xray با Installer رسمی XTLS نصب و به systemd متصل می‌شود.</p><div class="wizard-note"><b>Real operation</b><span>این عملیات روی VPS package/service نصب می‌کند.</span></div><div class="wizard-footer"><button class="ghost" data-action="modal-close">Cancel</button><button class="primary" data-action="protocol-install" data-kind="xray">Install Xray</button></div></div></div>';
+    return;
+  }
+  const installed=kind==='wireguard'?Boolean(window.__protocolData?.wireguard?.installed):Boolean(window.__protocolData?.openvpn?.installed);
+  const fields=kind==='wireguard'
+    ? '<label>UDP Port<input id="setupPort" type="number" value="51820"></label><label>Tunnel CIDR<input id="setupCidr" value="10.66.66.1/24"></label>'
+    : '<label>Port<input id="setupPort" type="number" value="1194"></label><label>Transport<select id="setupProto"><option value="udp">UDP</option><option value="tcp">TCP</option></select></label>';
+  modalRoot.innerHTML='<div class="modal-backdrop"><div class="modal setup-modal"><div class="wizard-head"><div><div class="eyebrow">PROTOCOL SETUP</div><h3>'+htmlEsc(kind==='wireguard'?'WireGuard':'OpenVPN')+'</h3></div><button class="close-btn" data-action="modal-close">×</button></div><div class="wizard-form two">'+fields+'</div><div class="wizard-footer"><button class="ghost" data-action="modal-close">Cancel</button><button class="primary" data-action="protocol-bootstrap" data-kind="'+kind+'" data-installed="'+(installed?'1':'0')+'">'+(installed?'Bootstrap server':'Install & Bootstrap')+'</button></div></div></div>';
+}
+
+async function performProtocolInstall(kind){
+  const btn=document.querySelector('[data-action="protocol-install"]');if(btn){btn.disabled=true;btn.textContent='Installing…'}
+  try{await api('/api/protocols/install',{method:'POST',body:JSON.stringify({component:kind})});toast(kind+' installed');closeModal();window.__protocolData=await api('/api/protocols');await access()}
+  catch(e){alert(e.message);if(btn){btn.disabled=false;btn.textContent='Install'}}
+}
+
+async function performProtocolBootstrap(kind,installed){
+  const port=Number(document.getElementById('setupPort')?.value||0);if(!port){alert('Port معتبر وارد کن.');return}
+  try{
+    if(!installed)await api('/api/protocols/install',{method:'POST',body:JSON.stringify({component:kind})});
+    if(kind==='wireguard'){
+      const cidr=document.getElementById('setupCidr')?.value||'10.66.66.1/24';
+      await api('/api/protocols/wireguard/bootstrap',{method:'POST',body:JSON.stringify({port,cidr})});
+    }else{
+      const proto=document.getElementById('setupProto')?.value||'udp';
+      await api('/api/protocols/openvpn/bootstrap',{method:'POST',body:JSON.stringify({port,proto})});
+    }
+    toast(kind+' ready');closeModal();window.__protocolData=await api('/api/protocols');await access();
+  }catch(e){alert(e.message)}
+}
+
+async function runSelfTest(){
+  try{
+    const r=await api('/api/diagnostics/self-test');
+    const checks=(r.checks||[]);
+    modalRoot.innerHTML=[
+      '<div class="modal-backdrop"><div class="modal diagnostics-modal"><div class="wizard-head"><div><div class="eyebrow">RUNTIME VERIFICATION</div><h3>Self-Test · '+htmlEsc(r.summary)+'</h3></div><button class="close-btn" data-action="modal-close">×</button></div>',
+      '<div class="diagnostic-score '+(r.ok?'pass':'fail')+'"><b>'+(r.ok?'PASS':'FAIL')+'</b><span>'+Number(r.critical||0)+' critical · '+Number(r.warnings||0)+' warnings</span></div>',
+      '<div class="diagnostic-list">'+checks.map(x=>'<div><i class="'+(x.ok?'ok':'bad')+'">'+(x.ok?'✓':'!')+'</i><div><b>'+htmlEsc(x.name)+'</b><span>'+htmlEsc(x.detail)+'</span></div></div>').join('')+'</div>',
+      '<div class="wizard-footer"><button class="primary" data-action="modal-close">Done</button></div></div></div>'
+    ].join('');
+  }catch(e){alert('Self-Test: '+e.message)}
 }
 
 async function accounts(){
