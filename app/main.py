@@ -200,10 +200,12 @@ def require_access_kind(request:Request,kind:str,mutation:bool=False):
 def support_snapshot():
     username=(os.getenv("MAKIA_SUPPORT_TELEGRAM") or "").strip().lstrip("@")
     webhook=(os.getenv("MAKIA_SUPPORT_WEBHOOK_URL") or "").strip()
+    webhook_token=(os.getenv("MAKIA_SUPPORT_WEBHOOK_TOKEN") or "").strip()
     return {
         "telegram_username":username,
         "telegram_url":f"https://t.me/{username}" if username else "",
         "webhook_enabled":bool(webhook),
+        "control_plane_connected":bool(webhook and webhook_token),
         "admin_network_restricted":bool((os.getenv("MAKIA_ADMIN_ALLOWED_CIDRS") or "").strip()),
     }
 
@@ -518,10 +520,14 @@ def _deliver_support_request(payload:dict):
     parsed=urllib.parse.urlparse(url)
     if parsed.scheme!="https" or not parsed.netloc:
         return {"delivered":False,"status":"invalid_webhook","remote_ticket_id":""}
+    webhook_token=(os.getenv("MAKIA_SUPPORT_WEBHOOK_TOKEN") or "").strip()
+    headers={"Content-Type":"application/json","User-Agent":f"Makia/{VERSION}"}
+    if webhook_token:
+        headers["Authorization"]="Bearer "+webhook_token
     req=urllib.request.Request(
         url,
         data=json.dumps(payload,ensure_ascii=False,separators=(",",":")).encode("utf-8"),
-        headers={"Content-Type":"application/json","User-Agent":f"Makia/{VERSION}"},
+        headers=headers,
         method="POST"
     )
     try:
