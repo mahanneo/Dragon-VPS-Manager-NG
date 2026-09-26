@@ -107,6 +107,27 @@ else
   bad "Xray Certbot deploy hook missing"
 fi
 
+if [[ -f /etc/openvpn/server/server.conf ]]; then
+  OVPN_PROTO="$(awk '$1=="proto"{print $2; exit}' /etc/openvpn/server/server.conf 2>/dev/null || true)"
+  OVPN_PORT="$(awk '$1=="port"{print $2; exit}' /etc/openvpn/server/server.conf 2>/dev/null || true)"
+  if [[ "$OVPN_PROTO" == "udp4" || "$OVPN_PROTO" == "tcp4-server" ]]; then
+    ok "OpenVPN IPv4 transport ($OVPN_PROTO)"
+  else
+    bad "OpenVPN transport is not normalized to udp4/tcp4-server ($OVPN_PROTO)"
+  fi
+  if systemctl is-active --quiet openvpn-server@server; then
+    ok "OpenVPN runtime active"
+  else
+    bad "OpenVPN runtime inactive"
+    journalctl -u openvpn-server@server -n 12 --no-pager || true
+  fi
+  if [[ -n "$OVPN_PORT" ]] && ss -H -lntu 2>/dev/null | grep -Eq ":${OVPN_PORT}([[:space:]]|$)"; then
+    ok "OpenVPN listener on port $OVPN_PORT"
+  else
+    bad "OpenVPN listener missing"
+  fi
+fi
+
 if [[ -f /etc/wireguard/wg0.conf ]]; then
   if command -v wg >/dev/null 2>&1 && wg show wg0 >/tmp/makia-wg-show.txt 2>&1; then
     ok "WireGuard wg0 runtime"
