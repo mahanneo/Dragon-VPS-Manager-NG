@@ -15,3 +15,6 @@ def test_catalog_exposes_http_and_socks_as_guided(monkeypatch):
     assert caps["http"]["mode"] == "guided"
     assert caps["socks"]["available"] is True
     assert caps["socks"]["mode"] == "guided"
+
+    assert caps["tunnel"]["available"] is True
+    assert caps["tunnel"]["mode"] == "guided"
