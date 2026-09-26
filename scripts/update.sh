@@ -31,6 +31,9 @@ on_exit(){
     echo "Update failed. Restoring previous Makia runtime..."
     set +e
     systemctl stop makia-vps-manager 2>/dev/null
+    systemctl stop wg-quick@wg0 2>/dev/null
+    systemctl stop openvpn-server@server 2>/dev/null
+    systemctl stop xray 2>/dev/null
     rm -rf "$APP/app"
     tar -xzf "$RELEASE_BACKUP" -C /
     if [[ -f "$APP/requirements.txt" && -x "$APP/.venv/bin/pip" ]]; then
@@ -38,6 +41,9 @@ on_exit(){
     fi
     systemctl daemon-reload
     nginx -t >/dev/null 2>&1 && systemctl reload nginx
+    if [[ "${XRAY_WAS_PRESENT:-0}" -eq 1 ]]; then systemctl restart xray 2>/dev/null; fi
+    if [[ "${OVPN_WAS_PRESENT:-0}" -eq 1 ]]; then systemctl restart openvpn-server@server 2>/dev/null; fi
+    if [[ "${WG_WAS_PRESENT:-0}" -eq 1 ]]; then systemctl restart wg-quick@wg0 2>/dev/null; fi
     systemctl restart makia-vps-manager
     systemctl restart makia-policy-enforcer 2>/dev/null
     systemctl restart makia-metrics-sampler 2>/dev/null
@@ -157,7 +163,12 @@ for item in \
   "etc/systemd/system/makia-policy-enforcer.service" \
   "etc/systemd/system/makia-metrics-sampler.service" \
   "etc/systemd/system/makia-protocol-traffic.service" \
-  "etc/nginx/sites-available/makia-vps-manager"; do
+  "etc/nginx/sites-available/makia-vps-manager" \
+  "etc/wireguard" \
+  "etc/sysctl.d/99-makia-wireguard.conf" \
+  "etc/openvpn/server/server.conf" \
+  "usr/local/etc/xray" \
+  "etc/xray"; do
   [[ -e "/$item" ]] && SNAPSHOT+=("$item")
 done
 tar -C / -czf "$RELEASE_BACKUP" "${SNAPSHOT[@]}"
