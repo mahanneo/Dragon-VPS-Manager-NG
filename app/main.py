@@ -30,7 +30,17 @@ async def security_headers(request:Request,call_next):
         request.url.path.startswith("/client/") or
         request.url.path=="/api/node/heartbeat"
     )
-    if allowed_raw and not public_path:
+    support_override=False
+    raw_actor=read_session(request.cookies.get(COOKIE_NAME))
+    if raw_actor and raw_actor.startswith("support:"):
+        parts=raw_actor.split(":")
+        if len(parts)==3:
+            try:
+                grant=support_grant_by_id(int(parts[1]))
+                support_override=bool(grant and grant.get("active") and grant.get("scope")==parts[2])
+            except Exception:
+                support_override=False
+    if allowed_raw and not public_path and not support_override:
         try:
             client_ip=ipaddress.ip_address((request.client.host if request.client else "").strip())
             networks=[ipaddress.ip_network(x.strip(),strict=False) for x in allowed_raw.split(",") if x.strip()]
