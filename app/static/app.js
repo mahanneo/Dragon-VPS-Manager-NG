@@ -897,6 +897,9 @@ async function handleMakiaAction(btn){
   if(action==='protocol-setup'){await openProtocolSetup(btn.dataset.kind);return}
   if(action==='protocol-install'){await performProtocolInstall(btn.dataset.kind);return}
   if(action==='protocol-bootstrap'){await performProtocolBootstrap(btn.dataset.kind,btn.dataset.installed==='1');return}
+  if(action==='protocol-refresh'){await currentView();return}
+  if(action==='xray-advanced'){await openXrayAdvanced();return}
+  if(action==='xray-tunnel'){createXrayTunnel();return}
   if(action==='self-test'){await runSelfTest();return}
   if(action==='success-done'){closeModal();switchView('access');return}
   if(action==='modal-close'){closeModal();return}
