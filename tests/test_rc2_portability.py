@@ -1,5 +1,6 @@
 import io
 import sqlite3
+import socket
 from pathlib import Path
 
 import pytest
@@ -106,3 +107,15 @@ def test_portable_backup_wrong_password_rejected(tmp_path):
     )
     with pytest.raises(system_ops.OperationError):
         system_ops.verify_portable_backup(result["blob"],"WrongPassword123")
+
+
+def test_port_conflict_checks_tcp_and_udp_independently():
+    tcp=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    tcp.bind(("127.0.0.1",0))
+    port=tcp.getsockname()[1]
+    tcp.listen(1)
+    try:
+        assert protocol_ops._port_in_use(port,"tcp") is True
+        assert protocol_ops._port_in_use(port,"udp") is False
+    finally:
+        tcp.close()
