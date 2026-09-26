@@ -19,7 +19,11 @@ app.mount("/static",StaticFiles(directory=BASE/"static"),name="static")
 templates=Jinja2Templates(directory=BASE/"templates")
 
 @app.on_event("startup")
-def startup(): init_db()
+def startup():
+    init_db()
+    if get_setting("ui_generation","")!="glass-v1":
+        set_setting("theme","glass")
+        set_setting("ui_generation","glass-v1")
 
 def current_user(request:Request): return read_session(request.cookies.get(COOKIE_NAME))
 def require_user(request:Request):
@@ -192,7 +196,7 @@ def root(request:Request):
     return templates.TemplateResponse("dashboard.html",{
         "request":request,"app_name":APP_NAME,"version":VERSION,
         "language":get_setting("language","fa"),"panel_domain":get_setting("panel_domain",""),
-        "theme":get_setting("theme","midnight"),"density":get_setting("density","comfortable")
+        "theme":get_setting("theme","glass"),"density":get_setting("density","comfortable")
     })
 
 @app.get("/help/connect",response_class=HTMLResponse)
@@ -1419,7 +1423,7 @@ def node_heartbeat(payload:NodeHeartbeat,request:Request):
 class GeneralSettings(BaseModel):
     language:str="fa"
     panel_domain:str=""
-    theme:str="midnight"
+    theme:str="glass"
     density:str="comfortable"
 
 @app.get("/api/settings/general")
@@ -1430,7 +1434,7 @@ def general_settings_get(request:Request):
     return {
         "language":data.get("language","fa"),
         "panel_domain":domain,
-        "theme":data.get("theme","midnight"),
+        "theme":data.get("theme","glass"),
         "density":data.get("density","comfortable"),
         "domain_status":panel_ops.domain_status(domain or None),
     }
@@ -1439,7 +1443,7 @@ def general_settings_get(request:Request):
 def general_settings_put(payload:GeneralSettings,request:Request):
     actor=require_mutation(request)
     language=payload.language if payload.language in {"fa","en"} else "fa"
-    theme=payload.theme if payload.theme in {"midnight","amoled","graphite"} else "midnight"
+    theme=payload.theme if payload.theme in {"glass","midnight","amoled","graphite"} else "glass"
     density=payload.density if payload.density in {"comfortable","compact"} else "comfortable"
     domain=(payload.panel_domain or "").strip().lower()
     if domain:
