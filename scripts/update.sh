@@ -57,14 +57,39 @@ fi
 [[ -d "$APP" ]] || { echo "Makia VPS Manager is not installed."; exit 1; }
 install -d -m 0700 /var/backups/makia-vps-manager
 
-if command -v makia-backup >/dev/null 2>&1; then
-  BACKUP="$(makia-backup)"
-else
-  STAMP_DATA="$(date -u +%Y%m%dT%H%M%SZ)"
-  BACKUP="/var/backups/makia-vps-manager/makia-data-${STAMP_DATA}.tar.gz"
-  tar -C "$APP" -czf "$BACKUP" data
-  chmod 0600 "$BACKUP"
+STAMP_DATA="$(date -u +%Y%m%dT%H%M%SZ)"
+BACKUP="/var/backups/makia-vps-manager/makia-data-${STAMP_DATA}.tar.gz"
+BACKUP_TMP="$(mktemp -d)"
+mkdir -p "$BACKUP_TMP/data"
+
+# Bootstrap-safe live backup: do not depend on an older installed makia-backup
+# because the currently installed copy may itself be the reason the upgrade fails.
+tar -C "$APP" -cf - \
+  --exclude='data/makia.db' \
+  --exclude='data/makia.db-wal' \
+  --exclude='data/makia.db-shm' \
+  data | tar -C "$BACKUP_TMP" -xf -
+
+if [[ -f "$APP/data/makia.db" ]]; then
+  SRC_DB="$APP/data/makia.db" DST_DB="$BACKUP_TMP/data/makia.db" python3 - <<'PY'
+import os, sqlite3
+src=os.environ["SRC_DB"]
+dst=os.environ["DST_DB"]
+source=sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+target=sqlite3.connect(dst)
+try:
+    source.backup(target)
+    target.commit()
+finally:
+    target.close()
+    source.close()
+PY
+  chmod 0600 "$BACKUP_TMP/data/makia.db"
 fi
+
+tar -C "$BACKUP_TMP" -czf "$BACKUP" data
+chmod 0600 "$BACKUP"
+rm -rf "$BACKUP_TMP"
 echo "Data backup created: $BACKUP"
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
