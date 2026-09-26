@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.3-rc1] - 2026-09-26
+
+### Bootstrap recovery
+- The downloaded updater no longer calls the possibly outdated `makia-backup` installed on the host.
+- The updater performs its own SQLite-consistent live data snapshot before downloading/applying the new runtime.
+- This allows a broken v0.9.0/v0.9.1 host to self-recover through the bootstrap `upgrade.sh` command.
+
+### Release status
+Recovery release candidate. Host validation is required before Stable.
+
 ## [0.9.2-rc1] - 2026-09-26
 
 ### Backend startup hotfix
