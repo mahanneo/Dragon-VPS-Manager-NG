@@ -209,8 +209,8 @@ async function openProvisionWizard(protocol){
     step:protocol?2:1,protocol:protocol||'',name:defs.username||'user001',
     endpoint:window.PANEL_DOMAIN||location.hostname,password:'',passwordMode:'pin6',
     expireDate:'',plan:'',note:'',sessions:1,devices:1,
-    xrayProtocol:'vless',port:2087,transport:'tcp',security:'none',path:'/makia',
-    sni:window.PANEL_DOMAIN||'',realityDest:'www.cloudflare.com:443',
+    xrayProtocol:'vless',port:2087,transport:'xhttp',security:'reality',path:'/makia',
+    sni:'www.microsoft.com',realityDest:'www.microsoft.com:443',
     quota:50,expireDays:30,resetDays:30,dns:'1.1.1.1',ovpnProto:'udp',ovpnPort:1194,
     packagePassword:''
   };
@@ -369,7 +369,12 @@ function validateWizardStep(){
     if(s.protocol!=='ssh'&&!s.endpoint)return 'دامنه یا IP عمومی لازم است.';
     if(s.protocol==='xray'&&(!s.port||s.port<1||s.port>65535))return 'Port معتبر وارد کن.';
   }
-  if(s.step===3&&s.protocol==='xray'&&s.security==='reality'&&s.xrayProtocol!=='vless')return 'REALITY در Wizard فقط برای VLESS فعال است.';
+  if(s.step===3&&s.protocol==='xray'&&s.security==='reality'&&s.xrayProtocol!=='vless')return 'REALITY در Wizard فعلی Makia فقط برای VLESS فعال است.';
+  if(s.step===3&&s.protocol==='xray'&&['vless','trojan'].includes(s.xrayProtocol)&&s.security==='none'){
+    const ep=(s.endpoint||'').trim();
+    const privateIp=/^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ep)||ep==='localhost'||ep.endsWith('.local');
+    if(!privateIp)return 'برای '+s.xrayProtocol.toUpperCase()+' روی IP/دامنه عمومی، Security را روی REALITY یا TLS بگذار.';
+  }
   return '';
 }
 
