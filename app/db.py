@@ -349,6 +349,15 @@ def get_protocol_client(client_id):
         row=con.execute("SELECT * FROM protocol_clients WHERE id=?",(int(client_id),)).fetchone()
         return dict(row) if row else None
 
+
+def protocol_client_by_subscription(subscription_id):
+    with connect() as con:
+        row=con.execute(
+            "SELECT * FROM protocol_clients WHERE subscription_id=?",
+            (str(subscription_id),)
+        ).fetchone()
+        return dict(row) if row else None
+
 def update_protocol_client_state(client_id,enabled=None,quota_bytes=None,expire_at=None,ip_limit=None,reset_days=None):
     fields=[]; values=[]
     if enabled is not None:

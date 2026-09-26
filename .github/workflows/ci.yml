@@ -24,6 +24,8 @@ jobs:
           pip install pytest
       - name: Python compile
         run: python -m compileall -q app tests
+      - name: Import application smoke test
+        run: python -c "import app.main; print(app.main.APP_NAME, app.main.VERSION)"
       - name: Unit tests
         run: pytest -q
       - name: Bash syntax
