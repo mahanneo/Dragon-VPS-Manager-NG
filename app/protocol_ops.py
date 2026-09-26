@@ -164,7 +164,7 @@ def catalog():
             {"id":"hysteria2","engine":"xray","available":x["installed"],"mode":"guided"},
             {"id":"http","engine":"xray","available":x["installed"],"mode":"guided"},
             {"id":"socks","engine":"xray","available":x["installed"],"mode":"guided"},
-            {"id":"tunnel","engine":"xray","available":x["installed"],"mode":"advanced"},
+            {"id":"tunnel","engine":"xray","available":x["installed"],"mode":"guided"},
             {"id":"tun","engine":"xray","available":x["installed"],"mode":"advanced"},
             {"id":"wireguard","engine":"wireguard","available":wg["installed"],"mode":"guided"},
             {"id":"openvpn","engine":"openvpn","available":ovpn["installed"],"mode":"guided"},
@@ -749,6 +749,71 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
         "transport":method,"security":security,"share_link":link,"backup":str(backup) if backup else None,
         "reality":reality_meta,
     }
+
+def create_xray_tunnel(listen_port, target_host, target_port, network="tcp,udp", name="tunnel"):
+    binary=_binary()
+    if not binary:
+        raise ProtocolError("Xray core is not installed")
+    listen_port=_validate_port(listen_port)
+    target_port=_validate_port(target_port)
+    network=(network or "tcp,udp").lower()
+    if network not in {"tcp","udp","tcp,udp"}:
+        raise ProtocolError("network must be tcp, udp or tcp,udp")
+    if not re.fullmatch(r"[A-Za-z0-9.:[\\]-]{1,255}",target_host or ""):
+        raise ProtocolError("invalid target host")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
+        raise ProtocolError("invalid tunnel name")
+    if _port_in_use(listen_port):
+        raise ProtocolError("listen port is already in use")
+    config_path=_config_path() or "/usr/local/etc/xray/config.json"
+    path=Path(config_path); path.parent.mkdir(parents=True,exist_ok=True)
+    if path.exists():
+        try: data=json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc: raise ProtocolError(f"cannot parse existing Xray config: {exc}") from exc
+    else:
+        data=_xray_default_config(path)
+    inbounds=data.setdefault("inbounds",[])
+    if not isinstance(inbounds,list):
+        raise ProtocolError("invalid Xray inbounds collection")
+    if any(isinstance(i,dict) and int(i.get("port") or -1)==listen_port for i in inbounds):
+        raise ProtocolError("listen port already exists in Xray config")
+    tag=f"makia-tunnel-{name}-{listen_port}"
+    inbounds.append({
+        "tag":tag,
+        "listen":"0.0.0.0",
+        "port":listen_port,
+        "protocol":"dokodemo-door",
+        "settings":{
+            "address":target_host,
+            "port":target_port,
+            "network":network,
+            "followRedirect":False,
+        },
+    })
+    tmp=path.with_suffix(path.suffix+".makia-tunnel")
+    backup_dir=Path("/var/backups/makia-vps-manager"); backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
+    backup=None
+    if path.exists():
+        backup=backup_dir/f"xray-tunnel-{int(time.time())}.json"
+        shutil.copy2(path,backup)
+    tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8"); os.chmod(tmp,0o600)
+    try:
+        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        os.replace(tmp,path)
+        _run(["systemctl","restart","xray"],timeout=30)
+        if not _active("xray"):
+            raise ProtocolError("Xray did not become active after tunnel apply")
+    except Exception:
+        try:
+            if tmp.exists(): tmp.unlink()
+            if backup and backup.exists():
+                shutil.copy2(backup,path)
+                _run(["systemctl","restart","xray"],timeout=30)
+        except Exception:
+            pass
+        raise
+    return {"tag":tag,"listen_port":listen_port,"target_host":target_host,"target_port":target_port,"network":network,"backup":str(backup) if backup else None}
+
 
 def disable_xray_client(inbound_tag,email):
     binary=_binary()
