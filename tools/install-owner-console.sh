@@ -23,6 +23,11 @@ import secrets
 print(secrets.token_urlsafe(32))
 PY
 )"; fi
+TOTP_SECRET="$(PYTHONPATH="$SOURCE_DIR" python3 - <<'PY'
+import pyotp
+print(pyotp.random_base32())
+PY
+)"
 
 id makia-owner >/dev/null 2>&1 || useradd --system --home /var/lib/makia-owner-console --shell /usr/sbin/nologin makia-owner
 install -d -m 0750 -o root -g makia-owner /etc/makia-owner-console
@@ -45,6 +50,7 @@ MAKIA_OWNER_DATA_DIR=/var/lib/makia-owner-console
 MAKIA_OWNER_PRIVATE_KEY_PATH=/etc/makia-owner-console/license-private-key.pem
 MAKIA_OWNER_PUBLIC_URL=$PUBLIC_URL
 MAKIA_OWNER_ADMIN_PASSWORD_HASH=$HASH
+MAKIA_OWNER_TOTP_SECRET=$TOTP_SECRET
 MAKIA_OWNER_INGEST_TOKEN=$INGEST_TOKEN
 MAKIA_OWNER_LEASE_TTL=86400
 MAKIA_OWNER_LEASE_GRACE=259200
@@ -57,4 +63,6 @@ systemctl enable --now makia-owner-console
 echo "Owner Control Center installed on http://127.0.0.1:8790"
 echo "Public URL: $PUBLIC_URL"
 echo "Client ticket ingest token (store securely): $INGEST_TOKEN"
+echo "Owner TOTP secret (add to your authenticator now): $TOTP_SECRET"
+echo "TOTP URI: otpauth://totp/Makia%20Owner?secret=$TOTP_SECRET&issuer=Makia"
 echo "Configure Nginx/HTTPS before connecting customer panels."
