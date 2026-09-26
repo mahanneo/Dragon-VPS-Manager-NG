@@ -110,10 +110,11 @@ def main():
             page.locator('.close-btn[data-action="modal-close"]').click()
 
             for view in ["sessions","protocols","services","nodes","security","backups","audit","updates","settings","dashboard","access"]:
-                page.locator(f'button[data-view="{view}"]').click()
-                page.wait_for_timeout(350)
+                nav=page.locator(f'aside.sidebar nav button[data-view="{view}"]')
+                nav.click()
+                page.wait_for_timeout(450)
                 assert page.locator("#content").inner_text().strip(), f"{view} rendered empty content"
-                assert page.locator(f'button[data-view="{view}"]').get_attribute("class") and "active" in page.locator(f'button[data-view="{view}"]').get_attribute("class")
+                assert "active" in (nav.get_attribute("class") or ""), f"{view} sidebar item not active"
 
             assert not page_errors, "JavaScript page errors: "+repr(page_errors)
             browser.close()
