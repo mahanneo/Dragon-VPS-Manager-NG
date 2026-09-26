@@ -100,7 +100,7 @@ def main():
             page.locator('[data-shell-action="create-access"]').click()
             page.locator(".provision-wizard").wait_for()
             assert page.locator(".wizard-protocol").count()==4
-            page.locator('[data-action="modal-close"]').click()
+            page.locator('.close-btn[data-action="modal-close"]').click()
 
             page.locator('button[data-view="dashboard"]').click()
             page.locator(".command-hero").wait_for()
