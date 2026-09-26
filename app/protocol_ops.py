@@ -307,6 +307,27 @@ def create_wireguard_peer(name, endpoint, iface="wg0", dns="1.1.1.1"):
     )
     return {"name":name,"address":str(client_ip),"public_key":client_public,"config":client}
 
+def list_wireguard_peers(iface="wg0"):
+    conf=WG_DIR/f"{iface}.conf"
+    if not conf.exists():
+        return []
+    lines=conf.read_text(encoding="utf-8",errors="ignore").splitlines()
+    peers=[]; current=None; pending_name=None
+    for line in lines:
+        stripped=line.strip()
+        if stripped.startswith("# Makia peer:"):
+            pending_name=stripped.split(":",1)[1].strip()
+        elif stripped=="[Peer]":
+            if current: peers.append(current)
+            current={"name":pending_name or "wireguard-peer","public_key":"","allowed_ips":"","interface":iface}
+            pending_name=None
+        elif current and "=" in stripped:
+            key,value=[x.strip() for x in stripped.split("=",1)]
+            if key=="PublicKey": current["public_key"]=value
+            elif key=="AllowedIPs": current["allowed_ips"]=value
+    if current: peers.append(current)
+    return [p for p in peers if p.get("public_key")]
+
 def remove_wireguard_peer(public_key, iface="wg0"):
     public_key=str(public_key or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9+/=_-]{20,100}",public_key):
@@ -435,6 +456,17 @@ def create_openvpn_client(name, endpoint, port=1194, proto="udp"):
         f"<ca>\n{ca}</ca>\n<cert>\n{cert}</cert>\n<key>\n{key}</key>\n<tls-crypt>\n{ta}</tls-crypt>\n"
     )
     return {"name":name,"config":client}
+
+def list_openvpn_clients():
+    issued=OVPN_EASYRSA/"pki/issued"
+    if not issued.exists():
+        return []
+    out=[]
+    for cert in sorted(issued.glob("*.crt")):
+        if cert.stem=="server":
+            continue
+        out.append({"name":cert.stem,"certificate":str(cert)})
+    return out
 
 def revoke_openvpn_client(name):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
