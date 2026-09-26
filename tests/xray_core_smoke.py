@@ -1,34 +1,23 @@
-import datetime as dt
 import json
 import os
+import subprocess
 import uuid
 from pathlib import Path
-
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.x509.oid import NameOID
 
 from app import protocol_ops
 
 
 def make_test_certificate(root:Path):
-    key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
-    subject=x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,"test.example.com")])
-    now=dt.datetime.now(dt.timezone.utc)
-    cert=(
-        x509.CertificateBuilder()
-        .subject_name(subject).issuer_name(subject).public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now-dt.timedelta(minutes=1))
-        .not_valid_after(now+dt.timedelta(days=1))
-        .add_extension(x509.SubjectAlternativeName([x509.DNSName("test.example.com")]),critical=False)
-        .sign(key,hashes.SHA256())
-    )
     cert_path=root/"cert.pem"
     key_path=root/"key.pem"
-    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
-    key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.TraditionalOpenSSL,serialization.NoEncryption()))
+    p=subprocess.run([
+        "openssl","req","-x509","-newkey","rsa:2048","-nodes",
+        "-keyout",str(key_path),"-out",str(cert_path),"-days","1",
+        "-subj","/CN=test.example.com",
+        "-addext","subjectAltName=DNS:test.example.com",
+    ],text=True,capture_output=True,check=False)
+    if p.returncode!=0:
+        raise RuntimeError((p.stderr or p.stdout or "openssl certificate generation failed").strip())
     return cert_path,key_path
 
 
