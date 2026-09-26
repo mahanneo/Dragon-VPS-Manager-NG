@@ -174,6 +174,14 @@ if [[ "$healthy" -ne 1 ]]; then
   exit 3
 fi
 
+echo
+echo "Running post-update Makia host smoke gate..."
+if ! /usr/local/sbin/makia-uat-smoke; then
+  echo "Post-update host smoke failed."
+  echo "The updater will restore the previous runtime automatically."
+  exit 4
+fi
+
 ROLLBACK_ARMED=0
 printf 'Update complete. Installed version: '
 cat "$APP/VERSION"
