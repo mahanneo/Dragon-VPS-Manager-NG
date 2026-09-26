@@ -182,6 +182,21 @@ def install_component(component):
         "openvpn":["openvpn","easy-rsa","iptables"],
         "stunnel":["stunnel4"],
     }
+    if component=="xray":
+        # Official XTLS installer. It installs the core + systemd service and
+        # verifies the release artifacts handled by the upstream installer.
+        _run(["bash","-lc","curl -fsSL https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh | bash -s -- install"],timeout=600)
+        config=Path("/usr/local/etc/xray/config.json")
+        config.parent.mkdir(parents=True,exist_ok=True)
+        if not config.exists():
+            config.write_text(json.dumps({
+                "log":{"loglevel":"warning"},
+                "inbounds":[],
+                "outbounds":[{"protocol":"freedom","tag":"direct"}]
+            },ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+            os.chmod(config,0o600)
+        _run(["systemctl","enable","--now","xray"],timeout=60)
+        return xray_status()
     if component not in packages:
         raise ProtocolError("automatic installation is not available for this component")
     _run(["apt-get","update"],timeout=180)
@@ -292,6 +307,42 @@ def create_wireguard_peer(name, endpoint, iface="wg0", dns="1.1.1.1"):
     )
     return {"name":name,"address":str(client_ip),"public_key":client_public,"config":client}
 
+def remove_wireguard_peer(public_key, iface="wg0"):
+    public_key=str(public_key or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9+/=_-]{20,100}",public_key):
+        raise ProtocolError("invalid WireGuard public key")
+    conf=WG_DIR/f"{iface}.conf"
+    if not conf.exists():
+        raise ProtocolError("WireGuard server config not found")
+    _run(["wg","set",iface,"peer",public_key,"remove"])
+    lines=conf.read_text(encoding="utf-8",errors="ignore").splitlines()
+    out=[]; block=[]; in_peer=False
+    for line in lines+["[__END__]"]:
+        if line.startswith("[") and line.endswith("]"):
+            if in_peer:
+                text="\n".join(block)
+                if f"PublicKey = {public_key}" not in text:
+                    out.extend(block)
+                block=[]
+            in_peer=(line=="[Peer]")
+            if line!="[__END__]":
+                block=[line] if in_peer else []
+                if not in_peer:
+                    out.append(line)
+        elif in_peer:
+            block.append(line)
+        else:
+            out.append(line)
+    # Remove a Makia comment immediately before a removed peer if it became orphaned.
+    cleaned=[]
+    for idx,line in enumerate(out):
+        if line.startswith("# Makia peer:") and idx+1<len(out) and out[idx+1]!="[Peer]":
+            continue
+        cleaned.append(line)
+    conf.write_text("\n".join(cleaned).rstrip()+"\n",encoding="utf-8")
+    os.chmod(conf,0o600)
+    return {"removed":True,"public_key":public_key,"interface":iface}
+
 def bootstrap_openvpn(port=1194, proto="udp"):
     port=_validate_port(port)
     if proto not in {"udp","tcp"}:
@@ -384,6 +435,23 @@ def create_openvpn_client(name, endpoint, port=1194, proto="udp"):
         f"<ca>\n{ca}</ca>\n<cert>\n{cert}</cert>\n<key>\n{key}</key>\n<tls-crypt>\n{ta}</tls-crypt>\n"
     )
     return {"name":name,"config":client}
+
+def revoke_openvpn_client(name):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
+        raise ProtocolError("invalid client name")
+    if not OVPN_EASYRSA.exists():
+        raise ProtocolError("OpenVPN PKI is not available")
+    env=os.environ.copy(); env["EASYRSA_BATCH"]="1"
+    p=subprocess.run([str(OVPN_EASYRSA/"easyrsa"),"revoke",name],cwd=str(OVPN_EASYRSA),env=env,text=True,capture_output=True,timeout=180,check=False)
+    if p.returncode!=0 and "already revoked" not in ((p.stderr or p.stdout or "").lower()):
+        raise ProtocolError((p.stderr or p.stdout or "OpenVPN revoke failed").strip()[:1200])
+    p=subprocess.run([str(OVPN_EASYRSA/"easyrsa"),"gen-crl"],cwd=str(OVPN_EASYRSA),env=env,text=True,capture_output=True,timeout=180,check=False)
+    if p.returncode!=0:
+        raise ProtocolError((p.stderr or p.stdout or "OpenVPN CRL generation failed").strip()[:1200])
+    crl=OVPN_EASYRSA/"pki/crl.pem"
+    if crl.exists():
+        shutil.copy2(crl,OVPN_DIR/"server/crl.pem")
+    return {"revoked":True,"name":name}
 
 def _port_in_use(port):
     port=int(port)
