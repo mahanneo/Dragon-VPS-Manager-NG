@@ -60,6 +60,7 @@ jobs:
           test -f docs/UAT-0.12.0-RC1.md
           test -f docs/UAT-0.13.0-RC1.md
           test -f docs/UAT-0.13.1-RC1.md
+          test -f docs/UAT-0.14.0-RC1.md
           test -f README_FA.md
           test -f docs/CLIENT-GUIDE-FA.md
           test -f app/templates/client_guide.html
@@ -115,6 +116,24 @@ jobs:
           grep -q 'makia-xray-sync' scripts/update.sh
           grep -q 'repair_xray_runtime' scripts/update.sh
           grep -q 'repair_xray_runtime' scripts/restore-portable.py
+
+      - name: UAT v0.14 contract
+        run: |
+          grep -q 'Glass Aurora / OpenVPN Domain UAT' docs/UAT-0.14.0-RC1.md
+          grep -q 'body\[data-theme="glass"\]' app/static/app.css
+          grep -q 'glass-status-hero' app/static/app.js
+          grep -q 'Glass Aurora' app/static/app.js
+          grep -q 'makia-shell-v0140' app/static/sw.js
+          grep -q '/api/protocols/openvpn/diagnostics' app/main.py
+          grep -q '/api/protocols/openvpn/repair' app/main.py
+          grep -q 'openvpn_endpoint_diagnostics' app/protocol_ops.py
+          grep -q 'repair_openvpn_ipv4_runtime' app/protocol_ops.py
+          grep -q 'proto {transport}' app/protocol_ops.py
+          grep -q 'verify-x509-name server name' app/protocol_ops.py
+          grep -q '"openvpn-server@server": "OpenVPN"' app/config.py
+          grep -q '"wg-quick@wg0": "WireGuard"' app/config.py
+          grep -q 'Checking OpenVPN IPv4 runtime' scripts/update.sh
+          grep -q 'OpenVPN IPv4 transport' scripts/uat-smoke.sh
 
   browser-smoke:
     runs-on: ubuntu-24.04
