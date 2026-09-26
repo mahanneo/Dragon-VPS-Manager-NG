@@ -1,6 +1,9 @@
 import os, pwd, shutil, socket, subprocess, platform, re, time
+import io, json, tarfile, sqlite3, tempfile
+from pathlib import Path
 from datetime import datetime
 import psutil
+import pyzipper
 from .config import ALLOWED_SERVICES
 
 class OperationError(RuntimeError): pass
@@ -147,6 +150,123 @@ def security_status():
     ssh=cmd_state("systemctl",["systemctl","is-active","ssh"])
     return {"ufw":ufw,"fail2ban":fail2ban,"ssh":ssh}
 
+
+def portable_backup_sources(data_dir: str):
+    sources=[]
+    data=Path(data_dir)
+    if data.exists():
+        sources.append((data,"data"))
+    candidates=[
+        (Path("/etc/wireguard"),"host/etc/wireguard"),
+        (Path("/usr/local/etc/xray/config.json"),"host/usr/local/etc/xray/config.json"),
+        (Path("/etc/xray/config.json"),"host/etc/xray/config.json"),
+        (Path("/etc/openvpn"),"host/etc/openvpn"),
+        (Path("/etc/nginx/sites-available/makia-vps-manager"),"host/etc/nginx/sites-available/makia-vps-manager"),
+        (Path("/etc/letsencrypt"),"host/etc/letsencrypt"),
+        (Path("/etc/fail2ban/jail.d/makia-sshd.local"),"host/etc/fail2ban/jail.d/makia-sshd.local"),
+    ]
+    seen=set()
+    for src,arc in candidates:
+        if src.exists() and str(src) not in seen:
+            sources.append((src,arc));seen.add(str(src))
+    return sources
+
+def portable_backup_status(data_dir: str):
+    sources=portable_backup_sources(data_dir)
+    names=[arc for _,arc in sources]
+    return {
+        "sources":names,
+        "has_data":"data" in names,
+        "has_wireguard":"host/etc/wireguard" in names,
+        "has_xray":any(x.endswith("/xray/config.json") for x in names),
+        "has_openvpn":"host/etc/openvpn" in names,
+        "has_nginx":"host/etc/nginx/sites-available/makia-vps-manager" in names,
+        "has_letsencrypt":"host/etc/letsencrypt" in names,
+    }
+
+def create_portable_backup(data_dir: str, password: str, metadata=None, sources=None):
+    password=str(password or "")
+    if len(password)<8:
+        raise OperationError("portable backup password must be at least 8 characters")
+    chosen=list(sources) if sources is not None else portable_backup_sources(data_dir)
+    if not chosen:
+        raise OperationError("no portable backup sources are available")
+    manifest={
+        "format":"makia-portable-v1",
+        "created_at":datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "metadata":metadata or {},
+        "sources":[arc for _,arc in chosen],
+        "restore_command":"sudo makia-restore /path/to/bundle.zip --apply",
+    }
+    tar_buf=io.BytesIO()
+    data_root=Path(data_dir).resolve()
+    try:
+        # dereference=True stores real certificate/key bytes instead of Let's Encrypt live symlinks.
+        with tarfile.open(fileobj=tar_buf,mode="w:gz",dereference=True) as tf, tempfile.TemporaryDirectory(prefix="makia-portable-") as td:
+            for src,arc in chosen:
+                p=Path(src)
+                if not p.exists():
+                    continue
+                try: same_data=p.resolve()==data_root
+                except Exception: same_data=False
+                if same_data and p.is_dir():
+                    # Copy the data directory except SQLite live files, then use SQLite's online backup API.
+                    for child in p.rglob("*"):
+                        rel=child.relative_to(p)
+                        if rel.as_posix() in {"makia.db","makia.db-wal","makia.db-shm"}:
+                            continue
+                        tf.add(str(child),arcname=str(Path(arc)/rel),recursive=False)
+                    db=p/"makia.db"
+                    if db.exists():
+                        snapshot=Path(td)/"makia.db"
+                        source=sqlite3.connect(f"file:{db}?mode=ro",uri=True)
+                        target=sqlite3.connect(snapshot)
+                        try:
+                            source.backup(target)
+                            target.commit()
+                        finally:
+                            target.close();source.close()
+                        tf.add(str(snapshot),arcname=str(Path(arc)/"makia.db"),recursive=False)
+                else:
+                    tf.add(str(p),arcname=arc,recursive=True)
+    except Exception as exc:
+        raise OperationError(f"unable to build portable archive: {exc}") from exc
+    zip_buf=io.BytesIO()
+    try:
+        with pyzipper.AESZipFile(zip_buf,"w",compression=pyzipper.ZIP_DEFLATED,encryption=pyzipper.WZ_AES) as zf:
+            zf.setpassword(password.encode("utf-8"))
+            zf.setencryption(pyzipper.WZ_AES,nbits=256)
+            zf.writestr("manifest.json",json.dumps(manifest,ensure_ascii=False,indent=2).encode("utf-8"))
+            zf.writestr("makia-portable.tar.gz",tar_buf.getvalue())
+    except Exception as exc:
+        raise OperationError(f"unable to encrypt portable archive: {exc}") from exc
+    blob=zip_buf.getvalue()
+    return {"blob":blob,"manifest":manifest,"size":len(blob)}
+
+def verify_portable_backup(blob: bytes, password: str):
+    try:
+        with pyzipper.AESZipFile(io.BytesIO(bytes(blob)),"r") as zf:
+            zf.setpassword(str(password).encode("utf-8"))
+            names=set(zf.namelist())
+            if {"manifest.json","makia-portable.tar.gz"}-names:
+                raise OperationError("portable backup is missing required files")
+            manifest=json.loads(zf.read("manifest.json").decode("utf-8"))
+            if manifest.get("format")!="makia-portable-v1":
+                raise OperationError("unsupported portable backup format")
+            tar_blob=zf.read("makia-portable.tar.gz")
+        with tarfile.open(fileobj=io.BytesIO(tar_blob),mode="r:gz") as tf:
+            for member in tf.getmembers():
+                name=member.name
+                if name.startswith("/") or ".." in Path(name).parts:
+                    raise OperationError("unsafe path detected in portable backup")
+                if member.issym() or member.islnk():
+                    raise OperationError("links are not allowed in portable backup payload")
+            members=[m.name for m in tf.getmembers()]
+        return {"ok":True,"manifest":manifest,"members":members}
+    except OperationError:
+        raise
+    except Exception as exc:
+        raise OperationError("portable backup verification failed") from exc
 
 def backup_list():
     root="/var/backups/makia-vps-manager"

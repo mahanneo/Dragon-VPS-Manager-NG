@@ -90,6 +90,9 @@ def operator_settings_snapshot():
             "xray_ip_limit":_setting_int("default_xray_ip_limit",1,1,50),
             "xray_reset_days":_setting_int("default_xray_reset_days",30,0,3650),
             "wireguard_dns":get_setting("default_wireguard_dns","1.1.1.1"),
+            "wireguard_port":_setting_int("default_wireguard_port",51820,1,65535),
+            "wireguard_mtu":_setting_int("default_wireguard_mtu",0,0,1500),
+            "wireguard_keepalive":_setting_int("default_wireguard_keepalive",25,0,3600),
             "openvpn_port":_setting_int("default_openvpn_port",1194,1,65535),
             "openvpn_proto":get_setting("default_openvpn_proto","udp"),
         }
@@ -734,36 +737,57 @@ def protocol_install(payload:ProtocolInstall,request:Request):
 class WireGuardBootstrap(BaseModel):
     port:int=Field(default=51820,ge=1,le=65535)
     cidr:str="10.66.66.1/24"
+    mtu:int=Field(default=0,ge=0,le=1500)
 
 @app.post("/api/protocols/wireguard/bootstrap")
 def wireguard_bootstrap(payload:WireGuardBootstrap,request:Request):
     actor=require_mutation(request)
     try:
-        result=protocol_ops.bootstrap_wireguard(payload.port,payload.cidr)
+        result=protocol_ops.bootstrap_wireguard(payload.port,payload.cidr,mtu=payload.mtu)
     except protocol_ops.ProtocolError as e:
         raise HTTPException(400,str(e))
-    audit(actor,"wireguard_bootstrap","wg0",f"port={payload.port}; cidr={payload.cidr}",ip(request))
+    audit(actor,"wireguard_bootstrap","wg0",f"port={payload.port}; cidr={payload.cidr}; mtu={payload.mtu}",ip(request))
     return result
 
 class WireGuardPeer(BaseModel):
     name:str=Field(min_length=1,max_length=48)
     endpoint:str=Field(min_length=1,max_length=255)
     dns:str=Field(default="1.1.1.1",max_length=64)
+    mtu:int=Field(default=0,ge=0,le=1500)
+    persistent_keepalive:int=Field(default=25,ge=0,le=3600)
 
 @app.post("/api/protocols/wireguard/peers")
 def wireguard_peer_create(payload:WireGuardPeer,request:Request):
     actor=require_mutation(request)
     try:
-        result=protocol_ops.create_wireguard_peer(payload.name,payload.endpoint,dns=payload.dns)
+        result=protocol_ops.create_wireguard_peer(
+            payload.name,payload.endpoint,dns=payload.dns,
+            mtu=payload.mtu,persistent_keepalive=payload.persistent_keepalive
+        )
         delivery=access_ops.wireguard_payload(payload.name,result["config"],result.get("address"))
         artifact_id=artifact_save("wireguard",payload.name,payload.name,"wireguard",delivery,{
-            "public_key":result.get("public_key",""),"address":result.get("address",""),"interface":"wg0"
+            "public_key":result.get("public_key",""),"address":result.get("address",""),"interface":"wg0",
+            "endpoint":result.get("endpoint",""),"port":result.get("port",0),
+            "mtu":result.get("mtu",0),"persistent_keepalive":result.get("persistent_keepalive",0)
         })
     except protocol_ops.ProtocolError as e:
         raise HTTPException(400,str(e))
     result["artifact_id"]=artifact_id
     audit(actor,"wireguard_peer_create",payload.name,ip=ip(request))
     return result
+
+@app.get("/api/protocols/wireguard/diagnostics")
+def wireguard_diagnostics(request:Request):
+    require_user(request)
+    status=protocol_ops.wireguard_status()
+    status["transport"]="udp"
+    status["domain_endpoint_recommended"]=True
+    status["notes"]=[
+        "WireGuard uses UDP; changing port/MTU/keepalive can improve compatibility but cannot bypass a network that blocks WireGuard/UDP entirely.",
+        "UDP 443 can coexist with panel HTTPS on TCP 443 unless another UDP service already uses port 443.",
+        "Use a stable domain endpoint so peers survive VPS IP migration after DNS is updated.",
+    ]
+    return status
 
 class OpenVPNBootstrap(BaseModel):
     port:int=Field(default=1194,ge=1,le=65535)
@@ -1146,6 +1170,32 @@ def diagnostics_self_test(request:Request):
     except Exception as exc:
         add("protocol_catalog",False,exc,"error")
 
+    try:
+        wg=protocol_ops.wireguard_status()
+        if wg.get("config"):
+            add("wireguard_runtime",bool(wg.get("service_active")),f"UDP {wg.get('listen_port') or '?'}; MTU {wg.get('mtu') or 'auto'}; peers={wg.get('peers',0)}","error")
+        else:
+            add("wireguard_runtime",True,"not configured")
+    except Exception as exc:
+        add("wireguard_runtime",False,exc,"warn")
+
+    try:
+        domain=(get_setting("panel_domain","") or "").strip()
+        if domain:
+            edge=panel_ops.domain_status(domain)
+            add("panel_domain_dns",bool(edge.get("resolved_ipv4")),f"{domain}: {', '.join(edge.get('resolved_ipv4') or []) or 'not resolved'}","warn")
+            add("panel_https",bool(edge.get("certificate")),f"{domain}: certificate {'present' if edge.get('certificate') else 'missing'}","warn")
+        else:
+            add("panel_domain_dns",True,"IP mode; domain not configured")
+    except Exception as exc:
+        add("panel_domain_dns",False,exc,"warn")
+
+    try:
+        portable=system_ops.portable_backup_status(str(DATA_DIR))
+        add("portable_backup_sources",bool(portable.get("has_data")),f"{len(portable.get('sources') or [])} portable source(s) available","error")
+    except Exception as exc:
+        add("portable_backup_sources",False,exc,"error")
+
     critical=[x for x in checks if not x["ok"] and x["level"]=="error"]
     warnings=[x for x in checks if not x["ok"] and x["level"]=="warn"]
     return {
@@ -1169,6 +1219,99 @@ def backup_create(request:Request):
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
     audit(actor,"backup_create",result["name"],ip=ip(request))
     return result
+
+class PortableBackupRequest(BaseModel):
+    password:str=Field(min_length=8,max_length=128)
+
+@app.get("/api/backups/portable/status")
+def portable_backup_status(request:Request):
+    require_user(request)
+    status=system_ops.portable_backup_status(str(DATA_DIR))
+    domain=(get_setting("panel_domain","") or "").strip()
+    domain_state=panel_ops.domain_status(domain or None)
+    artifact_totals={"ssh":0,"wireguard":0,"openvpn":0}
+    artifact_domain={"ssh":0,"wireguard":0,"openvpn":0}
+    ssh_recoverable=0
+    for artifact in list_access_artifacts():
+        kind=artifact.get("kind")
+        if kind not in artifact_totals:
+            continue
+        artifact_totals[kind]+=1
+        try:
+            payload=access_ops.open_payload(artifact["payload_enc"])
+            text=str(payload.get("primary_text") or "")
+            if kind=="ssh":
+                credentials=(payload.get("files") or {}).get("credentials.txt",b"")
+                if isinstance(credentials,bytes): credentials=credentials.decode("utf-8","replace")
+                if re.search(r"(?m)^Password:\s*.+$",str(credentials)):
+                    ssh_recoverable+=1
+                host=str((payload.get("summary") or {}).get("host") or "")
+                if domain and host.lower()==domain.lower():
+                    artifact_domain[kind]+=1
+            elif domain and domain.lower() in text.lower():
+                artifact_domain[kind]+=1
+        except Exception:
+            pass
+    xray_rows=list_protocol_clients()
+    xray_domain=sum(1 for row in xray_rows if domain and domain.lower() in str(row.get("share_link") or "").lower())
+    warnings=[]
+    if not domain:
+        warnings.append("Set a stable panel/client domain before migration to avoid IP-based client reconfiguration.")
+    if domain and not domain_state.get("certificate"):
+        warnings.append("HTTPS certificate is not installed for the configured domain.")
+    if artifact_totals["ssh"] and ssh_recoverable<artifact_totals["ssh"]:
+        warnings.append(f"{artifact_totals['ssh']-ssh_recoverable} SSH delivery artifact(s) do not contain a recoverable encrypted password.")
+    if domain and len(xray_rows)!=xray_domain:
+        warnings.append(f"{len(xray_rows)-xray_domain} Xray client(s) still use an IP/other host and will need a refreshed profile or subscription before seamless migration.")
+    for kind,label in (("ssh","SSH"),("wireguard","WireGuard"),("openvpn","OpenVPN")):
+        if domain and artifact_totals[kind]!=artifact_domain[kind]:
+            warnings.append(f"{artifact_totals[kind]-artifact_domain[kind]} {label} profile(s) do not currently use the configured domain endpoint.")
+    continuity_ready=bool(
+        domain and domain_state.get("certificate")
+        and ssh_recoverable==artifact_totals["ssh"]
+        and xray_domain==len(xray_rows)
+        and all(artifact_domain[k]==artifact_totals[k] for k in artifact_totals)
+    )
+    return {
+        **status,
+        "panel_domain":domain,
+        "certificate":bool(domain_state.get("certificate")),
+        "xray_clients":len(xray_rows),
+        "xray_domain_clients":xray_domain,
+        "ssh_artifacts":artifact_totals["ssh"],
+        "ssh_recoverable":ssh_recoverable,
+        "ssh_domain_profiles":artifact_domain["ssh"],
+        "wireguard_profiles":artifact_totals["wireguard"],
+        "wireguard_domain_profiles":artifact_domain["wireguard"],
+        "openvpn_profiles":artifact_totals["openvpn"],
+        "openvpn_domain_profiles":artifact_domain["openvpn"],
+        "continuity_ready":continuity_ready,
+        "warnings":warnings,
+    }
+
+@app.post("/api/backups/portable")
+def portable_backup_create(payload:PortableBackupRequest,request:Request):
+    actor=require_mutation(request)
+    domain=(get_setting("panel_domain","") or "").strip()
+    metadata={
+        "version":VERSION,
+        "panel_domain":domain,
+        "origin":public_origin(request),
+        "note":"Restore on the replacement VPS, then point the same DNS name to the new server IP.",
+    }
+    try:
+        result=system_ops.create_portable_backup(str(DATA_DIR),payload.password,metadata=metadata)
+        system_ops.verify_portable_backup(result["blob"],payload.password)
+    except system_ops.OperationError as e:
+        raise HTTPException(400,str(e))
+    stamp=datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    filename=f"makia-portable-{stamp}.zip"
+    audit(actor,"portable_backup_create",filename,f"domain={domain or 'none'}; size={result['size']}",ip(request))
+    return Response(content=result["blob"],media_type="application/zip",headers={
+        "Content-Disposition":f'attachment; filename="{filename}"',
+        "Cache-Control":"no-store, private",
+        "X-Content-Type-Options":"nosniff",
+    })
 
 @app.get("/api/audit")
 def audit_list(request:Request,limit:int=100):
@@ -1341,6 +1484,9 @@ class OperatorSettings(BaseModel):
     xray_ip_limit:int=Field(default=1,ge=1,le=50)
     xray_reset_days:int=Field(default=30,ge=0,le=3650)
     wireguard_dns:str=Field(default="1.1.1.1",max_length=64)
+    wireguard_port:int=Field(default=51820,ge=1,le=65535)
+    wireguard_mtu:int=Field(default=0,ge=0,le=1500)
+    wireguard_keepalive:int=Field(default=25,ge=0,le=3600)
     openvpn_port:int=Field(default=1194,ge=1,le=65535)
     openvpn_proto:str="udp"
     subscription_enabled:bool=True
@@ -1366,6 +1512,7 @@ def operator_settings_put(payload:OperatorSettings,request:Request):
     if payload.xray_transport not in allowed_transports: raise HTTPException(400,"invalid Xray transport")
     if payload.xray_security not in allowed_security: raise HTTPException(400,"invalid Xray security")
     if payload.openvpn_proto not in {"udp","tcp"}: raise HTTPException(400,"OpenVPN proto must be udp or tcp")
+    if payload.wireguard_mtu and payload.wireguard_mtu<1200: raise HTTPException(400,"WireGuard MTU must be 0 (auto) or 1200-1500")
     if payload.subscription_default_format not in {"base64","raw"}: raise HTTPException(400,"subscription format must be base64 or raw")
     values={
         "session_max_age_minutes":payload.session_max_age_minutes,
@@ -1391,6 +1538,9 @@ def operator_settings_put(payload:OperatorSettings,request:Request):
         "default_xray_ip_limit":payload.xray_ip_limit,
         "default_xray_reset_days":payload.xray_reset_days,
         "default_wireguard_dns":payload.wireguard_dns.strip() or "1.1.1.1",
+        "default_wireguard_port":payload.wireguard_port,
+        "default_wireguard_mtu":payload.wireguard_mtu,
+        "default_wireguard_keepalive":payload.wireguard_keepalive,
         "default_openvpn_port":payload.openvpn_port,
         "default_openvpn_proto":payload.openvpn_proto,
         "subscription_enabled":1 if payload.subscription_enabled else 0,

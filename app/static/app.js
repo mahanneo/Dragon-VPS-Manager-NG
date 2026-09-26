@@ -221,7 +221,8 @@ async function openProvisionWizard(protocol){
     xrayProtocol:d.xray_protocol||'vless',port:Number(d.xray_port||2087),transport:d.xray_transport||'xhttp',security:d.xray_security||'reality',path:d.xray_path||'/makia',
     sni:d.xray_sni||'www.microsoft.com',realityDest:d.xray_reality_target||'www.microsoft.com:443',
     quota:Number(d.xray_quota_gb??50),expireDays:Number(d.xray_expire_days??30),resetDays:Number(d.xray_reset_days??30),
-    dns:d.wireguard_dns||'1.1.1.1',ovpnProto:d.openvpn_proto||'udp',ovpnPort:Number(d.openvpn_port||1194),
+    dns:d.wireguard_dns||'1.1.1.1',wgMtu:Number(d.wireguard_mtu||0),wgKeepalive:Number(d.wireguard_keepalive??25),
+    wgPort:Number(d.wireguard_port||51820),ovpnProto:d.openvpn_proto||'udp',ovpnPort:Number(d.openvpn_port||1194),
     packagePassword:''
   };
   if(protocol==='ssh'){
@@ -297,7 +298,10 @@ function wizardIdentityFields(s){
     '<div class="wizard-section-title"><h4>WireGuard Peer</h4><p>برای هر دستگاه یک Peer مستقل بساز.</p></div>',
     '<div class="wizard-form two"><label>Peer name<input id="wizName" value="'+htmlEsc(s.name)+'"></label>',
     '<label>Public domain / IP<input id="wizEndpoint" value="'+htmlEsc(s.endpoint)+'"></label>',
-    '<label>DNS<input id="wizDns" value="'+htmlEsc(s.dns)+'"></label></div>'
+    '<label>DNS<input id="wizDns" value="'+htmlEsc(s.dns)+'"></label>',
+    '<label>MTU (0 = auto)<input id="wizWgMtu" type="number" min="0" max="1500" value="'+Number(s.wgMtu||0)+'"></label>',
+    '<label>PersistentKeepalive<input id="wizWgKeepalive" type="number" min="0" max="3600" value="'+Number(s.wgKeepalive??25)+'"></label></div>',
+    '<div class="wizard-note"><b>WireGuard is UDP</b><span>دامنه ثابت برای Endpoint باعث می‌شود بعد از انتقال VPS فقط DNS را عوض کنی. MTU/Keepalive می‌تواند روی NAT و بعضی شبکه‌ها کمک کند، اما مسدودبودن کامل UDP/WireGuard را دور نمی‌زند.</span></div>'
   ].join('');
   return [
     '<div class="wizard-section-title"><h4>OpenVPN Client</h4><p>Certificate مستقل برای این Client ساخته می‌شود.</p></div>',
@@ -369,6 +373,8 @@ function captureWizard(){
   if(val('wizExpireDays')!==undefined)s.expireDays=Number(val('wizExpireDays')||0);
   if(val('wizResetDays')!==undefined)s.resetDays=Number(val('wizResetDays')||0);
   if(val('wizDns')!==undefined)s.dns=val('wizDns');
+  if(val('wizWgMtu')!==undefined)s.wgMtu=Number(val('wizWgMtu')||0);
+  if(val('wizWgKeepalive')!==undefined)s.wgKeepalive=Number(val('wizWgKeepalive')||0);
   if(val('wizOvpnPort')!==undefined)s.ovpnPort=Number(val('wizOvpnPort')||1194);
   if(val('wizOvpnProto')!==undefined)s.ovpnProto=val('wizOvpnProto');
   if(val('wizPackagePassword')!==undefined)s.packagePassword=val('wizPackagePassword');
@@ -382,7 +388,7 @@ function validateWizardStep(){
     if(s.protocol!=='ssh'&&!s.endpoint)return 'دامنه یا IP عمومی لازم است.';
     if(s.protocol==='xray'&&(!s.port||s.port<1||s.port>65535))return 'Port معتبر وارد کن.';
   }
-  if(s.step===3&&s.protocol==='xray'&&s.security==='reality'&&s.xrayProtocol!=='vless')return 'REALITY در Wizard فعلی Makia فقط برای VLESS فعال است.';
+  if(s.step===3&&s.protocol==='xray'&&s.security==='reality'&&!['vless','trojan'].includes(s.xrayProtocol))return 'REALITY در Guided Builder برای VLESS و Trojan فعال است؛ برای ترکیب‌های دیگر از Full Xray Config Studio استفاده کن.';
   if(s.step===3&&s.protocol==='xray'&&['vless','trojan'].includes(s.xrayProtocol)&&s.security==='none'){
     const ep=(s.endpoint||'').trim();
     const privateIp=/^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ep)||ep==='localhost'||ep.endsWith('.local');
@@ -414,7 +420,7 @@ async function createProvisionedAccess(){
       r=await api('/api/protocols/xray/quick-inbound',{method:'POST',body:JSON.stringify({protocol:s.xrayProtocol,port:s.port,name:s.name,endpoint:s.endpoint,transport:s.transport,security:s.security,path_value:s.path,server_name:s.sni,reality_dest:s.realityDest,quota_gb:s.quota,expire_days:s.expireDays,ip_limit:s.devices,reset_days:s.resetDays})});
       kind='xray';key=String(r.client_id);
     }else if(s.protocol==='wireguard'){
-      r=await api('/api/protocols/wireguard/peers',{method:'POST',body:JSON.stringify({name:s.name,endpoint:s.endpoint,dns:s.dns})});key=s.name;
+      r=await api('/api/protocols/wireguard/peers',{method:'POST',body:JSON.stringify({name:s.name,endpoint:s.endpoint,dns:s.dns,mtu:s.wgMtu,persistent_keepalive:s.wgKeepalive})});key=s.name;
     }else{
       r=await api('/api/protocols/openvpn/clients',{method:'POST',body:JSON.stringify({name:s.name,endpoint:s.endpoint,port:s.ovpnPort,proto:s.ovpnProto})});key=s.name;
     }
@@ -538,22 +544,29 @@ async function reissueWireGuard(name){
   if(!confirm('Peer قدیمی '+name+' باطل و Key جدید ساخته شود؟'))return;
   const endpoint=window.PANEL_DOMAIN||location.hostname;
   try{
+    const op=window.__operatorSettings||await api('/api/settings/operator'),d=op.defaults||{};
     await api('/api/access/wireguard/'+encodeURIComponent(name),{method:'DELETE'});
-    const r=await api('/api/protocols/wireguard/peers',{method:'POST',body:JSON.stringify({name,endpoint,dns:'1.1.1.1'})});
+    const r=await api('/api/protocols/wireguard/peers',{method:'POST',body:JSON.stringify({
+      name,endpoint,dns:d.wireguard_dns||'1.1.1.1',mtu:Number(d.wireguard_mtu||0),persistent_keepalive:Number(d.wireguard_keepalive??25)
+    })});
     showProvisionSuccess('wireguard',name,name,(await api('/api/accounts/generate-secret?mode=pin6')).secret,null,r);
   }catch(e){alert(e.message)}
 }
 
 async function openProtocolSetup(kind){
   if(kind==='xray'){
-    modalRoot.innerHTML='<div class="modal-backdrop"><div class="modal setup-modal"><div class="wizard-head"><div><div class="eyebrow">ENGINE SETUP</div><h3>Install Xray Core</h3></div><button class="close-btn" data-action="modal-close">×</button></div><p>هسته Xray با Installer رسمی XTLS نصب و به systemd متصل می‌شود.</p><div class="wizard-note"><b>Real operation</b><span>این عملیات روی VPS package/service نصب می‌کند.</span></div><div class="wizard-footer"><button class="ghost" data-action="modal-close">Cancel</button><button class="primary" data-action="protocol-install" data-kind="xray">Install Xray</button></div></div></div>';
+    modalRoot.innerHTML='<div class="modal-backdrop"><div class="modal setup-modal"><div class="wizard-head"><div><div class="eyebrow">ENGINE SETUP</div><h3>Install Xray Core</h3></div><button class="close-btn" data-action="modal-close">×</button></div><p>هسته Xray با Installer رسمی XTLS نصب و به systemd متصل می‌شود.</p><div class="wizard-note"><b>Real operation</b><span>پس از نصب، Guided Builder و Full Xray Config Studio هر دو در دسترس‌اند؛ JSON پیشرفته قبل از Apply با خود Core Validate می‌شود.</span></div><div class="wizard-footer"><button class="ghost" data-action="modal-close">Cancel</button><button class="primary" data-action="protocol-install" data-kind="xray">Install Xray</button></div></div></div>';
     return;
   }
   const installed=kind==='wireguard'?Boolean(window.__protocolData?.wireguard?.installed):Boolean(window.__protocolData?.openvpn?.installed);
+  const op=window.__operatorSettings||await api('/api/settings/operator').catch(()=>({defaults:{}})),d=op.defaults||{};
   const fields=kind==='wireguard'
-    ? '<label>UDP Port<input id="setupPort" type="number" value="51820"></label><label>Tunnel CIDR<input id="setupCidr" value="10.66.66.1/24"></label>'
-    : '<label>Port<input id="setupPort" type="number" value="1194"></label><label>Transport<select id="setupProto"><option value="udp">UDP</option><option value="tcp">TCP</option></select></label>';
-  modalRoot.innerHTML='<div class="modal-backdrop"><div class="modal setup-modal"><div class="wizard-head"><div><div class="eyebrow">PROTOCOL SETUP</div><h3>'+htmlEsc(kind==='wireguard'?'WireGuard':'OpenVPN')+'</h3></div><button class="close-btn" data-action="modal-close">×</button></div><div class="wizard-form two">'+fields+'</div><div class="wizard-footer"><button class="ghost" data-action="modal-close">Cancel</button><button class="primary" data-action="protocol-bootstrap" data-kind="'+kind+'" data-installed="'+(installed?'1':'0')+'">'+(installed?'Bootstrap server':'Install & Bootstrap')+'</button></div></div></div>';
+    ? '<label>UDP Port<input id="setupPort" type="number" min="1" max="65535" value="'+Number(d.wireguard_port||51820)+'"></label><label>Tunnel CIDR<input id="setupCidr" value="10.66.66.1/24"></label><label>Server MTU<input id="setupMtu" type="number" min="0" max="1500" value="'+Number(d.wireguard_mtu||0)+'"><small>0 = auto</small></label>'
+    : '<label>Port<input id="setupPort" type="number" value="'+Number(d.openvpn_port||1194)+'"></label><label>Transport<select id="setupProto"><option value="udp" '+(d.openvpn_proto!=='tcp'?'selected':'')+'>UDP</option><option value="tcp" '+(d.openvpn_proto==='tcp'?'selected':'')+'>TCP</option></select></label>';
+  const note=kind==='wireguard'
+    ? '<div class="wizard-note"><b>Restricted-network preset</b><span>Preset: UDP 443 + MTU 1280 + Keepalive 25. HTTPS پنل روی TCP 443 با UDP 443 تداخل ندارد، مگر سرویس UDP دیگری همان Port را گرفته باشد. این تنظیم تضمین عبور از شبکه‌ای که UDP/WireGuard را کامل می‌بندد نیست.</span></div><div class="toolbar"><button class="soft" data-action="wg-restricted-preset">Apply restricted preset</button></div>'
+    : '';
+  modalRoot.innerHTML='<div class="modal-backdrop"><div class="modal setup-modal"><div class="wizard-head"><div><div class="eyebrow">PROTOCOL SETUP</div><h3>'+htmlEsc(kind==='wireguard'?'WireGuard':'OpenVPN')+'</h3></div><button class="close-btn" data-action="modal-close">×</button></div><div class="wizard-form two">'+fields+'</div>'+note+'<div class="wizard-footer"><button class="ghost" data-action="modal-close">Cancel</button><button class="primary" data-action="protocol-bootstrap" data-kind="'+kind+'" data-installed="'+(installed?'1':'0')+'">'+(installed?'Bootstrap server':'Install & Bootstrap')+'</button></div></div></div>';
 }
 
 async function performProtocolInstall(kind){
@@ -568,7 +581,8 @@ async function performProtocolBootstrap(kind,installed){
     if(!installed)await api('/api/protocols/install',{method:'POST',body:JSON.stringify({component:kind})});
     if(kind==='wireguard'){
       const cidr=document.getElementById('setupCidr')?.value||'10.66.66.1/24';
-      await api('/api/protocols/wireguard/bootstrap',{method:'POST',body:JSON.stringify({port,cidr})});
+      const mtu=Number(document.getElementById('setupMtu')?.value||0);
+      await api('/api/protocols/wireguard/bootstrap',{method:'POST',body:JSON.stringify({port,cidr,mtu})});
     }else{
       const proto=document.getElementById('setupProto')?.value||'udp';
       await api('/api/protocols/openvpn/bootstrap',{method:'POST',body:JSON.stringify({port,proto})});
@@ -782,7 +796,7 @@ async function submitXrayTunnel(){const payload={name:tnName.value.trim(),listen
 
 async function installProtocol(component){if(!confirm('Install '+component+' and required packages?'))return;try{await api('/api/protocols/install',{method:'POST',body:JSON.stringify({component})});toast(component+' installed');await protocols()}catch(e){alert(e.message)}}
 function showXrayInbounds(){document.querySelector('.protocol-grid')?.nextElementSibling?.scrollIntoView({behavior:'smooth'})}
-function createXrayInbound(){modalRoot.innerHTML=`<div class="modal-backdrop" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-head"><div><div class="eyebrow">XRAY CLIENT + INBOUND</div><h3>ساخت دسترسی Xray</h3></div><button class="close-btn" onclick="closeModal()">×</button></div><div class="form-grid"><label>Protocol<select id="xiProtocol" onchange="syncXrayForm()"><option value="vless">VLESS</option><option value="vmess">VMess</option><option value="trojan">Trojan</option><option value="shadowsocks">Shadowsocks</option><option value="hysteria2">Hysteria2</option><option value="http">HTTP Proxy</option><option value="socks">SOCKS5</option></select></label><label>Transport<select id="xiTransport" onchange="syncXrayForm()"><option value="tcp">RAW / TCP</option><option value="ws">WebSocket</option><option value="grpc">gRPC</option><option value="httpupgrade">HTTPUpgrade</option><option value="xhttp">XHTTP</option><option value="kcp">mKCP</option></select></label><label>Security<select id="xiSecurity" onchange="syncXrayForm()"><option value="none">None</option><option value="tls">TLS</option><option value="reality">REALITY</option></select></label><label>Port<input id="xiPort" type="number" min="1" max="65535" value="2087"></label><label>Client name<input id="xiName" value="client01"></label><label>Public domain / IP<input id="xiEndpoint" value="${window.PANEL_DOMAIN||location.hostname}"></label><label id="xiPathWrap">Path / Service / Seed<input id="xiPath" value="/makia"></label><label id="xiSniWrap">Domain / SNI<input id="xiSni" value="${window.PANEL_DOMAIN||''}" placeholder="vpn.example.com"></label><label id="xiRealityWrap">REALITY target<input id="xiRealityDest" value="www.cloudflare.com:443" placeholder="www.example.com:443"></label><label>Traffic quota (GB)<input id="xiQuota" type="number" min="0" step="1" value="50"><div class="password-tools quota-tools"><button class="soft" onclick="xiQuota.value=0">∞</button><button class="soft" onclick="xiQuota.value=10">10</button><button class="soft" onclick="xiQuota.value=20">20</button><button class="soft recommended" onclick="xiQuota.value=50">50</button><button class="soft" onclick="xiQuota.value=100">100</button><button class="soft" onclick="xiQuota.value=200">200</button><button class="soft" onclick="xiQuota.value=500">500</button></div><span class="muted">0 = Unlimited</span></label><label>Expiry days<input id="xiDays" type="number" min="0" max="3650" value="30"><div class="password-tools duration-tools"><button class="soft" onclick="xiDays.value=1">1D</button><button class="soft" onclick="xiDays.value=3">3D</button><button class="soft" onclick="xiDays.value=7">7D</button><button class="soft" onclick="xiDays.value=15">15D</button><button class="soft recommended" onclick="xiDays.value=30">30D</button><button class="soft" onclick="xiDays.value=60">60D</button><button class="soft" onclick="xiDays.value=90">90D</button><button class="soft" onclick="xiDays.value=0">∞</button></div></label><label>Traffic reset cycle<input id="xiResetDays" type="number" min="0" max="3650" value="30"><div class="password-tools"><button class="soft" onclick="xiResetDays.value=0">Never</button><button class="soft" onclick="xiResetDays.value=7">7D</button><button class="soft recommended" onclick="xiResetDays.value=30">30D</button><button class="soft" onclick="xiResetDays.value=60">60D</button><button class="soft" onclick="xiResetDays.value=90">90D</button></div><span class="muted">حجم مصرفی در شروع هر دوره صفر می‌شود.</span></label><label>IP / Device limit<input id="xiIpLimit" type="number" min="1" max="50" value="1"><div class="password-tools"><button class="soft recommended" onclick="xiIpLimit.value=1">1</button><button class="soft" onclick="xiIpLimit.value=2">2</button><button class="soft" onclick="xiIpLimit.value=3">3</button><button class="soft" onclick="xiIpLimit.value=5">5</button><button class="soft" onclick="xiIpLimit.value=10">10</button></div><span class="muted">با Online-IP API هسته Xray مانیتور و توسط Policy Worker enforce می‌شود؛ روی Coreهای فاقد این API فقط وضعیت Unavailable نشان داده می‌شود.</span></label></div><div id="xiCompatNote" class="notice"></div><div class="toolbar"><button class="primary" onclick="submitXrayInbound()">Create, Validate & Restart</button><button class="ghost" onclick="closeModal()">Cancel</button></div></div></div>`;syncXrayForm()}
+function createXrayInbound(){modalRoot.innerHTML=`<div class="modal-backdrop" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-head"><div><div class="eyebrow">XRAY CLIENT + INBOUND</div><h3>ساخت دسترسی Xray</h3></div><button class="close-btn" onclick="closeModal()">×</button></div><div class="form-grid"><label>Protocol<select id="xiProtocol" onchange="syncXrayForm()"><option value="vless">VLESS</option><option value="vmess">VMess</option><option value="trojan">Trojan</option><option value="shadowsocks">Shadowsocks</option><option value="hysteria2">Hysteria2</option><option value="http">HTTP Proxy</option><option value="socks">SOCKS5</option></select></label><label>Transport<select id="xiTransport" onchange="syncXrayForm()"><option value="tcp">RAW / TCP</option><option value="ws">WebSocket</option><option value="grpc">gRPC</option><option value="httpupgrade">HTTPUpgrade</option><option value="xhttp">XHTTP</option><option value="kcp">mKCP</option></select></label><label>Security<select id="xiSecurity" onchange="syncXrayForm()"><option value="none">None</option><option value="tls">TLS</option><option value="reality">REALITY</option></select></label><label>Port<input id="xiPort" type="number" min="1" max="65535" value="2087"></label><label>Client name<input id="xiName" value="client01"></label><label>Public domain / IP<input id="xiEndpoint" value="${window.PANEL_DOMAIN||location.hostname}"></label><label id="xiPathWrap">Path / Service / Seed<input id="xiPath" value="/makia"></label><label id="xiSniWrap">Domain / SNI<input id="xiSni" value="${window.PANEL_DOMAIN||''}" placeholder="vpn.example.com"></label><label id="xiRealityWrap">REALITY target<input id="xiRealityDest" value="www.cloudflare.com:443" placeholder="www.example.com:443"></label><label>Traffic quota (GB)<input id="xiQuota" type="number" min="0" step="1" value="50"><div class="password-tools quota-tools"><button class="soft" onclick="xiQuota.value=0">∞</button><button class="soft" onclick="xiQuota.value=10">10</button><button class="soft" onclick="xiQuota.value=20">20</button><button class="soft recommended" onclick="xiQuota.value=50">50</button><button class="soft" onclick="xiQuota.value=100">100</button><button class="soft" onclick="xiQuota.value=200">200</button><button class="soft" onclick="xiQuota.value=500">500</button></div><span class="muted">0 = Unlimited</span></label><label>Expiry days<input id="xiDays" type="number" min="0" max="3650" value="30"><div class="password-tools duration-tools"><button class="soft" onclick="xiDays.value=1">1D</button><button class="soft" onclick="xiDays.value=3">3D</button><button class="soft" onclick="xiDays.value=7">7D</button><button class="soft" onclick="xiDays.value=15">15D</button><button class="soft recommended" onclick="xiDays.value=30">30D</button><button class="soft" onclick="xiDays.value=60">60D</button><button class="soft" onclick="xiDays.value=90">90D</button><button class="soft" onclick="xiDays.value=0">∞</button></div></label><label>Traffic reset cycle<input id="xiResetDays" type="number" min="0" max="3650" value="30"><div class="password-tools"><button class="soft" onclick="xiResetDays.value=0">Never</button><button class="soft" onclick="xiResetDays.value=7">7D</button><button class="soft recommended" onclick="xiResetDays.value=30">30D</button><button class="soft" onclick="xiResetDays.value=60">60D</button><button class="soft" onclick="xiResetDays.value=90">90D</button></div><span class="muted">حجم مصرفی در شروع هر دوره صفر می‌شود.</span></label><label>IP / Device limit<input id="xiIpLimit" type="number" min="1" max="50" value="1"><div class="password-tools"><button class="soft recommended" onclick="xiIpLimit.value=1">1</button><button class="soft" onclick="xiIpLimit.value=2">2</button><button class="soft" onclick="xiIpLimit.value=3">3</button><button class="soft" onclick="xiIpLimit.value=5">5</button><button class="soft" onclick="xiIpLimit.value=10">10</button></div><span class="muted">با Online-IP API هسته Xray مانیتور و توسط Policy Worker enforce می‌شود؛ روی Coreهای فاقد این API فقط وضعیت Unavailable نشان داده می‌شود.</span></label></div><div id="xiCompatNote" class="notice"></div><div class="toolbar"><button class="primary" onclick="submitXrayInbound()">Create, Validate & Restart</button><button class="ghost" data-action="xray-advanced">Full Xray Config Studio</button><button class="ghost" onclick="closeModal()">Cancel</button></div></div></div>`;syncXrayForm()}
 function syncXrayForm(){
   const p=xiProtocol.value;
   if(p==='hysteria2'){xiTransport.value='tcp';xiSecurity.value='tls';xiTransport.disabled=true;xiSecurity.disabled=true}
@@ -801,7 +815,7 @@ function syncXrayForm(){
   if(p==='hysteria2') note='Hysteria2 با TLS اجرا می‌شود و Certificate دامنه باید از Domain & TLS صادر شده باشد.';
   else if(p==='http') note='HTTP Proxy با Username/Password واقعی ساخته می‌شود. Per-client Xray traffic counter برای این نوع در این نسخه قابل اتکا نیست، بنابراین Quota غیرفعال است.';
   else if(p==='socks') note='SOCKS5 با Username/Password و UDP پشتیبانی می‌شود. Per-client traffic quota برای این نوع در این نسخه غیرفعال است.';
-  else if(s==='reality'&&p!=='vless') note='REALITY در Makia فعلاً فقط برای VLESS فعال است.';
+  else if(s==='reality'&&!['vless','trojan'].includes(p)) note='REALITY در Guided Builder برای VLESS/Trojan فعال است؛ برای سایر JSONهای معتبر از Full Xray Config Studio استفاده کن.';
   else if(s==='reality'&&!['tcp','grpc','xhttp'].includes(t)) note='REALITY با این Transport مجاز نیست؛ RAW/TCP، gRPC یا XHTTP انتخاب کن.';
   else if(p==='shadowsocks'&&s!=='none') note='Shadowsocks Quick Profile با TLS/REALITY ترکیب نمی‌شود.';
   else if(p==='shadowsocks') note='Traffic quota مستقل برای Shadowsocks Quick Profile در این نسخه قابل enforce نیست.';
@@ -846,8 +860,8 @@ async function openXrayAdvanced(){try{const r=await api('/api/protocols/xray/con
 function parseAdvancedXray(){try{return JSON.parse(xrayAdvancedText.value)}catch(e){throw new Error('JSON نامعتبر: '+e.message)}}
 async function validateXrayAdvanced(){try{const config=parseAdvancedXray();await api('/api/protocols/xray/config/validate',{method:'POST',body:JSON.stringify({config})});toast('Xray config valid ✓')}catch(e){alert(e.message)}}
 async function applyXrayAdvanced(){if(!confirm('Config اعتبارسنجی، Backup و سپس روی Xray اعمال شود؟'))return;try{const config=parseAdvancedXray();const r=await api('/api/protocols/xray/config',{method:'PUT',body:JSON.stringify({config})});toast('Xray config applied');closeModal();await protocols()}catch(e){alert(e.message)}}
-async function bootstrapWireGuard(){const port=Number(prompt('WireGuard UDP port','51820'));if(!port)return;const cidr=prompt('Server tunnel CIDR','10.66.66.1/24');if(!cidr)return;try{const r=await api('/api/protocols/wireguard/bootstrap',{method:'POST',body:JSON.stringify({port,cidr})});toast('WireGuard '+r.interface+' started');await protocols()}catch(e){alert(e.message)}}
-async function createWireGuardPeer(){const name=prompt('Peer name','client01');if(!name)return;const endpoint=prompt('Public domain or server IP',window.PANEL_DOMAIN||location.hostname);if(!endpoint)return;const dns=prompt('Client DNS','1.1.1.1')||'1.1.1.1';try{const r=await api('/api/protocols/wireguard/peers',{method:'POST',body:JSON.stringify({name,endpoint,dns})});configModal('WireGuard · '+name,r.config,name+'.conf','wireguard',name)}catch(e){alert(e.message)}}
+async function bootstrapWireGuard(){const op=await api('/api/settings/operator'),d=op.defaults||{};const port=Number(prompt('WireGuard UDP port',String(d.wireguard_port||51820)));if(!port)return;const cidr=prompt('Server tunnel CIDR','10.66.66.1/24');if(!cidr)return;const mtu=Number(prompt('MTU (0=auto)',String(d.wireguard_mtu||0))||0);try{const r=await api('/api/protocols/wireguard/bootstrap',{method:'POST',body:JSON.stringify({port,cidr,mtu})});toast('WireGuard '+r.interface+' started');await protocols()}catch(e){alert(e.message)}}
+async function createWireGuardPeer(){const op=await api('/api/settings/operator'),d=op.defaults||{};const name=prompt('Peer name','client01');if(!name)return;const endpoint=prompt('Public domain or server IP',window.PANEL_DOMAIN||location.hostname);if(!endpoint)return;const dns=prompt('Client DNS',d.wireguard_dns||'1.1.1.1')||'1.1.1.1';const mtu=Number(prompt('MTU (0=auto)',String(d.wireguard_mtu||0))||0),persistent_keepalive=Number(prompt('PersistentKeepalive seconds',String(d.wireguard_keepalive??25))||0);try{const r=await api('/api/protocols/wireguard/peers',{method:'POST',body:JSON.stringify({name,endpoint,dns,mtu,persistent_keepalive})});configModal('WireGuard · '+name,r.config,name+'.conf','wireguard',name)}catch(e){alert(e.message)}}
 async function bootstrapOpenVPN(){const port=Number(prompt('OpenVPN port','1194'));if(!port)return;const proto=(prompt('Protocol: udp or tcp','udp')||'udp').toLowerCase();try{await api('/api/protocols/openvpn/bootstrap',{method:'POST',body:JSON.stringify({port,proto})});toast('OpenVPN server started');await protocols()}catch(e){alert(e.message)}}
 async function createOpenVPNClient(){const name=prompt('Client name','client01');if(!name)return;const endpoint=prompt('Public domain or server IP',window.PANEL_DOMAIN||location.hostname);if(!endpoint)return;const port=Number(prompt('OpenVPN port','1194'))||1194;const proto=(prompt('Protocol: udp or tcp','udp')||'udp').toLowerCase();try{const r=await api('/api/protocols/openvpn/clients',{method:'POST',body:JSON.stringify({name,endpoint,port,proto})});configModal('OpenVPN · '+name,r.config,name+'.ovpn','openvpn',name)}catch(e){alert(e.message)}}
 function configModal(titleText,textData,fileName,kind=null,key=null){
@@ -891,8 +905,9 @@ async function auditView(renderToken=window.__viewRenderToken){
 async function updates(renderToken=window.__viewRenderToken){title.textContent='Update Center';setPageContext('RELEASE MANAGEMENT');content.innerHTML='<div class="empty">در حال بررسی نسخه…</div>';let s;try{s=await api('/api/update/status')}catch(e){s={current:window.MAKIA_VERSION,latest:null,error:e.message}}if(renderToken!==window.__viewRenderToken||activeView!=='updates')return;const available=s.update_available;content.innerHTML=`<div class="panel update-hero"><div><div class="eyebrow">RELEASE CHANNEL · MAIN</div><h2>${available?'نسخه جدید آماده است':'Makia به‌روز است'}</h2><p class="muted">${s.error?'بررسی آنلاین نسخه ناموفق بود: '+s.error:'نسخه نصب‌شده با VERSION مخزن اصلی مقایسه شد.'}</p></div><div class="version-stack"><span>Installed</span><b>v${s.current||window.MAKIA_VERSION}</b><span>Latest</span><b class="${available?'accent':''}">${s.latest?'v'+s.latest:'Unavailable'}</b></div></div><div class="two-col"><div class="panel"><div class="panel-head"><h3>Safe update workflow</h3><span>CLI VERIFIED PATH</span></div><div class="timeline"><div><b>1</b><span>Pre-update backup</span></div><div><b>2</b><span>Download main</span></div><div><b>3</b><span>Dependencies + service files</span></div><div><b>4</b><span>Restart + health check</span></div></div><div class="command-box">sudo makia-upgrade <button class="soft" onclick="copyText('sudo makia-upgrade')">Copy</button></div></div><div class="panel"><div class="panel-head"><h3>Release status</h3><span>${available?'ACTION AVAILABLE':'NO ACTION'}</span></div><div class="quick-grid"><div class="quick-card"><b>${s.current||'-'}</b><span>Current</span></div><div class="quick-card"><b>${s.latest||'-'}</b><span>Latest on GitHub</span></div></div><div class="notice">آپدیت Web-triggered هنوز عمداً فعال نشده تا rollback اتمیک و امضای Release کامل شود؛ فعلاً CLI مسیر قابل بازیابی‌تری است.</div></div></div>`}
 async function settings(renderToken=window.__viewRenderToken){
   title.textContent='Settings';setPageContext('PANEL CONFIGURATION');
-  const [general,two,tokens,operator,backupRows]=await Promise.all([
-    api('/api/settings/general'),api('/api/admin/2fa/status'),api('/api/admin/tokens'),api('/api/settings/operator'),api('/api/backups').catch(()=>[])
+  const [general,two,tokens,operator,backupRows,portableStatus]=await Promise.all([
+    api('/api/settings/general'),api('/api/admin/2fa/status'),api('/api/admin/tokens'),api('/api/settings/operator'),
+    api('/api/backups').catch(()=>[]),api('/api/backups/portable/status').catch(()=>({warnings:['Portable backup status unavailable']}))
   ]);
   if(renderToken!==window.__viewRenderToken||activeView!=='settings')return;
   window.PANEL_DOMAIN=general.panel_domain||'';window.__operatorSettings=operator;
@@ -944,12 +959,19 @@ async function settings(renderToken=window.__viewRenderToken){
       '<label>Security<select id="opXraySecurity"><option value="reality" '+(defs.xray_security==='reality'?'selected':'')+'>REALITY</option><option value="tls" '+(defs.xray_security==='tls'?'selected':'')+'>TLS</option><option value="none" '+(defs.xray_security==='none'?'selected':'')+'>None</option></select></label>',
       '<label>Path / Service<input id="opXrayPath" value="'+htmlEsc(defs.xray_path||'/makia')+'"></label><label>SNI<input id="opXraySni" value="'+htmlEsc(defs.xray_sni||'www.microsoft.com')+'"></label><label>REALITY target<input id="opXrayTarget" value="'+htmlEsc(defs.xray_reality_target||'www.microsoft.com:443')+'"></label>',
       '<label>Quota GB<input id="opXrayQuota" type="number" min="0" value="'+Number(defs.xray_quota_gb??50)+'"></label><label>Expiry days<input id="opXrayDays" type="number" min="0" max="3650" value="'+Number(defs.xray_expire_days??30)+'"></label><label>IP limit<input id="opXrayIp" type="number" min="1" max="50" value="'+Number(defs.xray_ip_limit||1)+'"></label><label>Traffic reset days<input id="opXrayReset" type="number" min="0" max="3650" value="'+Number(defs.xray_reset_days??30)+'"></label></div>',
-      '<div class="settings-actions"><button class="primary" data-action="settings-operator-save">Save Xray defaults</button></div></div>'
+      '<div class="wizard-note"><b>Guided + Advanced</b><span>این Defaultها برای Builder مدیریت‌شده‌اند. برای Routing، Fallbacks، DNS، Outbounds، TUN و هر ساختار JSON معتبر دیگر، Full Xray Config Studio کل config را با خود Xray Core Validate و سپس با Backup/Rollback اعمال می‌کند.</span></div>',
+      '<div class="settings-actions"><button class="ghost" data-action="xray-advanced">Open Full Xray Config Studio</button><button class="primary" data-action="settings-operator-save">Save Xray defaults</button></div></div>'
     ].join('');
   }else if(tab==='vpn'){
     body=[
-      '<section class="settings-section-head"><div><div class="eyebrow">PROVISIONING DEFAULTS</div><h2>WireGuard / OpenVPN Defaults</h2><p>تنظیمات پیش‌فرض Client برای Engineهای واقعی نصب‌شده روی Host.</p></div></section>',
-      '<div class="settings-card-v2"><div class="settings-form-grid"><label>WireGuard DNS<input id="opWgDns" value="'+htmlEsc(defs.wireguard_dns||'1.1.1.1')+'"></label><label>OpenVPN port<input id="opOvpnPort" type="number" min="1" max="65535" value="'+Number(defs.openvpn_port||1194)+'"></label><label>OpenVPN transport<select id="opOvpnProto"><option value="udp" '+(defs.openvpn_proto==='udp'?'selected':'')+'>UDP</option><option value="tcp" '+(defs.openvpn_proto==='tcp'?'selected':'')+'>TCP</option></select></label></div>',
+      '<section class="settings-section-head"><div><div class="eyebrow">PROVISIONING DEFAULTS</div><h2>WireGuard / OpenVPN Defaults</h2><p>WireGuard همچنان UDP است؛ Port/MTU/Keepalive برای سازگاری شبکه و Domain برای Migration پایدار قابل تنظیم‌اند.</p></div></section>',
+      '<div class="settings-card-v2"><div class="settings-card-title"><div><b>WireGuard</b><span>Real server/client defaults</span></div><button class="soft" data-action="wg-restricted-preset">Restricted-network preset</button></div><div class="settings-form-grid">',
+      '<label>DNS<input id="opWgDns" value="'+htmlEsc(defs.wireguard_dns||'1.1.1.1')+'"></label>',
+      '<label>UDP Port<input id="opWgPort" type="number" min="1" max="65535" value="'+Number(defs.wireguard_port||51820)+'"></label>',
+      '<label>MTU<input id="opWgMtu" type="number" min="0" max="1500" value="'+Number(defs.wireguard_mtu||0)+'"><small>0 = auto; preset = 1280</small></label>',
+      '<label>PersistentKeepalive<input id="opWgKeepalive" type="number" min="0" max="3600" value="'+Number(defs.wireguard_keepalive??25)+'"><small>25s commonly keeps NAT mappings alive</small></label></div>',
+      '<div class="wizard-note"><b>Network reality</b><span>Preset از UDP 443 + MTU 1280 + Keepalive 25 استفاده می‌کند. اگر اپراتور UDP یا خود WireGuard را کامل مسدود کند، از Xray TLS/REALITY روی دامنه استفاده کن؛ پنل WireGuard را جعلی TCP نشان نمی‌دهد.</span></div></div>',
+      '<div class="settings-card-v2"><div class="settings-card-title"><div><b>OpenVPN</b><span>Fallback TCP/UDP engine</span></div></div><div class="settings-form-grid"><label>Port<input id="opOvpnPort" type="number" min="1" max="65535" value="'+Number(defs.openvpn_port||1194)+'"></label><label>Transport<select id="opOvpnProto"><option value="udp" '+(defs.openvpn_proto==='udp'?'selected':'')+'>UDP</option><option value="tcp" '+(defs.openvpn_proto==='tcp'?'selected':'')+'>TCP</option></select></label></div>',
       '<div class="settings-actions"><button class="primary" data-action="settings-operator-save">Save VPN defaults</button></div></div>'
     ].join('');
   }else if(tab==='delivery'){
@@ -988,12 +1010,16 @@ async function settings(renderToken=window.__viewRenderToken){
       '<div class="settings-card-v2"><div class="wizard-note"><b>HTTPS only</b><span>برای API مدیریتی از HTTPS استفاده کن. در دیتابیس فقط Hash Token ذخیره می‌شود.</span></div><div class="table">'+(tokens.length?tokens.map(t=>'<div class="row"><div><b>'+htmlEsc(t.name)+'</b><div class="muted">…'+htmlEsc(t.token_last4)+'</div></div><div class="muted">'+htmlEsc(t.scopes||'-')+'</div><div><span class="status-chip '+(t.active?'ok':'bad')+'">'+(t.active?'Active':'Revoked')+'</span></div><div class="toolbar">'+(t.active?'<button class="danger" data-action="settings-api-revoke" data-id="'+Number(t.id)+'">Revoke</button>':'')+'</div></div>').join(''):'<div class="empty">API Tokenای ساخته نشده است.</div>')+'</div></div>'
     ].join('');
   }else{
-    const recent=backupRows.slice(0,5);
+    const recent=backupRows.slice(0,5),ps=portableStatus||{},warns=ps.warnings||[];
     body=[
-      '<section class="settings-section-head"><div><div class="eyebrow">RECOVERY</div><h2>Backup / Recovery Settings</h2><p>فقط عملیات Backend موجود: ساخت Snapshot و مشاهده Archive. Restore نمایشی اضافه نشده است.</p></div><button class="primary" data-action="backup-create">＋ Create Backup</button></section>',
-      '<div class="settings-card-v2"><div class="domain-health-v2"><div><span>Backups</span><b>'+backupRows.length+'</b></div><div><span>Latest</span><b>'+(recent[0]?htmlEsc(recent[0].name):'None')+'</b></div><div><span>Storage</span><b>'+fmtBytes(backupRows.reduce((n,x)=>n+Number(x.size||0),0))+'</b></div><div><span>Restore</span><b class="warn-text">CLI / validated workflow only</b></div></div>',
-      '<div class="settings-shortcuts"><button data-action="nav" data-view="backups"><b>Open Backup Center</b><span>View all real archives</span></button><button data-action="self-test"><b>Run Self-Test</b><span>Validate crypto, DB and services</span></button></div>',
-      (recent.length?'<div class="recovery-list">'+recent.map(x=>'<div><b>'+htmlEsc(x.name)+'</b><span>'+fmtBytes(x.size||0)+'</span></div>').join('')+'</div>':'<div class="empty">هنوز Backup ساخته نشده است.</div>')+'</div>'
+      '<section class="settings-section-head"><div><div class="eyebrow">DISASTER RECOVERY</div><h2>Portable Backup / VPS Migration</h2><p>Bundle رمزگذاری‌شده برای انتقال DB/Secret، Xray، WireGuard، OpenVPN PKI، Nginx و Let\'s Encrypt. برای عدم تغییر Clientها از Domain ثابت استفاده کن.</p></div><div class="settings-actions"><button class="ghost" data-action="backup-create">Data Snapshot</button><button class="primary" data-action="portable-backup">Download Portable Bundle</button></div></section>',
+      '<div class="settings-card-v2"><div class="domain-health-v2"><div><span>Domain</span><b class="'+(ps.panel_domain?'ok-text':'warn-text')+'">'+htmlEsc(ps.panel_domain||'Not configured')+'</b></div><div><span>Certificate</span><b class="'+(ps.certificate?'ok-text':'warn-text')+'">'+(ps.certificate?'Included/ready':'Missing')+'</b></div><div><span>Xray by domain</span><b>'+Number(ps.xray_domain_clients||0)+' / '+Number(ps.xray_clients||0)+'</b></div><div><span>SSH recoverable</span><b>'+Number(ps.ssh_recoverable||0)+' / '+Number(ps.ssh_artifacts||0)+'</b></div></div>',
+      '<div class="portable-source-grid">'+[['Data + Makia secret',ps.has_data],['WireGuard keys/config',ps.has_wireguard],['Xray config/keys',ps.has_xray],['OpenVPN PKI',ps.has_openvpn],['Nginx site',ps.has_nginx],['Let\'s Encrypt',ps.has_letsencrypt]].map(x=>'<div><i class="'+(x[1]?'ok':'warn')+'">'+(x[1]?'✓':'!')+'</i><span>'+htmlEsc(x[0])+'</span></div>').join('')+'</div>',
+      (warns.length?'<div class="wizard-note warn"><b>Migration checks</b><span>'+warns.map(htmlEsc).join(' · ')+'</span></div>':'<div class="wizard-note"><b>Continuity ready</b><span>بعد از Restore روی VPS جدید، همان Domain را با A/AAAA به IP جدید ببَر. Xray/WireGuard/OpenVPNهایی که با Domain ساخته شده‌اند با همان Credential/Key دوباره وصل می‌شوند؛ Sessionهای باز فعلی طبیعتاً reconnect می‌شوند.</span></div>'),
+      '<div class="command-box">sudo makia-restore /path/to/makia-portable.zip --apply <button class="soft" onclick="copyText(\'sudo makia-restore /path/to/makia-portable.zip --apply\')">Copy</button></div>',
+      '<div class="settings-shortcuts"><button data-action="nav" data-view="backups"><b>Open Backup Center</b><span>'+backupRows.length+' local data snapshots</span></button><button data-action="self-test"><b>Run Self-Test</b><span>Validate DB, crypto and services</span></button></div>',
+      (recent.length?'<div class="recovery-list">'+recent.map(x=>'<div><b>'+htmlEsc(x.name)+'</b><span>'+fmtBytes(x.size||0)+'</span></div>').join('')+'</div>':'')
+      +'</div>'
     ].join('');
   }
 
@@ -1032,6 +1058,9 @@ function operatorPayloadFromUi(){
     xray_ip_limit:readSettingValue('opXrayIp',Number(x.xray_ip_limit||1)),
     xray_reset_days:readSettingValue('opXrayReset',Number(x.xray_reset_days??30)),
     wireguard_dns:readSettingValue('opWgDns',x.wireguard_dns||'1.1.1.1'),
+    wireguard_port:readSettingValue('opWgPort',Number(x.wireguard_port||51820)),
+    wireguard_mtu:readSettingValue('opWgMtu',Number(x.wireguard_mtu||0)),
+    wireguard_keepalive:readSettingValue('opWgKeepalive',Number(x.wireguard_keepalive??25)),
     openvpn_port:readSettingValue('opOvpnPort',Number(x.openvpn_port||1194)),
     openvpn_proto:readSettingValue('opOvpnProto',x.openvpn_proto||'udp'),
     subscription_enabled:readSettingValue('opSubscriptionEnabled',sub.enabled!==false?'1':'0')==='1',
@@ -1041,6 +1070,22 @@ function operatorPayloadFromUi(){
 }
 async function saveOperatorSettings(){
   try{window.__operatorSettings=await api('/api/settings/operator',{method:'PUT',body:JSON.stringify(operatorPayloadFromUi())});toast('Operational settings saved');await currentView()}catch(e){alert(e.message)}
+}
+function applyRestrictedWireGuardPreset(){
+  const values={opWgPort:443,opWgMtu:1280,opWgKeepalive:25,setupPort:443,setupMtu:1280};
+  Object.entries(values).forEach(([id,value])=>{const el=document.getElementById(id);if(el)el.value=value});
+  toast('WireGuard restricted-network preset applied');
+}
+async function createPortableBackup(){
+  const password=prompt('Portable backup password (minimum 8 characters):');
+  if(password===null)return;
+  if(password.length<8){alert('رمز Backup حداقل ۸ کاراکتر باشد.');return}
+  try{
+    await fetchDownload('/api/backups/portable',{
+      method:'POST',headers:{'Content-Type':'application/json','X-Makia-Request':'1'},body:JSON.stringify({password})
+    },'makia-portable.zip');
+    toast('Portable recovery bundle downloaded');
+  }catch(e){alert('Portable backup: '+e.message)}
 }
 async function applySettingsDomain(){
   const domain=(document.getElementById('domainName')?.value||'').trim();if(!domain){alert('دامنه را وارد کنید.');return}
@@ -1136,6 +1181,7 @@ async function handleMakiaAction(btn){
   if(action==='protocol-setup'){await openProtocolSetup(btn.dataset.kind);return}
   if(action==='protocol-install'){await performProtocolInstall(btn.dataset.kind);return}
   if(action==='protocol-bootstrap'){await performProtocolBootstrap(btn.dataset.kind,btn.dataset.installed==='1');return}
+  if(action==='wg-restricted-preset'){applyRestrictedWireGuardPreset();return}
   if(action==='protocol-refresh'){await currentView();return}
   if(action==='xray-advanced'){await openXrayAdvanced();return}
   if(action==='xray-tunnel'){createXrayTunnel();return}
@@ -1161,6 +1207,7 @@ async function handleMakiaAction(btn){
   if(action==='node-revoke'){await revokeNode(Number(btn.dataset.id));return}
   if(action==='service-action'){await svc(dataDec(btn.dataset.service),btn.dataset.serviceAction);return}
   if(action==='backup-create'){await makeBackup();return}
+  if(action==='portable-backup'){await createPortableBackup();return}
   if(action==='settings-tab'){window.__settingsTab=btn.dataset.tab||'general';await currentView();return}
   if(action==='settings-general-save'){await saveGeneral();return}
   if(action==='settings-domain-apply'){await applySettingsDomain();return}
