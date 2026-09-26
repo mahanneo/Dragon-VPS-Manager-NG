@@ -1669,6 +1669,22 @@ def diagnostics_self_test(request:Request):
         add("panel_tls_expiry",False,exc,"warn")
 
     try:
+        wg=protocol_ops.wireguard_status()
+        if wg.get("installed") and wg.get("config"):
+            diag=protocol_ops.wireguard_diagnostics("wg0",public_host(request))
+            detail=(
+                f"udp/{diag.get('port')} listener={diag.get('listener')} · "
+                f"forward={diag.get('ip_forward')} · nat={diag.get('nat_rule')} · "
+                f"rules={bool(diag.get('forward_in_rule') and diag.get('forward_out_rule'))}"
+            )
+            add("wireguard_runtime",bool(diag.get("runtime_ok")),detail+"; "+("; ".join(diag.get("warnings") or [])),"error")
+            endpoint=diag.get("endpoint") or {}
+            if endpoint and not endpoint.get("endpoint_is_ip"):
+                add("wireguard_domain",bool(endpoint.get("resolved_ipv4")) and endpoint.get("dns_matches_server") is not False,"; ".join(diag.get("warnings") or []) or "Domain A record points directly to this VPS","warn")
+    except Exception as exc:
+        add("wireguard_runtime",False,exc,"warn")
+
+    try:
         ovpn=protocol_ops.openvpn_status()
         if ovpn.get("installed") and ovpn.get("config"):
             diag=protocol_ops.openvpn_endpoint_diagnostics(public_host(request))
@@ -1677,6 +1693,19 @@ def diagnostics_self_test(request:Request):
                 add("openvpn_domain",bool(diag.get("resolved_ipv4")) and diag.get("dns_matches_server") is not False,"; ".join(diag.get("warnings") or []) or "Domain A record points to this VPS","warn")
     except Exception as exc:
         add("openvpn_runtime",False,exc,"warn")
+
+    try:
+        endpoint=(get_setting("panel_domain","") or "").strip()
+        if endpoint:
+            matrix=protocol_ops.endpoint_connectivity_matrix(endpoint)
+            add(
+                "protocol_endpoint_matrix",
+                bool(matrix.get("ok")),
+                f"{endpoint}: {matrix.get('passed')}/{matrix.get('checked')} configured protocols server-side ready",
+                "warn",
+            )
+    except Exception as exc:
+        add("protocol_endpoint_matrix",False,exc,"warn")
 
     critical=[x for x in checks if not x["ok"] and x["level"]=="error"]
     warnings=[x for x in checks if not x["ok"] and x["level"]=="warn"]
