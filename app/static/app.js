@@ -1,4 +1,13 @@
 const content=document.querySelector('#content'),title=document.querySelector('#pageTitle'),modalRoot=document.querySelector('#modalRoot');let activeView='dashboard';
+const pageContext=document.querySelector('#pageContext');
+function htmlEsc(v){return String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
+function dataEnc(v){return encodeURIComponent(String(v??''))}
+function dataDec(v){try{return decodeURIComponent(String(v??''))}catch{return String(v??'')}}
+function setPageContext(v){if(pageContext)pageContext.textContent=v||'MAKIA CONTROL CENTER'}
+function downloadBlob(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name||'download';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),800)}
+function filenameFromHeaders(r,fallback){const cd=r.headers.get('content-disposition')||'';const m=cd.match(/filename="([^"]+)"/i);return m?.[1]||fallback||'download'}
+async function fetchDownload(url,opts={},fallback='download'){const r=await fetch(url,{credentials:'same-origin',...opts});if(!r.ok){let msg='Download failed';try{const j=await r.json();msg=j?.detail||msg}catch{try{msg=await r.text()||msg}catch{}}throw new Error(msg)}const blob=await r.blob();downloadBlob(blob,filenameFromHeaders(r,fallback));return true}
+
 async function api(url,opts={}){const r=await fetch(url,{headers:{'Content-Type':'application/json','X-Makia-Request':'1'},...opts});let j=null;try{j=await r.json()}catch{}if(!r.ok)throw new Error(j?.detail||'خطا در انجام عملیات');return j}
 function fmtBytes(n){if(!n)return'0 B';const u=['B','KB','MB','GB','TB'];const i=Math.min(u.length-1,Math.floor(Math.log(n)/Math.log(1024)));return(n/1024**i).toFixed(i?1:0)+' '+u[i]}
 function fmtUp(s){const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60);return`${d}d ${h}h ${m}m`}
@@ -11,7 +20,85 @@ async function setPass(id,type){const el=document.getElementById(id);if(!el)retu
 function setExpiryDays(id,days){const el=document.getElementById(id);if(!el)return;const d=new Date();d.setDate(d.getDate()+Number(days));el.value=d.toISOString().slice(0,10)}
 function quotaLabel(mb){if(!mb)return'بدون سقف';return mb>=1024?(mb/1024).toFixed(mb%1024?1:0)+' GB':mb+' MB'}
 function statusFor(a){if(!a.enabled)return'<span class="status-chip bad">Locked</span>';if(a.expired)return'<span class="status-chip bad">Expired</span>';if(a.days_left!==null&&a.days_left<=7)return'<span class="status-chip warn">'+a.days_left+' روز</span>';return'<span class="status-chip ok">Active</span>'}
-async function dashboard(){title.textContent='Overview';content.innerHTML='<div class="empty">در حال دریافت وضعیت سرور…</div>';const [d,hist]=await Promise.all([api('/api/overview'),api('/api/metrics/history?hours=24')]),m=d.metrics,score=healthScore(d);content.innerHTML=`<div class="hero"><div><div class="eyebrow">INFRASTRUCTURE OVERVIEW</div><h2>${m.hostname}</h2><p>نمای لحظه‌ای سلامت سرور، حساب‌ها، نشست‌های فعال و سرویس‌های حیاتی Makia.</p><div class="host-meta"><span class="chip">Kernel ${m.kernel}</span><span class="chip">${m.cpu_cores} CPU Threads</span><span class="chip">Uptime ${fmtUp(m.uptime_seconds)}</span><span class="chip">v${d.version}</span></div></div><div class="health-ring"><div class="ring" style="--pct:${score}%"><div><b>${score}</b><span>HEALTH SCORE</span></div></div></div></div><div class="kpi-grid">${kpi('CPU',m.cpu+'%',m.cpu,'',''+m.cpu_cores+' threads')}${kpi('Memory',m.memory+'%',m.memory,'green',fmtBytes(m.memory_used)+' / '+fmtBytes(m.memory_total))}${kpi('Disk',m.disk+'%',m.disk,'violet',fmtBytes(m.disk_used)+' / '+fmtBytes(m.disk_total))}${kpi('Online Sessions',d.online_sessions,Math.min(100,d.online_sessions*10),'amber',d.online_users+' users')}</div><div class="kpi-grid">${kpi('Accounts',d.users,Math.min(100,d.users*5),'','managed')}${kpi('Expiring ≤ 7d',d.expiring_soon,Math.min(100,d.expiring_soon*20),'amber','attention')}${kpi('Limit Violations',d.limit_violations,Math.min(100,d.limit_violations*25),'violet','online > limit')}${kpi('Network RX',fmtBytes(m.network.recv),30,'green','TX '+fmtBytes(m.network.sent))}</div><div class="panel" style="margin-top:14px"><div class="panel-head"><h3>24h Resource History</h3><span>REAL SAMPLES</span></div>${svgHistory(hist)}</div><div class="two-col"><div class="panel"><div class="panel-head"><h3>Core Services</h3><span>REAL-TIME STATE</span></div>${d.services.map(s=>`<div class="row"><div><i class="status-dot ${s.active?'ok':'bad'}"></i><b>${s.label}</b><div class="muted">${s.name}</div></div><div class="muted">${s.state}</div><div>${s.active?'Healthy':'Attention'}</div><div></div></div>`).join('')}</div><div class="panel"><div class="panel-head"><h3>Quick Actions</h3><span>COMMON TASKS</span></div><div class="quick-grid"><button class="quick-card" onclick="switchView('access')"><b>+ Access</b><span>ساخت یا مدیریت کاربر</span></button><button class="quick-card" onclick="switchView('sessions')"><b>Live Sessions</b><span>مشاهده و قطع اتصال</span></button><button class="quick-card" onclick="switchView('backups')"><b>Backup</b><span>بکاپ فوری دیتای Makia</span></button><button class="quick-card" onclick="switchView('security')"><b>Security</b><span>Firewall / Fail2ban status</span></button></div></div></div>`}
+async function dashboard(){
+  title.textContent='Overview';setPageContext('OPERATIONS COCKPIT');
+  content.innerHTML='<div class="loading-state"><span class="spinner"></span><b>در حال همگام‌سازی وضعیت سرور…</b></div>';
+  const [d,hist,accessRows,stack]=await Promise.all([
+    api('/api/overview'),api('/api/metrics/history?hours=24'),api('/api/access'),api('/api/protocols')
+  ]);
+  const m=d.metrics,score=healthScore(d);
+  const activeAccess=accessRows.filter(x=>x.status==='active').length;
+  const expiringAccess=accessRows.filter(x=>x.status==='expired'||(x.expire_at&&x.expire_at<Date.now()/1000)).length;
+  const byKind={ssh:0,xray:0,wireguard:0,openvpn:0};accessRows.forEach(x=>{if(byKind[x.kind]!==undefined)byKind[x.kind]++});
+  const readyCaps=(stack.capabilities||[]).filter(x=>x.available).length,totalCaps=(stack.capabilities||[]).length;
+  const healthyServices=(d.services||[]).filter(x=>x.active).length;
+  const servicePct=Math.round(healthyServices/Math.max(1,(d.services||[]).length)*100);
+  const recent=(d.sessions||[]).slice(0,6);
+  content.innerHTML=`
+  <section class="command-hero">
+    <div class="command-hero-copy">
+      <div class="eyebrow">REAL-TIME INFRASTRUCTURE</div>
+      <h2>${htmlEsc(m.hostname)}</h2>
+      <p>کنترل دسترسی‌ها، سلامت سرویس‌ها، مصرف منابع و وضعیت پروتکل‌ها در یک نمای عملیاتی.</p>
+      <div class="hero-actions">
+        <button class="primary action-lg" data-action="wizard-open">＋ ساخت دسترسی</button>
+        <button class="ghost action-lg" data-action="nav" data-view="access">مدیریت کاربران</button>
+        <button class="ghost action-lg" data-action="self-test">Run Self-Test</button>
+      </div>
+      <div class="host-meta">
+        <span class="chip">Kernel ${htmlEsc(m.kernel)}</span>
+        <span class="chip">${m.cpu_cores} CPU Threads</span>
+        <span class="chip">Uptime ${fmtUp(m.uptime_seconds)}</span>
+        <span class="chip">v${htmlEsc(d.version)}</span>
+      </div>
+    </div>
+    <div class="hero-status-stack">
+      <div class="health-orbit" style="--pct:${score}%"><div><b>${score}</b><span>HEALTH</span></div></div>
+      <div class="hero-mini-grid">
+        <div><span>Services</span><b>${healthyServices}/${(d.services||[]).length}</b></div>
+        <div><span>Access</span><b>${activeAccess}</b></div>
+        <div><span>Protocols</span><b>${readyCaps}/${totalCaps}</b></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="dashboard-metrics">
+    ${kpi('CPU',m.cpu+'%',m.cpu,'',''+m.cpu_cores+' threads')}
+    ${kpi('Memory',m.memory+'%',m.memory,'green',fmtBytes(m.memory_used)+' / '+fmtBytes(m.memory_total))}
+    ${kpi('Disk',m.disk+'%',m.disk,'violet',fmtBytes(m.disk_used)+' / '+fmtBytes(m.disk_total))}
+    ${kpi('Online Sessions',d.online_sessions,Math.min(100,d.online_sessions*10),'amber',d.online_users+' users')}
+    ${kpi('Managed Access',accessRows.length,Math.min(100,accessRows.length*4),'',''+activeAccess+' active')}
+    ${kpi('Services Healthy',servicePct+'%',servicePct,'green',healthyServices+' running')}
+  </section>
+
+  <section class="dashboard-grid">
+    <div class="panel dashboard-chart">
+      <div class="panel-head"><div><h3>Resource Timeline</h3><span>24 HOURS · REAL SAMPLES</span></div><button class="icon-btn" data-action="refresh">↻</button></div>
+      ${svgHistory(hist)}
+    </div>
+    <div class="panel access-mix-panel">
+      <div class="panel-head"><div><h3>Access Portfolio</h3><span>${accessRows.length} MANAGED</span></div><button class="ghost" data-action="nav" data-view="access">Open Center</button></div>
+      <div class="access-mix">
+        <button data-action="nav" data-view="access"><i class="mix-dot ssh"></i><span>SSH</span><b>${byKind.ssh}</b></button>
+        <button data-action="nav" data-view="access"><i class="mix-dot xray"></i><span>Xray</span><b>${byKind.xray}</b></button>
+        <button data-action="nav" data-view="access"><i class="mix-dot wg"></i><span>WireGuard</span><b>${byKind.wireguard}</b></button>
+        <button data-action="nav" data-view="access"><i class="mix-dot ovpn"></i><span>OpenVPN</span><b>${byKind.openvpn}</b></button>
+      </div>
+      <div class="dashboard-alert ${expiringAccess?'warn':'ok'}"><b>${expiringAccess}</b><span>expired / attention profiles</span></div>
+    </div>
+  </section>
+
+  <section class="dashboard-grid lower">
+    <div class="panel">
+      <div class="panel-head"><div><h3>Core Services</h3><span>LIVE SERVICE STATE</span></div><button class="ghost" data-action="nav" data-view="services">Manage</button></div>
+      <div class="service-cards">${(d.services||[]).map(s=>`<div class="service-card"><i class="status-dot ${s.active?'ok':'bad'}"></i><div><b>${htmlEsc(s.label)}</b><span>${htmlEsc(s.name)}</span></div><strong class="${s.active?'ok-text':'bad-text'}">${s.active?'Running':'Attention'}</strong></div>`).join('')}</div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><div><h3>Live Sessions</h3><span>${d.online_sessions} ACTIVE</span></div><button class="ghost" data-action="nav" data-view="sessions">View all</button></div>
+      <div class="session-cards">${recent.length?recent.map(s=>`<div><span class="avatar-mini">${htmlEsc((s.username||'?').slice(0,1).toUpperCase())}</span><div><b>${htmlEsc(s.username)}</b><small>${htmlEsc(s.remote||'local')}</small></div><time>${htmlEsc(s.since||'')}</time></div>`).join(''):'<div class="empty compact">نشست فعالی وجود ندارد.</div>'}</div>
+    </div>
+  </section>`;
+}
 let accountCache=[];
 function setExpiryPreset(id,days){const el=document.getElementById(id);if(!el)return;if(Number(days)===0){el.value='';return}const base=new Date();base.setHours(12,0,0,0);base.setDate(base.getDate()+Number(days));el.value=base.toISOString().slice(0,10)}
 function shiftExpiry(id,days){const el=document.getElementById(id);if(!el)return;const today=new Date();today.setHours(12,0,0,0);let base=today;if(el.value){const current=new Date(el.value+'T12:00:00');if(!Number.isNaN(current.getTime())&&current>today)base=current}base.setDate(base.getDate()+Number(days));el.value=base.toISOString().slice(0,10)}
