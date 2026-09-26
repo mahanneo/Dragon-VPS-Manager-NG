@@ -18,3 +18,5 @@ systemctl daemon-reload
 nginx -t >/dev/null 2>&1 && systemctl reload nginx || true
 rm -rf "$APP"
 echo "Makia VPS Manager removed. Backups under /var/backups/makia-vps-manager are preserved."
+
+rm -f /etc/letsencrypt/renewal-hooks/deploy/makia-xray-sync
