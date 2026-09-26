@@ -219,6 +219,19 @@ def _default_iface():
         raise ProtocolError("unable to detect default network interface")
     return m.group(1)
 
+def _ufw_allow_if_active(port,proto,label):
+    if not shutil.which("ufw"):
+        return {"active":False,"changed":False}
+    status=subprocess.run(["ufw","status"],text=True,capture_output=True,timeout=8,check=False)
+    text=(status.stdout or status.stderr or "").lower()
+    if status.returncode!=0 or "status: active" not in text:
+        return {"active":False,"changed":False}
+    rule=f"{int(port)}/{proto}"
+    p=subprocess.run(["ufw","allow",rule,"comment",f"Makia {label}"],text=True,capture_output=True,timeout=15,check=False)
+    if p.returncode!=0:
+        raise ProtocolError((p.stderr or p.stdout or f"unable to allow {rule} in UFW").strip()[:600])
+    return {"active":True,"changed":True,"rule":rule}
+
 def _validate_port(port):
     port=int(port)
     if port<1 or port>65535:
@@ -328,7 +341,8 @@ def bootstrap_wireguard(port=51820, cidr="10.66.66.1/24", iface="wg0", mtu=0):
     Path("/etc/sysctl.d/99-makia-wireguard.conf").write_text("net.ipv4.ip_forward=1\n",encoding="utf-8")
     _run(["sysctl","--system"],timeout=30)
     _run(["systemctl","enable","--now",f"wg-quick@{iface}"],timeout=30)
-    return {"interface":iface,"address":str(net),"port":int(port),"public_key":public,"mtu":mtu}
+    firewall=_ufw_allow_if_active(port,"udp","WireGuard")
+    return {"interface":iface,"address":str(net),"port":int(port),"public_key":public,"mtu":mtu,"firewall":firewall}
 
 def _wg_used_ips(iface):
     used=set()
@@ -509,7 +523,8 @@ def bootstrap_openvpn(port=1194, proto="udp"):
     Path("/etc/sysctl.d/99-makia-openvpn.conf").write_text("net.ipv4.ip_forward=1\n",encoding="utf-8")
     _run(["sysctl","--system"],timeout=30)
     _run(["systemctl","enable","--now","openvpn-server@server"],timeout=30)
-    return {"server":"server","port":port,"proto":proto}
+    firewall=_ufw_allow_if_active(port,"udp" if proto=="udp" else "tcp","OpenVPN")
+    return {"server":"server","port":port,"proto":proto,"firewall":firewall}
 
 def create_openvpn_client(name, endpoint, port=1194, proto="udp"):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
@@ -922,6 +937,8 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
         _run(["systemctl","restart","xray"],timeout=30)
         if not _active("xray"):
             raise ProtocolError("Xray did not become active after restart")
+        firewall_proto="udp" if protocol=="hysteria2" or stream.get("method")=="mkcp" else "tcp"
+        _ufw_allow_if_active(port,firewall_proto,f"Xray {protocol}")
     except Exception:
         try:
             if tmp.exists(): tmp.unlink()
