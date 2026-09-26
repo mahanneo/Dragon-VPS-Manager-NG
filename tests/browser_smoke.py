@@ -75,6 +75,19 @@ def main():
             page.locator(".access-profile",has_text="browser-client").wait_for()
 
             row=page.locator(".access-profile",has_text="browser-client")
+            row.locator('[data-action="access-share"]').click()
+            page.locator(".share-modal").wait_for()
+            assert page.locator(".share-qr").count() >= 1
+            assert page.locator("#shareText").input_value().startswith("vless://")
+            assert page.locator("#shareSubscription").input_value().startswith(BASE_URL+"/sub/")
+            with page.expect_download() as qr_download:
+                page.locator('[data-action="qr-download"]').click()
+            qr_path=Path("/tmp/makia-browser-xray-qr.svg")
+            qr_download.value.save_as(str(qr_path))
+            assert "<svg" in qr_path.read_text(encoding="utf-8")
+            page.locator('.close-btn[data-action="modal-close"]').click()
+
+            row=page.locator(".access-profile",has_text="browser-client")
             row.locator('[data-action="protected-export"]').click()
             page.locator("#protectedPassword").wait_for()
             page.locator("#protectedPassword").fill("739251")
@@ -109,12 +122,30 @@ def main():
             assert page.locator(".diagnostic-score.pass").count()==1
             page.locator('.close-btn[data-action="modal-close"]').click()
 
-            for view in ["sessions","protocols","services","nodes","security","backups","audit","updates","settings","dashboard","access"]:
+            for view in ["sessions","protocols","services","nodes","security","backups","audit","updates","settings"]:
                 nav=page.locator(f'aside.sidebar nav button[data-view="{view}"]')
                 nav.click()
                 page.wait_for_timeout(450)
                 assert page.locator("#content").inner_text().strip(), f"{view} rendered empty content"
                 assert "active" in (nav.get_attribute("class") or ""), f"{view} sidebar item not active"
+
+            page.locator('[data-action="settings-tab"][data-tab="delivery"]').click()
+            page.locator("#opProfilePrefix").wait_for()
+            page.locator("#opProfilePrefix").fill("BrowserMakia")
+            page.locator('[data-action="settings-operator-save"]').click()
+            page.locator("#opProfilePrefix").wait_for()
+            assert page.locator("#opProfilePrefix").input_value()=="BrowserMakia"
+
+            for tab in ["general","domain","delivery","defaults","security","api"]:
+                page.locator(f'[data-action="settings-tab"][data-tab="{tab}"]').click()
+                page.wait_for_timeout(180)
+                assert page.locator(".settings-content-v2").inner_text().strip(), f"settings tab {tab} empty"
+
+            for view in ["dashboard","access"]:
+                nav=page.locator(f'aside.sidebar nav button[data-view="{view}"]')
+                nav.click()
+                page.wait_for_timeout(450)
+                assert page.locator("#content").inner_text().strip(), f"{view} rendered empty content"
 
             assert not page_errors, "JavaScript page errors: "+repr(page_errors)
             browser.close()
