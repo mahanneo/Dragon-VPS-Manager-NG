@@ -4,8 +4,11 @@
 
 ### Xray QR and subscriptions
 - Added an authenticated QR/Share Center for managed Xray access profiles.
-- Added direct connection QR, Copy Link, downloadable SVG QR and subscription QR.
-- Public client access pages now render both direct-profile and subscription QR cards.
+- Added direct connection QR, Copy Link, downloadable SVG QR and downloadable subscription QR.
+- Share Center now shows parsed connection metadata for VLESS, VMess, Trojan, Shadowsocks and Hysteria2 without exposing unrelated server secrets.
+- Protected Xray delivery packages now include direct QR, profile metadata, subscription URL text and subscription QR when subscription delivery is enabled.
+- Public client access pages now render direct-profile and subscription QR cards, direct Copy Link and QR download actions.
+- Added persisted controls for Subscription endpoint, public Client Page and generated Subscription format (`base64` or `raw`).
 - Subscription QR URLs are generated from the current panel origin so a later domain change does not leave the admin Share Center using a stale URL.
 
 ### SSH → NPV Tunnel delivery
@@ -16,15 +19,18 @@
 - The proprietary locked `.npv4/.npvt` file container is intentionally not fabricated; Makia uses the share URI / QR import path.
 
 ### Settings Center V2
-- Rebuilt Settings into Panel, Domain & TLS, Delivery, Provisioning, Security and API categories.
+- Rebuilt Settings into Panel General, Domain/Nginx/HTTPS, SSH Defaults, Xray Defaults, WireGuard/OpenVPN Defaults, Delivery/NPV, Subscription, Admin Security, API Tokens and Backup/Recovery categories.
 - Added server-persisted provisioning defaults for SSH, Xray, WireGuard and OpenVPN.
 - Added configurable admin session lifetime.
 - Added QR/NPV delivery settings and real backend validation.
-- The provisioning wizard now reads defaults from the backend instead of hard-coded JavaScript values.
+- The provisioning wizard now reads defaults from the backend instead of hard-coded JavaScript values, including SSH selection from the generic wizard.
+- Backup/Recovery exposes only implemented snapshot/list/self-test operations; no decorative restore action is presented.
 
 ### Verification
 - Added NPV share-link round-trip and payload tests.
-- Browser CI verifies Xray QR/Share, QR download, public QR portal, Settings tabs and persisted operator settings.
+- Added Xray share-metadata regression coverage across VLESS, VMess, Trojan, Shadowsocks and Hysteria2.
+- Added regression coverage for legacy encrypted SSH artifacts upgrading to NPV delivery.
+- Browser CI verifies Xray QR/Share details, direct and subscription QR downloads, protected package contents, public QR portal, all Settings V2 tabs and persisted operator/subscription settings.
 - Existing Xray 26.3.27 real-core smoke remains required.
 
 ### Release status
