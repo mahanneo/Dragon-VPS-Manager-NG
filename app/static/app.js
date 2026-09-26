@@ -113,9 +113,9 @@ let provisionState=null;
 async function access(renderToken=window.__viewRenderToken){
   title.textContent='Access Center';setPageContext('IDENTITY & DELIVERY');
   content.innerHTML='<div class="loading-state"><span class="spinner"></span><b>در حال همگام‌سازی دسترسی‌ها…</b></div>';
-  const [rows,stack,sshRows,pcRows]=await Promise.all([api('/api/access'),api('/api/protocols'),api('/api/accounts'),api('/api/protocol-clients')]);
+  const [rows,stack,sshRows,pcRows,operator]=await Promise.all([api('/api/access'),api('/api/protocols'),api('/api/accounts'),api('/api/protocol-clients'),api('/api/settings/operator')]);
   if(renderToken!==window.__viewRenderToken||activeView!=='access')return;
-  accessCache=rows;accountCache=sshRows;window.__protocolClients=pcRows;window.__protocolData=stack;
+  accessCache=rows;accountCache=sshRows;window.__protocolClients=pcRows;window.__protocolData=stack;window.__operatorSettings=operator;
   const counts={ssh:0,xray:0,wireguard:0,openvpn:0};rows.forEach(x=>{if(counts[x.kind]!==undefined)counts[x.kind]++});
   const active=rows.filter(x=>x.status==='active').length,legacy=rows.filter(x=>x.legacy).length;
   content.innerHTML=[
@@ -185,8 +185,12 @@ function accessCard(a){
   }else if(a.kind==='wireguard'){
     meta=htmlEsc(a.address||'WireGuard peer');policy='Native tunnel profile';
   }else{meta='Certificate profile';policy='OpenVPN PKI access'}
+  const delivery=window.__operatorSettings?.delivery||{};
+  const shareLabel=a.kind==='ssh'?'NPV Import':a.kind==='xray'?'QR / Share':a.kind==='wireguard'?'QR / Share':'';
+  const shareAllowed=a.can_export&&shareLabel&&(a.kind!=='ssh'||delivery.npv_enabled!==false);
+  const shareButton=shareAllowed?'<button class="icon-action shareish" data-action="access-share" data-kind="'+kind+'" data-key="'+key+'" data-name="'+label+'">'+shareLabel+'</button>':'';
   const exportAction=a.can_export
-    ? '<button class="icon-action primaryish" data-action="protected-export" data-kind="'+kind+'" data-key="'+key+'" data-name="'+label+'">Protected ZIP</button><button class="icon-action" data-action="native-export" data-kind="'+kind+'" data-key="'+key+'">Native</button>'
+    ? shareButton+'<button class="icon-action primaryish" data-action="protected-export" data-kind="'+kind+'" data-key="'+key+'" data-name="'+label+'">Protected ZIP</button><button class="icon-action" data-action="native-export" data-kind="'+kind+'" data-key="'+key+'">Native</button>'
     : (a.kind==='wireguard'
       ? '<button class="icon-action warnish" data-action="wg-reissue" data-key="'+key+'">Reissue</button>'
       : '<button class="icon-action warnish" data-action="manage-access" data-id="'+id+'">Reset credential</button>');
@@ -204,19 +208,28 @@ function accessCard(a){
 
 async function openProvisionWizard(protocol){
   if(!window.__protocolData) window.__protocolData=await api('/api/protocols');
-  const defs=await api('/api/accounts/new-defaults').catch(()=>({username:'user001'}));
+  const [defs,operator]=await Promise.all([
+    api('/api/accounts/new-defaults').catch(()=>({username:'user001'})),
+    api('/api/settings/operator').catch(()=>({defaults:{},delivery:{}}))
+  ]);
+  window.__operatorSettings=operator;
+  const d=operator.defaults||{};
   provisionState={
     step:protocol?2:1,protocol:protocol||'',name:defs.username||'user001',
-    endpoint:window.PANEL_DOMAIN||location.hostname,password:'',passwordMode:'pin6',
-    expireDate:'',plan:'',note:'',sessions:1,devices:1,
-    xrayProtocol:'vless',port:2087,transport:'xhttp',security:'reality',path:'/makia',
-    sni:'www.microsoft.com',realityDest:'www.microsoft.com:443',
-    quota:50,expireDays:30,resetDays:30,dns:'1.1.1.1',ovpnProto:'udp',ovpnPort:1194,
+    endpoint:window.PANEL_DOMAIN||location.hostname,password:'',passwordMode:d.ssh_password_mode||'pin6',
+    expireDate:'',plan:'',note:'',sessions:Number(d.ssh_sessions||1),devices:Number(d.ssh_devices||1),
+    xrayProtocol:d.xray_protocol||'vless',port:Number(d.xray_port||2087),transport:d.xray_transport||'xhttp',security:d.xray_security||'reality',path:d.xray_path||'/makia',
+    sni:d.xray_sni||'www.microsoft.com',realityDest:d.xray_reality_target||'www.microsoft.com:443',
+    quota:Number(d.xray_quota_gb??50),expireDays:Number(d.xray_expire_days??30),resetDays:Number(d.xray_reset_days??30),
+    dns:d.wireguard_dns||'1.1.1.1',ovpnProto:d.openvpn_proto||'udp',ovpnPort:Number(d.openvpn_port||1194),
     packagePassword:''
   };
   if(protocol==='ssh'){
-    const sec=await api('/api/accounts/generate-secret?mode=pin6').catch(()=>({secret:''}));provisionState.password=sec.secret||'';
-    provisionState.expireDate=dateAfterDays(30);
+    const mode=d.ssh_password_mode||'pin6';
+    const sec=await api('/api/accounts/generate-secret?mode='+encodeURIComponent(mode)).catch(()=>({secret:''}));
+    provisionState.password=sec.secret||'';
+    const days=Number(d.ssh_expire_days??30);
+    provisionState.expireDate=days?dateAfterDays(days):'';
   }
   renderProvisionWizard();
 }
