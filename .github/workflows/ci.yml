@@ -61,6 +61,11 @@ jobs:
           test -f docs/UAT-0.13.0-RC1.md
           test -f docs/UAT-0.13.1-RC1.md
           test -f docs/UAT-0.14.0-RC1.md
+          test -f docs/UAT-0.15.0-RC1.md
+          test -f docs/SECURITY-LICENSING.md
+          test -f app/license_public_key.pem
+          test -f tools/license_issue.py
+          test -f scripts/configure-owner.py
           test -f README_FA.md
           test -f docs/CLIENT-GUIDE-FA.md
           test -f app/templates/client_guide.html
@@ -73,6 +78,8 @@ jobs:
           grep -q 'makia-restore-portable' scripts/update.sh
           grep -q 'makia-uat-smoke' scripts/install.sh
           grep -q 'makia-uat-smoke' scripts/update.sh
+          grep -q 'makia-owner-config' scripts/install.sh
+          grep -q 'makia-owner-config' scripts/update.sh
       - name: UAT v0.11 contract
         run: |
           grep -q 'Protected ZIP' docs/UAT-0.11.0-RC1.md
@@ -134,6 +141,28 @@ jobs:
           grep -q '"wg-quick@wg0": "WireGuard"' app/config.py
           grep -q 'Checking OpenVPN IPv4 runtime' scripts/update.sh
           grep -q 'OpenVPN IPv4 transport' scripts/uat-smoke.sh
+
+      - name: UAT v0.15 contract
+        run: |
+          grep -q 'License / Security / OpenVPN Hybrid UAT' docs/UAT-0.15.0-RC1.md
+          grep -q 'Ed25519' app/license_ops.py
+          grep -q 'COMMUNITY_FEATURES' app/license_ops.py
+          grep -q 'FULL_FEATURES' app/license_ops.py
+          grep -q '/api/license/status' app/main.py
+          grep -q '/api/license/activate' app/main.py
+          grep -q '/api/support/requests' app/main.py
+          grep -q 'license_required' app/main.py
+          grep -q 'hybrid_fallback_ipv4' app/protocol_ops.py
+          grep -q 'server-poll-timeout 8' app/protocol_ops.py
+          grep -q 'MAKIA_SUPPORT_TELEGRAM' scripts/configure-owner.py
+          grep -q 'MAKIA_ADMIN_ALLOWED_CIDRS' scripts/configure-owner.py
+          grep -q 'MAKIA_RELEASE_ARCHIVE_URL' scripts/update.sh
+          grep -q 'EnvironmentFile=-/etc/makia-vps-manager/makia.env' systemd/makia-vps-manager.service
+          grep -q 'server_tokens off' nginx/makia-vps-manager.conf
+          grep -q 'License & Support' app/templates/dashboard.html
+          grep -q 'license-tier-chip' app/static/app.js
+          grep -q 'release proxy' docs/SECURITY-LICENSING.md
+          ! grep -R --line-number 'BEGIN PRIVATE KEY' app tools scripts docs .github || true
 
   browser-smoke:
     runs-on: ubuntu-24.04
