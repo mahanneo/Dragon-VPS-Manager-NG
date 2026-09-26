@@ -194,7 +194,9 @@ def client_guide_text(kind,protocol=""):
             "WireGuard\n"
             "1) موبایل: برنامه رسمی WireGuard > + > Create from QR code یا Import from file.\n"
             "2) Windows/macOS: Import tunnel(s) from file و فایل .conf را انتخاب کنید.\n"
-            "3) Endpoint/Port/MTU/DNS را بدون هماهنگی تغییر ندهید.\n"
+            "3) اگر پروفایل با Domain ساخته شده باشد، Protected ZIP یک فایل و QR دوم با پسوند -ip هم دارد؛ این فایل همان Peer/Key را با Endpoint مستقیم IPv4 استفاده می‌کند و برای تشخیص مشکل DNS مفید است.\n"
+            "4) دامنه WireGuard باید A record مستقیم/DNS-only به VPS داشته باشد؛ HTTP/CDN Proxy تونل UDP WireGuard را عبور نمی‌دهد.\n"
+            "5) Endpoint/Port/MTU/DNS را بدون هماهنگی تغییر ندهید.\n"
         )
     if kind=="openvpn":
         return common+(
