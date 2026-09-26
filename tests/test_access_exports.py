@@ -52,6 +52,7 @@ def test_access_package_endpoint_returns_downloadable_aes_zip(monkeypatch):
         "summary":{},
     }
     monkeypatch.setattr(main_app,"require_mutation",lambda request:"admin")
+    monkeypatch.setattr(main_app,"require_local_admin",lambda request:"admin")
     monkeypatch.setattr(main_app,"assert_license_feature",lambda feature:None)
     monkeypatch.setattr(main_app,"_resolve_access_payload",lambda kind,key,request:(payload,{"id":1}))
     monkeypatch.setattr(main_app,"audit",lambda *args,**kwargs:None)
