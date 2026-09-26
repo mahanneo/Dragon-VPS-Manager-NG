@@ -58,9 +58,14 @@ jobs:
           test -f docs/UAT-0.8.0-RC2.md
           test -f docs/UAT-0.11.0-RC1.md
           test -f docs/UAT-0.12.0-RC1.md
+          test -f docs/UAT-0.12.0-RC2.md
           test -f scripts/uat-smoke.sh
+          test -f scripts/restore-portable.sh
           grep -q 'makia-uat-smoke' scripts/install.sh
           grep -q 'makia-uat-smoke' scripts/update.sh
+          grep -q 'makia-restore' scripts/install.sh
+          grep -q 'makia-restore' scripts/update.sh
+          grep -q 'makia-restore' scripts/uninstall.sh
       - name: UAT v0.11 contract
         run: |
           grep -q 'Protected ZIP' docs/UAT-0.11.0-RC1.md
@@ -73,6 +78,14 @@ jobs:
           grep -q 'data-action="access-share"' app/static/app.js
           grep -q '/api/settings/operator' app/static/app.js
           grep -q 'npvt-ssh://' app/access_ops.py
+      - name: UAT v0.12 rc2 migration contract
+        run: |
+          grep -q 'WireGuard restricted-network preset' docs/UAT-0.12.0-RC2.md
+          grep -q 'Portable encrypted backup' docs/UAT-0.12.0-RC2.md
+          grep -q '/api/backups/portable' app/main.py
+          grep -q 'makia-portable-v1' app/system_ops.py
+          grep -q 'Full Xray Config Studio' app/static/app.js
+          grep -q 'PersistentKeepalive' app/protocol_ops.py
 
   browser-smoke:
     runs-on: ubuntu-24.04
@@ -111,5 +124,5 @@ jobs:
           unzip -q /tmp/xray.zip -d /tmp/xray-runtime
           chmod +x /tmp/xray-runtime/xray
           /tmp/xray-runtime/xray version
-      - name: Validate generated VLESS XHTTP REALITY config
+      - name: Validate generated VLESS and Trojan XHTTP REALITY configs
         run: python tests/xray_core_smoke.py
