@@ -1033,11 +1033,11 @@ async function services(renderToken=window.__viewRenderToken){
     }else if(s.name==='xray'){
       extra=missing
         ? '<button class="soft" data-action="protocol-setup" data-kind="xray">Install Xray</button>'
-        : '<button class="ghost" data-action="xray-diagnostics">Diagnose</button>'+(!s.active?'<button class="soft warnish" data-action="xray-repair">Repair</button>':'');
+        : '<button class="ghost" data-action="xray-diagnostics">Diagnose</button>'+((!s.active||runtimeAttention)?'<button class="soft warnish" data-action="xray-repair">Repair</button>':'');
     }else if(s.name==='openvpn-server@server'){
       extra=missing
         ? '<button class="soft" data-action="protocol-setup" data-kind="openvpn">Setup OpenVPN</button>'
-        : '<button class="ghost" data-action="openvpn-diagnostics">Domain</button>'+(!s.active?'<button class="soft warnish" data-action="openvpn-repair">Repair</button>':'');
+        : '<button class="ghost" data-action="openvpn-diagnostics">Domain</button>'+((!s.active||runtimeAttention)?'<button class="soft warnish" data-action="openvpn-repair">Repair</button>':'');
     }else if(s.name==='wg-quick@wg0'){
       extra=missing
         ? '<button class="soft" data-action="protocol-setup" data-kind="wireguard">Setup WireGuard</button>'
@@ -1050,9 +1050,9 @@ async function services(renderToken=window.__viewRenderToken){
     ].join('');
     const stateLabel=!licensed?'License locked':missing?'Not installed':runtimeAttention?'Runtime attention':s.active?'Running':'Attention';
     const stateClass=!licensed?'warn':missing?'warn':runtimeAttention?'bad':s.active?'ok':'bad';
-    return '<div class="row"><div><i class="status-dot '+(s.active?'ok':'bad')+'"></i><b>'+htmlEsc(s.label)+'</b><div class="muted">'+htmlEsc(s.name)+'</div></div><div class="muted">'+htmlEsc(s.state)+'</div><div><span class="status-chip '+stateClass+'">'+stateLabel+'</span></div><div class="toolbar">'+extra+controls+'</div></div>';
+    return '<div class="row"><div><i class="status-dot '+(s.active&&!runtimeAttention?'ok':'bad')+'"></i><b>'+htmlEsc(s.label)+'</b><div class="muted">'+htmlEsc(s.name)+'</div></div><div class="muted">'+htmlEsc(s.state)+'</div><div><span class="status-chip '+stateClass+'">'+stateLabel+'</span></div><div class="toolbar">'+extra+controls+'</div></div>';
   };
-  content.innerHTML=viewIntro('ALLOWLISTED SERVICES','کنترل سرویس‌ها','Start/Stop/Restart فقط برای سرویس‌های نصب‌شده و Allowlist شده نمایش داده می‌شود؛ Xray و OpenVPN Diagnostics علت Failure را از Runtime واقعی بررسی می‌کنند.','<div class="view-intro-stat"><b>'+running+'/'+d.services.length+'</b><span>RUNNING</span></div>')+
+  content.innerHTML=viewIntro('ALLOWLISTED SERVICES','کنترل سرویس‌ها','Start/Stop/Restart فقط برای سرویس‌های نصب‌شده و Allowlist شده نمایش داده می‌شود؛ Xray، WireGuard و OpenVPN Diagnostics سلامت Runtime واقعی را جدا از صرفاً Running بودن systemd بررسی می‌کنند.','<div class="view-intro-stat"><b>'+running+'/'+d.services.length+'</b><span>RUNNING</span></div>')+
   '<div class="panel modern-list"><div class="table">'+d.services.map(row).join('')+'</div></div>';
 }
 
