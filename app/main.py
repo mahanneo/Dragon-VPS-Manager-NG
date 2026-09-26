@@ -424,12 +424,16 @@ def _subscription_snapshot(row):
     total_down=stored_down+int(usage.get("downlink") or 0)
     quota=int(row.get("quota_bytes") or 0)
     expire_at=int(row.get("expire_at") or 0)
+    used=total_up+total_down
+    expired=bool(expire_at and expire_at<int(time.time()))
+    quota_exhausted=bool(quota and used>=quota)
     return {
         "id":row.get("id"),"name":row.get("name"),"protocol":row.get("protocol"),
         "enabled":bool(row.get("enabled")),"share_link":row.get("share_link") or "",
         "quota_bytes":quota,"used_up_bytes":total_up,"used_down_bytes":total_down,
-        "used_bytes":total_up+total_down,"remaining_bytes":max(0,quota-total_up-total_down) if quota else None,
-        "expire_at":expire_at,"ip_limit":int(row.get("ip_limit") or 1),
+        "used_bytes":used,"remaining_bytes":max(0,quota-used) if quota else None,
+        "expire_at":expire_at,"expired":expired,"quota_exhausted":quota_exhausted,
+        "ip_limit":int(row.get("ip_limit") or 1),
         "reset_days":int(row.get("reset_days") or 0),
     }
 
@@ -438,13 +442,16 @@ def subscription_get(subscription_id:str,format:str="base64"):
     row=protocol_client_by_subscription(subscription_id)
     if not row:
         raise HTTPException(404,"subscription not found")
+    snap=_subscription_snapshot(row)
+    if not snap.get("enabled") or snap.get("expired") or snap.get("quota_exhausted"):
+        raise HTTPException(403,"subscription is inactive")
     link=(row.get("share_link") or "").strip()
     if not link:
         raise HTTPException(404,"subscription is empty")
     if format=="raw":
         return PlainTextResponse(link+"\n",media_type="text/plain; charset=utf-8")
     if format=="json":
-        return JSONResponse(_subscription_snapshot(row))
+        return JSONResponse(snap)
     if format not in {"base64","b64"}:
         raise HTTPException(400,"supported formats: base64, raw, json")
     encoded=base64.b64encode((link+"\n").encode()).decode()
