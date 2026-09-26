@@ -586,7 +586,26 @@ async function createAccount(){
   if(!p.password||p.password.length<4){alert('PIN/Password حداقل ۴ کاراکتر باشد.');return}
   try{const r=await api('/api/accounts',{method:'POST',body:JSON.stringify(p)});credentialModal({...p,password:r.password||p.password});accountCache=await api('/api/accounts')}catch(e){alert(e.message)}
 }
-function editAccount(a){modalRoot.innerHTML=`<div class="modal-backdrop" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-head"><div><div class="eyebrow">SSH ACCOUNT POLICY</div><h3>${a.username}</h3></div><button class="close-btn" onclick="closeModal()">×</button></div><div class="form-grid"><label>رمز جدید / PIN<input id="ePass" type="text" placeholder="خالی = بدون تغییر"><div class="password-tools"><button class="soft" onclick="setPass('ePass',4)">PIN 4</button><button class="soft recommended" onclick="setPass('ePass',6)">PIN 6</button><button class="soft" onclick="setPass('ePass','easy8')">Easy 8</button><button class="soft" onclick="setPass('ePass','strong')">Strong</button></div></label><label>تاریخ پایان<input id="eExpire" type="date" value="${a.expire_date||''}"><div class="password-tools duration-tools"><button class="soft" onclick="shiftExpiry('eExpire',1)">+1</button><button class="soft" onclick="shiftExpiry('eExpire',3)">+3</button><button class="soft" onclick="shiftExpiry('eExpire',7)">+7</button><button class="soft" onclick="shiftExpiry('eExpire',15)">+15</button><button class="soft recommended" onclick="shiftExpiry('eExpire',30)">+30</button><button class="soft" onclick="shiftExpiry('eExpire',60)">+60</button><button class="soft" onclick="shiftExpiry('eExpire',90)">+90</button><button class="soft" onclick="document.getElementById('eExpire').value=''">بدون انقضا</button></div></label><label>پلن<input id="ePlan" value="${(a.plan||'').replaceAll('"','&quot;')}"></label><label>Session Limit<div class="number-stepper"><button class="soft" onclick="stepNumber('eLimit',-1)">−</button><input id="eLimit" type="number" min="1" max="50" value="${a.connection_limit}"><button class="soft" onclick="stepNumber('eLimit',1)">+</button></div></label><label>Device/IP Limit<div class="number-stepper"><button class="soft" onclick="stepNumber('eDevice',-1)">−</button><input id="eDevice" type="number" min="1" max="50" value="${a.device_limit||1}"><button class="soft" onclick="stepNumber('eDevice',1)">+</button></div></label><label>وضعیت<select id="eEnabled"><option value="1" ${a.enabled?'selected':''}>فعال</option><option value="0" ${!a.enabled?'selected':''}>قفل</option></select></label></div><div class="form-grid two" style="margin-top:12px"><label>یادداشت<textarea id="eNote">${a.note||''}</textarea></label><div class="provision-preview"><span>LIVE DEVICES</span><b>${(a.online_ips||[]).length} / ${a.device_limit||1}</b><small>${(a.online_ips||[]).length?(a.online_ips||[]).join('<br>'):'هیچ IP فعالی نیست'}</small></div></div><div class="toolbar" style="margin-top:18px"><button class="primary" onclick="saveAccount('${a.username}')">ذخیره تغییرات</button><button class="ghost" onclick="accountAction('${a.username}','disconnect')">قطع همه</button><button class="danger" onclick="accountAction('${a.username}','delete')">حذف</button></div></div></div>`}
+function editAccount(a){
+  window.__editingSshUser=a.username;
+  modalRoot.innerHTML=[
+    '<div class="modal-backdrop"><div class="modal policy-modal">',
+    '<div class="wizard-head"><div><div class="eyebrow">SSH ACCESS POLICY</div><h3>'+htmlEsc(a.username)+'</h3></div><button class="close-btn" data-action="modal-close">×</button></div>',
+    '<div class="wizard-form three">',
+      '<label>رمز جدید / PIN<input id="ePass" type="text" placeholder="خالی = بدون تغییر"><div class="preset-row"><button data-action="edit-secret" data-mode="pin4">PIN 4</button><button data-action="edit-secret" data-mode="pin6">PIN 6</button><button data-action="edit-secret" data-mode="easy8">Easy 8</button><button data-action="edit-secret" data-mode="strong">Strong</button></div></label>',
+      '<label>تاریخ پایان<input id="eExpire" type="date" value="'+htmlEsc(a.expire_date||'')+'"><div class="preset-row"><button data-action="edit-expiry" data-days="7">+7D</button><button data-action="edit-expiry" data-days="30">+30D</button><button data-action="edit-expiry" data-days="90">+90D</button><button data-action="edit-expiry" data-days="0">∞</button></div></label>',
+      '<label>پلن<input id="ePlan" value="'+htmlEsc(a.plan||'')+'"></label>',
+      '<label>Session Limit<input id="eLimit" type="number" min="1" max="50" value="'+Number(a.connection_limit||1)+'"></label>',
+      '<label>Device/IP Limit<input id="eDevice" type="number" min="1" max="50" value="'+Number(a.device_limit||1)+'"></label>',
+      '<label>وضعیت<select id="eEnabled"><option value="1" '+(a.enabled?'selected':'')+'>فعال</option><option value="0" '+(!a.enabled?'selected':'')+'>قفل</option></select></label>',
+    '</div>',
+    '<label class="single-label">یادداشت داخلی<textarea id="eNote"></textarea></label>',
+    '<div class="policy-summary"><div><span>Online Sessions</span><b>'+Number(a.online||0)+' / '+Number(a.connection_limit||1)+'</b></div><div><span>Live IPs</span><b>'+Number((a.online_ips||[]).length)+' / '+Number(a.device_limit||1)+'</b></div><div><span>Expiry</span><b>'+htmlEsc(a.expire_date||'∞')+'</b></div><div><span>Plan</span><b>'+htmlEsc(a.plan||'—')+'</b></div></div>',
+    '<div class="wizard-footer"><button class="danger" data-action="account-delete" data-user="'+dataEnc(a.username)+'">Delete</button><button class="ghost" data-action="account-disconnect" data-user="'+dataEnc(a.username)+'">Disconnect</button><button class="primary" data-action="account-save" data-user="'+dataEnc(a.username)+'">Save changes</button></div>',
+    '</div></div>'
+  ].join('');
+  document.getElementById('eNote').value=a.note||'';
+}
 function copyText(text){navigator.clipboard?.writeText(text).then(()=>toast('کپی شد')).catch(()=>prompt('Copy:',text))}
 function credentialModal(p){
   const host=window.PANEL_DOMAIN||location.hostname;
@@ -912,6 +931,9 @@ async function handleMakiaAction(btn){
     const el=document.getElementById(btn.dataset.target);if(el)downloadText(window.__lastConfigFilename||'config.txt',el.value||el.textContent||'');return;
   }
   if(action==='account-edit'){const u=dataDec(btn.dataset.user),row=accountCache.find(x=>x.username===u);if(row)editAccount(row);return}
+  if(action==='account-save'){await saveAccount(dataDec(btn.dataset.user));return}
+  if(action==='edit-secret'){const r=await api('/api/accounts/generate-secret?mode='+encodeURIComponent(btn.dataset.mode||'pin6'));const el=document.getElementById('ePass');if(el)el.value=r.secret||'';return}
+  if(action==='edit-expiry'){const days=Number(btn.dataset.days||0),el=document.getElementById('eExpire');if(el)el.value=days?dateAfterDays(days):'';return}
   if(action==='account-disconnect'){await accountAction(dataDec(btn.dataset.user),'disconnect');return}
   if(action==='account-delete'){await accountAction(dataDec(btn.dataset.user),'delete');return}
   if(action==='session-disconnect'){await disconnectSession(dataDec(btn.dataset.tty),dataDec(btn.dataset.user));return}
