@@ -908,13 +908,17 @@ function configModal(titleText,textData,fileName,kind=null,key=null){
 function downloadText(name,text){const blob=new Blob([text],{type:'text/plain;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),500)}
 async function services(renderToken=window.__viewRenderToken){
   title.textContent='Services';setPageContext('SYSTEMD CONTROL');
-  const d=await api('/api/overview');if(renderToken!==window.__viewRenderToken||activeView!=='services')return;
-  const running=(d.services||[]).filter(x=>x.active).length;
+  const [d,pstack]=await Promise.all([api('/api/overview'),api('/api/protocols').catch(()=>({}))]);
+  if(renderToken!==window.__viewRenderToken||activeView!=='services')return;
+  const running=(d.services||[]).filter(x=>x.active).length,xrayInstalled=Boolean(pstack?.xray?.installed);
   const row=s=>{
-    const extra=s.name==='xray'
-      ? '<button class="ghost" data-action="xray-diagnostics">Diagnose</button>'+(!s.active?'<button class="soft warnish" data-action="xray-repair">Repair</button>':'')
-      : '';
-    return '<div class="row"><div><i class="status-dot '+(s.active?'ok':'bad')+'"></i><b>'+htmlEsc(s.label)+'</b><div class="muted">'+htmlEsc(s.name)+'</div></div><div class="muted">'+htmlEsc(s.state)+'</div><div><span class="status-chip '+(s.active?'ok':'bad')+'">'+(s.active?'Running':'Attention')+'</span></div><div class="toolbar">'+extra+'<button class="ghost" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="start">Start</button><button class="primary" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="restart">Restart</button><button class="danger" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="stop">Stop</button></div></div>';
+    let extra='';
+    if(s.name==='xray'){
+      extra=xrayInstalled
+        ? '<button class="ghost" data-action="xray-diagnostics">Diagnose</button>'+(!s.active?'<button class="soft warnish" data-action="xray-repair">Repair</button>':'')
+        : '<button class="soft" data-action="protocol-setup" data-kind="xray">Install</button>';
+    }
+    return '<div class="row"><div><i class="status-dot '+(s.active?'ok':'bad')+'"></i><b>'+htmlEsc(s.label)+'</b><div class="muted">'+htmlEsc(s.name)+'</div></div><div class="muted">'+htmlEsc(s.state)+'</div><div><span class="status-chip '+(s.active?'ok':'bad')+'">'+(s.active?'Running':xrayInstalled&&s.name==='xray'?'Attention':'Stopped')+'</span></div><div class="toolbar">'+extra+'<button class="ghost" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="start">Start</button><button class="primary" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="restart">Restart</button><button class="danger" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="stop">Stop</button></div></div>';
   };
   content.innerHTML=viewIntro('ALLOWLISTED SERVICES','کنترل سرویس‌ها','Start/Stop/Restart فقط برای سرویس‌های Allowlist شده است. برای Xray، Diagnose علت واقعی Failure را از Core و journal نشان می‌دهد.','<div class="view-intro-stat"><b>'+running+'/'+d.services.length+'</b><span>RUNNING</span></div>')+
   '<div class="panel modern-list"><div class="table">'+d.services.map(row).join('')+'</div></div>';
