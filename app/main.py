@@ -42,6 +42,9 @@ def public_origin(request:Request):
     scheme="https" if forwarded=="https" or (domain and panel_ops.domain_status(domain).get("certificate")) else "http"
     return f"{scheme}://{host}"
 
+def public_host(request:Request):
+    return (get_setting("panel_domain","") or request.url.hostname or "server").strip()
+
 def artifact_save(kind,external_key,display_name,protocol,payload,metadata=None):
     return upsert_access_artifact(
         kind,external_key,display_name,protocol,payload.get("native_filename",""),
@@ -253,9 +256,14 @@ def create_account(payload:AccountCreate,request:Request):
     try:
         system_ops.create_ssh_user(payload.username,password,payload.expire_date)
         upsert_profile(payload.username,payload.plan,payload.note,payload.expire_date,payload.connection_limit,payload.quota_mb,1,payload.device_limit,payload.renewal_days)
+        delivery=access_ops.ssh_payload(public_host(request),payload.username,password,22)
+        artifact_id=artifact_save("ssh",payload.username,payload.username,"ssh",delivery,{
+            "expire_date":payload.expire_date or "","plan":payload.plan or "",
+            "connection_limit":payload.connection_limit,"device_limit":payload.device_limit
+        })
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
     audit(actor,"account_create",payload.username,f"plan={payload.plan}; limit={payload.connection_limit}; quota_mb={payload.quota_mb}; password_mode={payload.password_mode}",ip(request))
-    return {"ok":True,"username":payload.username,"password":password if generated else None,"generated":generated}
+    return {"ok":True,"username":payload.username,"password":password if generated else None,"generated":generated,"artifact_id":artifact_id}
 
 class AccountUpdate(BaseModel):
     password:str|None=Field(default=None,min_length=4,max_length=128)
@@ -277,6 +285,12 @@ def update_account(username:str,payload:AccountUpdate,request:Request):
         system_ops.lock_user(username,not payload.enabled)
         upsert_profile(username,payload.plan,payload.note,None if payload.clear_expire else payload.expire_date,payload.connection_limit,payload.quota_mb,1 if payload.enabled else 0,payload.device_limit,payload.renewal_days)
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
+    if payload.password:
+        delivery=access_ops.ssh_payload(public_host(request),username,payload.password,22)
+        artifact_save("ssh",username,username,"ssh",delivery,{
+            "expire_date":None if payload.clear_expire else (payload.expire_date or ""),
+            "plan":payload.plan or "","connection_limit":payload.connection_limit,"device_limit":payload.device_limit
+        })
     audit(actor,"account_update",username,f"enabled={payload.enabled}; limit={payload.connection_limit}; quota_mb={payload.quota_mb}",ip(request))
     return {"ok":True}
 
@@ -299,7 +313,7 @@ def account_action(username:str,action:str,request:Request):
                 except system_ops.OperationError: pass
             result={"username":username,"disconnected":len(targets)}
         elif action=="delete":
-            result=system_ops.delete_user(username); delete_profile(username)
+            result=system_ops.delete_user(username); delete_profile(username); delete_access_artifact_by_key("ssh",username)
         else: raise HTTPException(404,"unknown action")
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
     audit(actor,f"account_{action}",username,ip=ip(request))
