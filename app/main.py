@@ -1181,6 +1181,31 @@ def backup_create(request:Request):
     audit(actor,"backup_create",result["name"],ip=ip(request))
     return result
 
+class PortableBackupRequest(BaseModel):
+    password:str=Field(min_length=10,max_length=128)
+
+@app.post("/api/backups/portable")
+def backup_portable(payload:PortableBackupRequest,request:Request):
+    actor=require_mutation(request)
+    try:
+        files=system_ops.portable_migration_files(
+            str(DATA_DIR),
+            list(all_profiles().keys()),
+            panel_domain=get_setting("panel_domain",""),
+            version=VERSION,
+        )
+        blob=access_ops.protected_zip(files,payload.password)
+        access_ops.verify_protected_zip(blob,payload.password,"manifest.json")
+    except (system_ops.OperationError,access_ops.AccessPackageError) as e:
+        raise HTTPException(400,str(e))
+    filename=f"makia-portable-{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.zip"
+    audit(actor,"portable_backup_export",filename,f"files={len(files)}",ip(request))
+    return Response(content=blob,media_type="application/zip",headers={
+        "Content-Disposition":f'attachment; filename="{filename}"',
+        "Cache-Control":"no-store, private",
+        "X-Content-Type-Options":"nosniff",
+    })
+
 @app.get("/api/audit")
 def audit_list(request:Request,limit:int=100):
     require_user(request); limit=max(1,min(limit,500))
