@@ -146,6 +146,7 @@ def xray_diagnostics():
         "version":"","validated_version":False,"root_validation":False,
         "service_validation":False,"root_error":"","service_error":"",
         "journal":_xray_journal_tail(),"hints":[],
+        "cert_sync_hook":Path("/etc/letsencrypt/renewal-hooks/deploy/makia-xray-sync").is_file(),
     }
     if binary:
         try:
@@ -1479,6 +1480,11 @@ def apply_xray_config(data):
         raise ProtocolError("Xray core is not installed")
     if not isinstance(data,dict):
         raise ProtocolError("Xray config must be a JSON object")
+    # Advanced JSON may legitimately reference Certbot's live paths, whose
+    # private-key permissions are intentionally not readable by the Xray
+    # service user. Materialize only those known Let's Encrypt references.
+    data=json.loads(json.dumps(data))
+    _rewrite_letsencrypt_certificates(data)
     config_path=_config_path() or "/usr/local/etc/xray/config.json"
     path=Path(config_path)
     path.parent.mkdir(parents=True,exist_ok=True)
