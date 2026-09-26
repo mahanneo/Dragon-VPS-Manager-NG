@@ -884,6 +884,7 @@ def _resolve_access_payload(kind,key,request):
 
 def _current_delivery_payload(kind,key,payload,request):
     """Rebuild delivery-facing files from current settings without mutating service credentials."""
+    result=payload
     if kind=="ssh":
         summary=dict(payload.get("summary") or {})
         credentials=(payload.get("files") or {}).get("credentials.txt",b"")
@@ -893,7 +894,7 @@ def _current_delivery_payload(kind,key,payload,request):
         password=match.group(1).strip() if match else ""
         username=summary.get("username") or key
         if password and summary.get("host") and username:
-            return access_ops.ssh_payload(
+            result=access_ops.ssh_payload(
                 summary["host"],username,password,int(summary.get("port") or 22),ssh_npv_options(username)
             )
     elif kind=="xray":
@@ -903,12 +904,25 @@ def _current_delivery_payload(kind,key,payload,request):
             subscription_settings=operator_settings_snapshot()["subscription"]
             sid=row.get("subscription_id") or ""
             origin=public_origin(request)
-            return access_ops.xray_payload(
+            result=access_ops.xray_payload(
                 row["name"],row["protocol"],row.get("share_link") or "",
                 f"{origin}/sub/{sid}?format={subscription_settings['default_format']}" if sid and subscription_settings["enabled"] else "",
                 f"{origin}/client/{sid}" if sid and subscription_settings["client_page_enabled"] else ""
             )
-    return payload
+    # Older encrypted artifacts predate the bundled Persian guide. Add it at
+    # delivery time without changing any credential or native configuration.
+    if kind in {"ssh","xray","wireguard","openvpn"}:
+        result=dict(result)
+        files=dict(result.get("files") or {})
+        protocol=""
+        if kind=="xray":
+            try:
+                protocol=(get_protocol_client(int(key)) or {}).get("protocol") or ""
+            except Exception:
+                protocol=""
+        files.setdefault("connection-guide-fa.txt",access_ops.client_guide_text(kind,protocol).encode("utf-8"))
+        result["files"]=files
+    return result
 
 @app.get("/api/access")
 def access_entries(request:Request):
