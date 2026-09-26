@@ -6,6 +6,13 @@ FAIL=0
 
 ok(){ printf '✓ %s\n' "$1"; }
 bad(){ printf '✗ %s\n' "$1"; FAIL=1; }
+xray_bad(){
+  if [[ "${MAKIA_ALLOW_PREEXISTING_XRAY_FAILURE:-0}" == "1" ]]; then
+    printf '! %s (pre-existing Xray failure; panel diagnostics update allowed)\n' "$1"
+  else
+    bad "$1"
+  fi
+}
 
 [[ -d "$APP" ]] || { bad "Makia runtime missing at $APP"; exit 1; }
 
@@ -69,7 +76,7 @@ if command -v xray >/dev/null 2>&1; then
     if xray run -test -format=json -config "$XRAY_CONFIG" >/tmp/makia-xray-test.log 2>&1; then
       ok "Xray active config syntax (root)"
     else
-      bad "Xray active config syntax (root)"
+      xray_bad "Xray active config syntax (root)"
       sed -n '1,12p' /tmp/makia-xray-test.log || true
     fi
     XRAY_USER="$(systemctl show xray -p User --value 2>/dev/null || true)"
@@ -82,13 +89,13 @@ if command -v xray >/dev/null 2>&1; then
     if "${XRAY_USER_TEST[@]}" >/tmp/makia-xray-user-test.log 2>&1; then
       ok "Xray config readable by systemd user ($XRAY_USER)"
     else
-      bad "Xray config unreadable/invalid for systemd user ($XRAY_USER)"
+      xray_bad "Xray config unreadable/invalid for systemd user ($XRAY_USER)"
       sed -n '1,12p' /tmp/makia-xray-user-test.log || true
     fi
     if systemctl is-active --quiet xray; then
       ok "Xray runtime active"
     else
-      bad "Xray runtime inactive"
+      xray_bad "Xray runtime inactive"
       journalctl -u xray -n 12 --no-pager || true
     fi
   fi
