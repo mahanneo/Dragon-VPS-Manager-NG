@@ -1340,6 +1340,30 @@ def _current_delivery_payload(kind,key,payload,request):
             result=access_ops.openvpn_payload(key,rendered["config"])
         except protocol_ops.ProtocolError:
             result=payload
+    elif kind=="wireguard":
+        config=str(payload.get("primary_text") or "")
+        summary=dict(payload.get("summary") or {})
+        alternate=""
+        match=re.search(r"(?m)^\s*Endpoint\s*=\s*([^\s:]+):(\d+)\s*$",config)
+        if match:
+            endpoint=match.group(1).strip()
+            try:
+                ipaddress.ip_address(endpoint)
+            except ValueError:
+                try:
+                    ep=protocol_ops._resolve_endpoint(endpoint,"WireGuard endpoint")
+                    local4=set(ep.get("local_ipv4") or [])
+                    fallback=next((x for x in ep.get("resolved_ipv4") or [] if x in local4),"")
+                    if fallback:
+                        alternate=config.replace(
+                            match.group(0),
+                            f"Endpoint = {fallback}:{match.group(2)}",
+                            1,
+                        )
+                except Exception:
+                    alternate=""
+        if config:
+            result=access_ops.wireguard_payload(key,config,summary.get("address"),alternate or None,"ip")
     elif kind=="xray":
         try: row=get_protocol_client(int(key))
         except Exception: row=None
