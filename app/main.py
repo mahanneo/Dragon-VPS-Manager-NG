@@ -484,7 +484,7 @@ def protocol_client_update(client_id:int,payload:ProtocolClientPolicy,request:Re
     expire_at=int(time.time()+payload.expire_days*86400) if payload.expire_days is not None and payload.expire_days>0 else (0 if payload.expire_days==0 else None)
 
     if payload.enabled is not None and bool(payload.enabled)!=bool(row.get("enabled")):
-        if row.get("engine")=="xray" and row.get("protocol") in {"vless","vmess","trojan","hysteria2"}:
+        if row.get("engine")=="xray" and row.get("protocol") in {"vless","vmess","trojan","hysteria2","http","socks"}:
             try:
                 if payload.enabled:
                     protocol_ops.enable_xray_client(row["inbound_tag"],row["name"],row["protocol"],row["credential"])
