@@ -10,10 +10,13 @@ import socket
 import time
 import urllib.parse
 import uuid
+import pwd
 from pathlib import Path
 
 XRAY_BIN_CANDIDATES=["/usr/local/bin/xray","/usr/bin/xray"]
 XRAY_CONFIG_CANDIDATES=["/usr/local/etc/xray/config.json","/etc/xray/config.json"]
+XRAY_VALIDATED_VERSION="v26.3.27"
+XRAY_TLS_DIR=Path("/usr/local/etc/xray/tls")
 WG_DIR=Path("/etc/wireguard")
 OVPN_DIR=Path("/etc/openvpn")
 OVPN_EASYRSA=OVPN_DIR/"easy-rsa"
@@ -51,6 +54,175 @@ def _config_path():
             return p
     return None
 
+
+def _xray_service_user():
+    if shutil.which("systemctl"):
+        p=subprocess.run(["systemctl","show","xray","-p","User","--value"],text=True,capture_output=True,timeout=8,check=False)
+        if p.returncode==0:
+            return (p.stdout or "").strip() or "root"
+    return "root"
+
+def _xray_secure_runtime_file(path,mode=0o600):
+    path=Path(path)
+    os.chmod(path,mode)
+    user=_xray_service_user()
+    if os.geteuid()==0 and user not in {"","root"}:
+        try:
+            info=pwd.getpwnam(user)
+            os.chown(path,info.pw_uid,info.pw_gid)
+        except (KeyError,OSError) as exc:
+            raise ProtocolError(f"unable to set Xray runtime file ownership for {user}: {exc}") from exc
+    return user
+
+def _xray_test_config_as_service(binary,path):
+    args=[binary,"run","-test","-format=json","-config",str(path)]
+    user=_xray_service_user()
+    if os.geteuid()==0 and user not in {"","root"} and shutil.which("runuser"):
+        args=["runuser","-u",user,"--",*args]
+    return _run(args,timeout=30)
+
+def _xray_materialize_tls(domain):
+    domain=_validate_endpoint_host(domain,"TLS domain")
+    cert=Path(f"/etc/letsencrypt/live/{domain}/fullchain.pem")
+    key=Path(f"/etc/letsencrypt/live/{domain}/privkey.pem")
+    if not cert.exists() or not key.exists():
+        raise ProtocolError("TLS certificate not found for this domain; issue HTTPS/Let's Encrypt first")
+    target=XRAY_TLS_DIR/domain
+    target.mkdir(parents=True,exist_ok=True)
+    if os.geteuid()==0:
+        user=_xray_service_user()
+        if user not in {"","root"}:
+            info=pwd.getpwnam(user)
+            os.chown(target,info.pw_uid,info.pw_gid)
+    os.chmod(target,0o700)
+    cert_out=target/"fullchain.pem"
+    key_out=target/"privkey.pem"
+    shutil.copyfile(cert,cert_out)
+    shutil.copyfile(key,key_out)
+    _xray_secure_runtime_file(cert_out,0o600)
+    _xray_secure_runtime_file(key_out,0o600)
+    return cert_out,key_out
+
+def _rewrite_letsencrypt_certificates(data):
+    changed=0
+    def walk(node):
+        nonlocal changed
+        if isinstance(node,dict):
+            cert=node.get("certificateFile")
+            key=node.get("keyFile")
+            if isinstance(cert,str) and isinstance(key,str) and cert.startswith("/etc/letsencrypt/live/") and key.startswith("/etc/letsencrypt/live/"):
+                parts=Path(cert).parts
+                try:
+                    idx=parts.index("live")
+                    domain=parts[idx+1]
+                    cert_out,key_out=_xray_materialize_tls(domain)
+                    node["certificateFile"]=str(cert_out)
+                    node["keyFile"]=str(key_out)
+                    changed+=1
+                except (ValueError,IndexError):
+                    pass
+            for value in node.values():
+                walk(value)
+        elif isinstance(node,list):
+            for value in node:
+                walk(value)
+    walk(data)
+    return changed
+
+def _xray_journal_tail(lines=24):
+    if not shutil.which("journalctl"):
+        return ""
+    p=subprocess.run(["journalctl","-u","xray","-n",str(max(1,min(int(lines),80))),"--no-pager","-o","cat"],text=True,capture_output=True,timeout=10,check=False)
+    text=(p.stdout or p.stderr or "").strip()
+    return text[-6000:]
+
+def xray_diagnostics():
+    binary=_binary()
+    config=_config_path()
+    service_user=_xray_service_user()
+    result={
+        "installed":bool(binary),"binary":binary,"config_path":config,
+        "service_user":service_user,"service_active":_active("xray"),
+        "version":"","validated_version":False,"root_validation":False,
+        "service_validation":False,"root_error":"","service_error":"",
+        "journal":_xray_journal_tail(),"hints":[],
+    }
+    if binary:
+        try:
+            p=subprocess.run([binary,"version"],text=True,capture_output=True,timeout=5,check=False)
+            result["version"]=(p.stdout or p.stderr).splitlines()[0][:160] if (p.stdout or p.stderr) else ""
+            result["validated_version"]="26.3.27" in result["version"]
+        except Exception:
+            pass
+    if config:
+        try:
+            _xray_test_config(binary,config)
+            result["root_validation"]=True
+        except Exception as exc:
+            result["root_error"]=str(exc)[:1200]
+        try:
+            _xray_test_config_as_service(binary,config)
+            result["service_validation"]=True
+        except Exception as exc:
+            result["service_error"]=str(exc)[:1200]
+        try:
+            st=os.stat(config)
+            result["config_mode"]=oct(st.st_mode & 0o777)
+            result["config_uid"]=st.st_uid
+        except OSError:
+            pass
+    journal=(result["journal"] or "").lower()
+    if result["root_validation"] and not result["service_validation"]:
+        result["hints"].append("کانفیگ برای root معتبر است ولی کاربر systemd نمی‌تواند آن را بخواند؛ مشکل Permission/Certificate محتمل است.")
+    if "permission denied" in journal:
+        result["hints"].append("در journal خطای Permission denied دیده شد.")
+    if "address already in use" in journal:
+        result["hints"].append("یک Port موردنیاز Xray قبلاً توسط سرویس دیگری اشغال شده است.")
+    if "certificate" in journal and ("permission" in journal or "failed" in journal or "cannot" in journal):
+        result["hints"].append("خواندن Certificate/Private Key TLS ناموفق بوده است.")
+    if not result["root_validation"] and result["root_error"]:
+        result["hints"].append("خود Xray Core کانفیگ فعال را نامعتبر تشخیص داده است.")
+    if binary and not result["validated_version"]:
+        result["hints"].append("نسخه Core نصب‌شده با نسخه‌ای که Makia در CI اعتبارسنجی می‌کند (26.3.27) متفاوت است.")
+    return result
+
+def repair_xray_runtime():
+    binary=_binary()
+    config=_config_path()
+    if not binary or not config:
+        raise ProtocolError("Xray binary/config is not available")
+    path=Path(config)
+    try:
+        data=json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ProtocolError(f"cannot parse Xray config: {exc}") from exc
+    _rewrite_letsencrypt_certificates(data)
+    tmp=_xray_temp_json_path(path,"repair")
+    backup_dir=Path("/var/backups/makia-vps-manager")
+    backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
+    backup=backup_dir/f"xray-repair-{int(time.time())}.json"
+    shutil.copy2(path,backup)
+    tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    os.chmod(tmp,0o600)
+    try:
+        _xray_test_config(binary,tmp)
+        os.replace(tmp,path)
+        _xray_secure_runtime_file(path)
+        _xray_test_config_as_service(binary,path)
+        _run(["systemctl","daemon-reload"],timeout=20)
+        _run(["systemctl","restart","xray"],timeout=30)
+        if not _active("xray"):
+            raise ProtocolError("Xray did not become active after repair")
+    except Exception:
+        try:
+            if tmp.exists(): tmp.unlink()
+            shutil.copy2(backup,path)
+            _xray_secure_runtime_file(path)
+            _run(["systemctl","restart","xray"],timeout=30)
+        except Exception:
+            pass
+        raise
+    return {"ok":True,"backup":str(backup),"diagnostics":xray_diagnostics()}
 
 def _xray_temp_json_path(path, purpose="validate"):
     path=Path(path)
@@ -194,7 +366,7 @@ def install_component(component):
     if component=="xray":
         # Official XTLS installer. It installs the core + systemd service and
         # verifies the release artifacts handled by the upstream installer.
-        _run(["bash","-lc",'bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install'],timeout=600)
+        _run(["bash","-lc",f'bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install --version {XRAY_VALIDATED_VERSION} -u nobody'],timeout=600)
         config=Path("/usr/local/etc/xray/config.json")
         config.parent.mkdir(parents=True,exist_ok=True)
         if not config.exists():
@@ -204,6 +376,8 @@ def install_component(component):
                 "outbounds":[{"protocol":"freedom","tag":"direct"}]
             },ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
             os.chmod(config,0o600)
+        _xray_secure_runtime_file(config)
+        _xray_test_config_as_service(_binary(),config)
         _run(["systemctl","enable","--now","xray"],timeout=60)
         return xray_status()
     if component not in packages:
@@ -795,10 +969,7 @@ def _build_xray_stream(binary,protocol,transport,security,path_value,server_name
         sni=(server_name or "").strip().lower()
         if not sni:
             raise ProtocolError("TLS requires a domain/SNI")
-        cert=Path(f"/etc/letsencrypt/live/{sni}/fullchain.pem")
-        key=Path(f"/etc/letsencrypt/live/{sni}/privkey.pem")
-        if not cert.exists() or not key.exists():
-            raise ProtocolError("TLS certificate not found for this domain; issue HTTPS/Let's Encrypt first")
+        cert,key=_xray_materialize_tls(sni)
         stream["tlsSettings"]={
             "serverName":sni,
             "alpn":["h2","http/1.1"],
@@ -893,10 +1064,7 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
         sni=(server_name or "").strip().lower()
         if not sni:
             raise ProtocolError("Hysteria2 requires a TLS domain/SNI")
-        cert=Path(f"/etc/letsencrypt/live/{sni}/fullchain.pem")
-        key=Path(f"/etc/letsencrypt/live/{sni}/privkey.pem")
-        if not cert.exists() or not key.exists():
-            raise ProtocolError("Hysteria2 requires a valid Let's Encrypt certificate for the SNI")
+        cert,key=_xray_materialize_tls(sni)
         stream={
             "method":"hysteria",
             "security":"tls",
@@ -934,6 +1102,8 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
     try:
         _xray_test_config(binary,tmp)
         os.replace(tmp,path)
+        _xray_secure_runtime_file(path)
+        _xray_test_config_as_service(binary,path)
         _run(["systemctl","restart","xray"],timeout=30)
         if not _active("xray"):
             raise ProtocolError("Xray did not become active after restart")
@@ -944,6 +1114,7 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
             if tmp.exists(): tmp.unlink()
             if backup and backup.exists():
                 shutil.copy2(backup,path)
+                _xray_secure_runtime_file(path)
                 _run(["systemctl","restart","xray"],timeout=30)
         except Exception:
             pass
@@ -1035,6 +1206,8 @@ def create_xray_tunnel(listen_port, target_host, target_port, network="tcp,udp",
     try:
         _xray_test_config(binary,tmp)
         os.replace(tmp,path)
+        _xray_secure_runtime_file(path)
+        _xray_test_config_as_service(binary,path)
         _run(["systemctl","restart","xray"],timeout=30)
         if not _active("xray"):
             raise ProtocolError("Xray did not become active after tunnel apply")
