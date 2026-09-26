@@ -7,6 +7,12 @@ from app import access_ops
 from app import main as main_app
 
 
+def test_qr_svg_generation():
+    svg=access_ops.make_qr_svg("vless://uuid@example.com:443")
+    assert svg.startswith(b"<?xml") or b"<svg" in svg[:300]
+    assert b"<svg" in svg
+
+
 def test_encrypted_payload_roundtrip(monkeypatch):
     monkeypatch.setattr(access_ops, "ensure_secret", lambda: b"x"*48)
     original={
