@@ -93,6 +93,7 @@ def operator_settings_snapshot():
 def ssh_npv_options(username):
     settings=operator_settings_snapshot()["delivery"]
     return {
+        "enabled":settings["npv_enabled"],
         "remarks":f"{settings['profile_prefix']} {username}".strip(),
         "dns_mode":settings["npv_dns_mode"],
         "udpgw_port":settings["npv_udpgw_port"],
