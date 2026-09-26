@@ -433,7 +433,22 @@ def xray_quick_inbound(payload:XrayQuickInbound,request:Request):
         payload.name,"xray",payload.protocol,result["tag"],result["credential"],result["share_link"],
         quota_bytes,expire_at,payload.ip_limit,payload.reset_days
     )
+    client_row=get_protocol_client(client_id)
+    sub_id=(client_row or {}).get("subscription_id") or ""
+    origin=public_origin(request)
+    delivery=access_ops.xray_payload(
+        payload.name,payload.protocol,result["share_link"],
+        f"{origin}/sub/{sub_id}?format=base64" if sub_id else "",
+        f"{origin}/client/{sub_id}" if sub_id else ""
+    )
+    artifact_id=artifact_save("xray",str(client_id),payload.name,payload.protocol,delivery,{
+        "client_id":client_id,"inbound_tag":result["tag"],"port":payload.port,
+        "transport":result.get("transport",""),"security":result.get("security",""),
+        "subscription_id":sub_id
+    })
     result["client_id"]=client_id
+    result["artifact_id"]=artifact_id
+    result["subscription_id"]=sub_id
     result["quota_bytes"]=quota_bytes
     result["expire_at"]=expire_at
     result["ip_limit"]=payload.ip_limit
@@ -657,8 +672,13 @@ def wireguard_peer_create(payload:WireGuardPeer,request:Request):
     actor=require_mutation(request)
     try:
         result=protocol_ops.create_wireguard_peer(payload.name,payload.endpoint,dns=payload.dns)
+        delivery=access_ops.wireguard_payload(payload.name,result["config"],result.get("address"))
+        artifact_id=artifact_save("wireguard",payload.name,payload.name,"wireguard",delivery,{
+            "public_key":result.get("public_key",""),"address":result.get("address",""),"interface":"wg0"
+        })
     except protocol_ops.ProtocolError as e:
         raise HTTPException(400,str(e))
+    result["artifact_id"]=artifact_id
     audit(actor,"wireguard_peer_create",payload.name,ip=ip(request))
     return result
 
@@ -687,8 +707,13 @@ def openvpn_client_create(payload:OpenVPNClient,request:Request):
     actor=require_mutation(request)
     try:
         result=protocol_ops.create_openvpn_client(payload.name,payload.endpoint,payload.port,payload.proto)
+        delivery=access_ops.openvpn_payload(payload.name,result["config"])
+        artifact_id=artifact_save("openvpn",payload.name,payload.name,"openvpn",delivery,{
+            "endpoint":payload.endpoint,"port":payload.port,"transport":payload.proto
+        })
     except protocol_ops.ProtocolError as e:
         raise HTTPException(400,str(e))
+    result["artifact_id"]=artifact_id
     audit(actor,"openvpn_client_create",payload.name,ip=ip(request))
     return result
 
