@@ -103,6 +103,11 @@ def installations():
         return [dict(r) for r in con.execute("""SELECT i.*,c.name customer_name FROM installations i
           LEFT JOIN customers c ON c.id=i.customer_id ORDER BY i.id DESC""").fetchall()]
 
+def installation(installation_id):
+    with connect() as con:
+        r=con.execute("SELECT * FROM installations WHERE installation_id=?",(str(installation_id).strip().upper(),)).fetchone()
+        return dict(r) if r else None
+
 def save_license(item):
     with connect() as con:
         con.execute("""INSERT INTO licenses(license_id,customer_id,installation_id,tier,features,status,revision,issued_at,expires_at,sync_token,current_code,created_at,updated_at)
