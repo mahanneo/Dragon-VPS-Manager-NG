@@ -262,22 +262,29 @@ def xray_status():
                 stream=item.get("streamSettings") or {}
                 method=str(stream.get("method") or stream.get("network") or "raw").lower()
                 security=str(stream.get("security") or "none").lower()
+                port=item.get("port")
+                udp=protocol=="hysteria2" or method in {"mkcp","kcp","hysteria"}
+                listener=_listener_present(int(port or 0),"udp" if udp else "tcp") if port else False
                 inbounds.append({
                     "tag":item.get("tag") or "",
                     "protocol":protocol,
                     "listen":item.get("listen") or "0.0.0.0",
-                    "port":item.get("port"),
+                    "port":port,
                     "clients":client_count,
                     "transport":method,
                     "security":security,
+                    "listener":listener,
                 })
         except Exception as exc:
             error=str(exc)[:300]
+    service_active=_active("xray")
+    runtime_ok=bool(service_active and not error and all(bool(x.get("listener")) for x in inbounds))
     return {
         "installed":bool(binary),
         "binary":binary,
         "version":version,
-        "service_active":_active("xray"),
+        "service_active":service_active,
+        "runtime_ok":runtime_ok,
         "config_path":config,
         "config_error":error,
         "inbounds":inbounds,
@@ -326,11 +333,24 @@ def openvpn_status():
     if server_dir.exists():
         configs=[p.stem for p in server_dir.glob("*.conf")]
     active=any(_active(f"openvpn-server@{name}") for name in configs)
+    config=str(server_dir/"server.conf") if (server_dir/"server.conf").exists() else None
+    runtime=None
+    if config:
+        try: runtime=_openvpn_server_runtime()
+        except Exception: runtime=None
+    runtime_ok=bool(
+        active and runtime and runtime.get("listener")
+        and str(runtime.get("proto") or "") in {"udp4","tcp4-server"}
+    ) if config else active
     return {
         "installed":installed,
         "service_active":active,
+        "runtime_ok":runtime_ok,
+        "listener":bool((runtime or {}).get("listener")),
+        "port":(runtime or {}).get("port"),
+        "proto":(runtime or {}).get("proto"),
         "servers":configs,
-        "config":str(server_dir/"server.conf") if (server_dir/"server.conf").exists() else None,
+        "config":config,
     }
 
 def stunnel_status():
