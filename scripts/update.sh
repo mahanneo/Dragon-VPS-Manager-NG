@@ -156,6 +156,29 @@ install -m 0755 "$SRC/scripts/reset-admin.sh" /usr/local/sbin/makia-reset-admin
 install -m 0755 "$SRC/upgrade.sh" /usr/local/sbin/makia-upgrade
 
 systemctl daemon-reload
+
+# Repair the historical root-only Xray config/TLS permission mismatch before
+# the post-update UAT gate. This preserves credentials and rolls back the
+# Xray config internally if the repair itself cannot validate.
+if command -v xray >/dev/null 2>&1 && { [[ -f /usr/local/etc/xray/config.json ]] || [[ -f /etc/xray/config.json ]]; }; then
+  echo "Checking Xray runtime permissions as the real systemd user..."
+  if ! ( cd "$APP" && MAKIA_DATA_DIR="$APP/data" "$APP/.venv/bin/python" - <<'PY'
+from app import protocol_ops
+d=protocol_ops.xray_diagnostics()
+print("Xray:", d.get("version") or "unknown", "user="+str(d.get("service_user") or "root"))
+if not d.get("service_validation") or not d.get("service_active"):
+    result=protocol_ops.repair_xray_runtime()
+    d=result["diagnostics"]
+if not d.get("service_validation") or not d.get("service_active"):
+    raise SystemExit("Xray runtime remains unhealthy after repair")
+print("Xray runtime validation PASS")
+PY
+  ); then
+    echo "Xray runtime repair failed; updater will restore the previous Makia runtime."
+    exit 5
+  fi
+fi
+
 nginx -t
 systemctl restart makia-vps-manager
 systemctl enable --now makia-policy-enforcer
