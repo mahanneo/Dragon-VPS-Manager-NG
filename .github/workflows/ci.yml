@@ -85,3 +85,23 @@ jobs:
           python -m playwright install --with-deps chromium
       - name: Protected export browser smoke
         run: python tests/browser_smoke.py
+
+  xray-core-smoke:
+    runs-on: ubuntu-24.04
+    env:
+      PYTHONPATH: .
+      XRAY_BIN: /tmp/xray-runtime/xray
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Download Xray 26.3.27
+        run: |
+          curl -fsSL -o /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip
+          mkdir -p /tmp/xray-runtime
+          unzip -q /tmp/xray.zip -d /tmp/xray-runtime
+          chmod +x /tmp/xray-runtime/xray
+          /tmp/xray-runtime/xray version
+      - name: Validate generated VLESS XHTTP REALITY config
+        run: python tests/xray_core_smoke.py

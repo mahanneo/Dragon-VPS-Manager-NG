@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.11.2-rc1] - 2026-09-26
+
+### Xray 26.3.27 config-format hotfix
+- Fixed Xray validation failures where Makia generated temporary names such as `config.json.makia-tmp`; current Xray infers config format from the final extension and rejected those files before parsing JSON.
+- All Xray mutation paths now create unique same-directory temporary files ending in `.json`.
+- Makia now also passes `-format=json` explicitly to every Xray config validation call.
+- The fix covers guided inbound creation, tunnels, inbound removal, client disable/enable, manual validation and advanced config apply.
+
+### Regression protection
+- Added unit coverage for JSON temp suffixes, uniqueness and explicit Xray CLI format selection.
+- Added a CI job that downloads official Xray Core `v26.3.27` and validates a Makia-generated VLESS + XHTTP + REALITY configuration with the real Xray binary.
+- Host `makia-uat-smoke` now validates the currently installed Xray configuration when Xray is present.
+
+### Release status
+Hotfix release candidate. Real-host creation and an external-client connection remain the final Xray UAT steps before Stable.
+
 ## [0.11.1-rc1] - 2026-09-26
 
 ### Xray endpoint hotfix

@@ -60,6 +60,21 @@ else
   bad "Application import"
 fi
 
+if command -v xray >/dev/null 2>&1; then
+  XRAY_CONFIG=""
+  for candidate in /usr/local/etc/xray/config.json /etc/xray/config.json; do
+    if [[ -f "$candidate" ]]; then XRAY_CONFIG="$candidate"; break; fi
+  done
+  if [[ -n "$XRAY_CONFIG" ]]; then
+    if xray run -test -format=json -config "$XRAY_CONFIG" >/tmp/makia-xray-test.log 2>&1; then
+      ok "Xray active config syntax"
+    else
+      bad "Xray active config syntax"
+      sed -n '1,12p' /tmp/makia-xray-test.log || true
+    fi
+  fi
+fi
+
 if command -v makia-doctor >/dev/null 2>&1; then
   makia-doctor || true
 else
