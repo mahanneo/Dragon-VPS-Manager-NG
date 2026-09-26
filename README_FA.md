@@ -1,0 +1,185 @@
+# راهنمای فارسی Makia VPS Manager
+
+**Makia VPS Manager** یک پنل مدیریت VPS برای مدیریت دسترسی‌های SSH، Xray، WireGuard و OpenVPN، تحویل امن کانفیگ، دامنه/HTTPS، بکاپ و مهاجرت سرور است.
+
+> وضعیت فعلی پروژه Release Candidate است. قبل از استفاده Production، UAT واقعی روی VPS مقصد انجام شود.
+
+## نصب
+
+روی Ubuntu 22.04 یا 24.04 تازه:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/mahanneo/Makia-VPS-Manager/main/install.sh)
+```
+
+پس از نصب، رمز اولیه مدیر در ترمینال نمایش داده می‌شود. بعد از اولین ورود رمز مدیر را تغییر دهید و در صورت امکان 2FA را فعال کنید.
+
+## بروزرسانی
+
+```bash
+sudo makia-upgrade
+sudo makia-doctor
+sudo makia-uat-smoke
+```
+
+Updater قبل از تغییر نسخه Backup می‌گیرد و در Failure مسیر Rollback دارد. تنظیم فعال Nginx/Certbot در Update حفظ می‌شود.
+
+## دامنه و HTTPS
+
+از **Settings → Domain / Nginx / HTTPS**:
+
+1. دامنه را روی IP سرور تنظیم کنید.
+2. دامنه را در پنل Apply کنید.
+3. ایمیل معتبر وارد کنید.
+4. گواهی Let's Encrypt را صادر کنید.
+5. پنل را از طریق `https://your-domain.example` باز کنید.
+
+برای مهاجرت VPS بهتر است Clientها با **دامنه ثابت** ساخته شوند، نه IP مستقیم. در زمان انتقال سرور فقط DNS دامنه به IP جدید تغییر می‌کند.
+
+## Xray
+
+### ساخت سریع
+
+از **Access Center → Xray** می‌توان برای VLESS، VMess، Trojan، Shadowsocks و Hysteria2 پروفایل ساخت. Transportها و Securityهای قابل پشتیبانی از طریق Wizard کنترل‌شده ارائه می‌شوند.
+
+### Full Xray Core
+
+از **Settings → Xray Defaults → Advanced JSON** می‌توانید Config کامل Xray Core را ویرایش کنید. قبل از Apply:
+
+- JSON بررسی می‌شود؛
+- خود Xray Core کانفیگ را Validate می‌کند؛
+- از Config قبلی Backup گرفته می‌شود؛
+- پس از Apply سرویس Restart می‌شود؛
+- در Failure، Rollback انجام می‌شود.
+
+### اگر Xray روی Failed رفت
+
+در **Services** یا **Protocol Hub** روی **Diagnose** بزنید. Makia موارد زیر را بررسی می‌کند:
+
+- نسخه Xray Core؛
+- اعتبار کانفیگ با root؛
+- اعتبار کانفیگ با همان User واقعی systemd؛
+- Permission فایل Config؛
+- دسترسی Xray به Certificate/Private Key؛
+- خطاهای اخیر `journalctl -u xray`.
+
+دکمه **Repair & Restart** قبل از تغییر از Config Backup می‌گیرد، Permissionها و TLS runtime files را اصلاح می‌کند، با همان User سرویس Validate می‌کند و سپس Xray را Restart می‌کند.
+
+نسخه Xray که این Release در CI با آن اعتبارسنجی می‌شود: **26.3.27**.
+
+## WireGuard
+
+Default سازگاری فعلی:
+
+- UDP Port: `443`
+- MTU: `1280`
+- PersistentKeepalive: `15`
+- AllowedIPs: `0.0.0.0/0`
+
+این تنظیمات مشکلات رایج NAT و MTU را کاهش می‌دهند، ولی در شبکه‌ای که خود WireGuard در سطح پروتکل مسدود شده باشد تضمین عبور وجود ندارد. در آن شرایط Xray/REALITY را نیز تست کنید.
+
+## راهنمای کاربران
+
+یک صفحه عمومی بدون نیاز به Login وجود دارد:
+
+```text
+https://YOUR-PANEL-DOMAIN/help/connect
+```
+
+لینک مستقیم بخش‌ها:
+
+- Xray: `/help/connect#xray`
+- WireGuard: `/help/connect#wireguard`
+- OpenVPN: `/help/connect#openvpn`
+- SSH / NPV: `/help/connect#ssh`
+
+از داخل پنل نیز بخش **راهنمای اتصال** وجود دارد و می‌توانید لینک مناسب را Copy و برای کاربر ارسال کنید.
+
+Protected ZIPهای تحویل نیز فایل `connection-guide-fa.txt` دارند.
+
+راهنمای کامل کاربران: [docs/CLIENT-GUIDE-FA.md](docs/CLIENT-GUIDE-FA.md)
+
+## SSH / NPV Tunnel
+
+Makia برای SSH می‌تواند:
+
+- OpenSSH config
+- Credentials
+- لینک `npvt-ssh://`
+- QR سازگار
+- Protected ZIP
+
+تولید کند.
+
+فرمت proprietary و رمزگذاری‌شده `.npv4` بدون مشخصات رسمی جعل یا تولید نمی‌شود.
+
+## Backup و مهاجرت VPS
+
+دو مدل Backup وجود دارد:
+
+### Local Backup
+
+برای Rollback و بازیابی روی همان Host.
+
+### Portable Migration
+
+از **Backups → Portable Migration** یک ZIP رمزگذاری‌شده AES-256 ساخته می‌شود که در صورت وجود شامل این موارد است:
+
+- SQLite و `.secret`
+- Xray config و REALITY keys
+- WireGuard keys/peers
+- OpenVPN PKI
+- Nginx
+- Let's Encrypt
+- SSH password hashes کاربران مدیریت‌شده
+
+روی VPS مقصد ابتدا همان نسخه Makia را نصب کنید و سپس:
+
+```bash
+sudo makia-restore-portable /path/to/bundle.zip
+sudo makia-restore-portable /path/to/bundle.zip --apply
+sudo makia-doctor
+sudo makia-uat-smoke
+```
+
+بعد از PASS شدن مقصد، DNS دامنه را به IP جدید تغییر دهید.
+
+هدف Migration، **حفظ Credential کاربران** است؛ DNS propagation ممکن است یک بازه کوتاه Cutover ایجاد کند.
+
+## عیب‌یابی
+
+دستورات اصلی:
+
+```bash
+sudo makia-doctor
+sudo makia-uat-smoke
+sudo systemctl status xray --no-pager
+sudo journalctl -u xray -n 80 --no-pager
+sudo nginx -t
+```
+
+در حالت معمول ابتدا از Diagnostics داخل پنل استفاده کنید، چون تست Xray را هم با root و هم با User واقعی systemd اجرا می‌کند.
+
+## امنیت
+
+- پنل عمومی را فقط با HTTPS استفاده کنید.
+- 2FA مدیر را فعال کنید.
+- Protected ZIP و رمز آن را در دو پیام جدا ارسال کنید.
+- QR و Share Link حاوی Credential هستند.
+- فایل OVPN، WireGuard config و SSH Credentials را عمومی نکنید.
+- Portable Migration Bundle شامل Secretهای حساس است؛ پس از انتقال امن، نسخه‌های اضافی را حذف کنید.
+
+## تست و Release Gate
+
+هر Release Candidate باید حداقل این Gateها را پاس کند:
+
+- Python compile/import
+- Unit tests
+- JavaScript/Bash syntax
+- Browser Smoke با Playwright
+- Xray Core 26.3.27 validation
+- Protected ZIP
+- QR/Share
+- تمام Sidebar views
+- Settings contracts
+- UAT واقعی روی VPS برای نسخه Stable

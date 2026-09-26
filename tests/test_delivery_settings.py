@@ -135,6 +135,7 @@ def test_legacy_ssh_share_upgrade_generates_npvt_link(monkeypatch):
     })
     monkeypatch.setattr(main_app,"_resolve_access_payload",lambda kind,key,request:(payload,{"id":1}))
     monkeypatch.setattr(main_app,"artifact_save",lambda *args,**kwargs:1)
+    monkeypatch.setattr(main_app,"public_origin",lambda request:"http://testserver")
     response=main_app.access_share("ssh","user001",_request("/api/access/ssh/user001/share"))
     body=json.loads(response.body)
     assert body["share_text"].startswith("npvt-ssh://")

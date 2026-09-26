@@ -2,8 +2,19 @@
 
 Modern web-first VPS and access-infrastructure control center for Ubuntu.
 
-> **Current release candidate:** `v0.11.0-rc1`  
-> CI-validated, but **not yet production-certified**. A real-host UAT is required before a `1.0.0 Stable` label.
+**[راهنمای کامل فارسی](README_FA.md)** · **[راهنمای اتصال کاربران](docs/CLIENT-GUIDE-FA.md)**
+
+> **Current release candidate:** `v0.13.1-rc1`  
+> CI validation is required before merge; a real-host UAT is still required before any Stable designation.
+
+## v0.13.1 Xray runtime reliability & user guides
+- Xray config mutations preserve access for the actual systemd service user instead of leaving root-only `0600` files behind.
+- Xray Diagnostics compares root validation with service-user validation and surfaces recent `journalctl -u xray` output.
+- Repair & Restart creates a backup, repairs ownership/TLS runtime files, validates as the service user and restarts only after validation.
+- Xray installation is pinned to the same Core version validated in CI: `26.3.27`.
+- Let's Encrypt certificates used by Xray are materialized under an Xray-readable `0600` runtime path and refreshed by a Certbot deploy hook.
+- A public Persian client guide is available at `/help/connect`, and protected delivery bundles include `connection-guide-fa.txt`.
+- The admin panel has a dedicated Client Guides view with per-protocol links that can be sent to end users.
 
 ## What Makia manages today
 

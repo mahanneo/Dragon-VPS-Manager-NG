@@ -23,6 +23,13 @@ function statusFor(a){if(!a.enabled)return'<span class="status-chip bad">Locked<
 function viewIntro(kicker,heading,desc,aside=''){
   return '<section class="view-intro"><div><div class="eyebrow">'+htmlEsc(kicker)+'</div><h2>'+htmlEsc(heading)+'</h2><p>'+htmlEsc(desc)+'</p></div>'+aside+'</section>';
 }
+function clientGuideUrl(kind){
+  const anchor=kind==='wireguard'?'wireguard':kind==='openvpn'?'openvpn':kind==='ssh'?'ssh':'xray';
+  return location.origin+'/help/connect#'+anchor;
+}
+function openClientGuide(kind){window.open(clientGuideUrl(kind),'_blank','noopener')}
+function copyClientGuide(kind){copyText(clientGuideUrl(kind));toast('لینک راهنما کپی شد')}
+
 async function dashboard(renderToken=window.__viewRenderToken){
   title.textContent='Overview';setPageContext('OPERATIONS COCKPIT');
   content.innerHTML='<div class="loading-state"><span class="spinner"></span><b>در حال همگام‌سازی وضعیت سرور…</b></div>';
@@ -189,8 +196,9 @@ function accessCard(a){
   const shareLabel=a.kind==='ssh'?'NPV Import':a.kind==='xray'?'QR / Share':a.kind==='wireguard'?'QR / Share':'';
   const shareAllowed=a.can_export&&shareLabel&&(a.kind!=='ssh'||delivery.npv_enabled!==false);
   const shareButton=shareAllowed?'<button class="icon-action shareish" data-action="access-share" data-kind="'+kind+'" data-key="'+key+'" data-name="'+label+'">'+shareLabel+'</button>':'';
+  const guideButton='<button class="icon-action" data-action="client-guide" data-kind="'+kind+'">Guide</button>';
   const exportAction=a.can_export
-    ? shareButton+'<button class="icon-action primaryish" data-action="protected-export" data-kind="'+kind+'" data-key="'+key+'" data-name="'+label+'">Protected ZIP</button><button class="icon-action" data-action="native-export" data-kind="'+kind+'" data-key="'+key+'">Native</button>'
+    ? shareButton+'<button class="icon-action primaryish" data-action="protected-export" data-kind="'+kind+'" data-key="'+key+'" data-name="'+label+'">Protected ZIP</button><button class="icon-action" data-action="native-export" data-kind="'+kind+'" data-key="'+key+'">Native</button>'+guideButton
     : (a.kind==='wireguard'
       ? '<button class="icon-action warnish" data-action="wg-reissue" data-key="'+key+'">Reissue</button>'
       : '<button class="icon-action warnish" data-action="manage-access" data-id="'+id+'">Reset credential</button>');
@@ -438,7 +446,7 @@ function showProvisionSuccess(kind,key,name,packagePassword,loginSecret,result){
       '<div class="success-grid"><div><span>Protocol</span><b>'+htmlEsc(kind.toUpperCase())+'</b></div><div><span>Package PIN</span><b class="credential-secret">'+htmlEsc(packagePassword)+'</b></div>',
       (loginSecret?'<div><span>Login Password</span><b class="credential-secret">'+htmlEsc(loginSecret)+'</b></div>':'')+'</div>',
       '<div class="delivery-actions">'+((kind==='xray'||kind==='wireguard'||(kind==='ssh'&&(window.__operatorSettings?.delivery?.npv_enabled!==false)))?'<button class="primary action-lg" data-action="access-share" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'" data-name="'+dataEnc(name)+'">'+(kind==='ssh'?'NPV QR / Import':'QR / Share')+'</button>':'')+'<button class="primary action-lg" data-action="protected-download-now" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'" data-name="'+dataEnc(name)+'" data-password="'+dataEnc(packagePassword)+'">Protected ZIP</button>',
-      '<button class="ghost action-lg" data-action="native-export" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'">Native file</button></div>',
+      '<button class="ghost action-lg" data-action="native-export" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'">Native file</button><button class="ghost action-lg" data-action="client-guide" data-kind="'+htmlEsc(kind)+'">راهنمای اتصال</button></div>',
       '<div class="wizard-note"><b>تحویل امن</b><span>فایل و PIN را در دو پیام/کانال جداگانه برای کاربر بفرست.</span></div>',
       '<button class="soft wide-btn" data-action="success-done">بازگشت به Access Center</button>',
     '</div></div>'
@@ -512,7 +520,7 @@ async function openAccessShare(kind,key,name){
         '</div>',
         details,reality,subBlock,
         '<div class="wizard-note"><b>Security</b><span>QR و Share Link حاوی Credential اتصال هستند؛ فقط برای همان کاربر ارسال شوند. محدودیت IP/Device، حجم و Expiry همچنان روی سرور اعمال می‌شود.</span></div>',
-        '<div class="wizard-footer"><button class="ghost" data-action="modal-close">Done</button><button class="ghost" data-action="native-export" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'">Native config</button><button class="primary" data-action="protected-export" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'" data-name="'+dataEnc(name)+'">Protected ZIP</button></div>',
+        '<div class="wizard-footer"><button class="ghost" data-action="modal-close">Done</button>'+(r.summary?.guide_url?'<a class="ghost link-btn" target="_blank" rel="noopener" href="'+htmlEsc(r.summary.guide_url)+'">راهنمای کاربر</a>':'')+'<button class="ghost" data-action="native-export" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'">Native config</button><button class="primary" data-action="protected-export" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'" data-name="'+dataEnc(name)+'">Protected ZIP</button></div>',
       '</div></div>'
     ].join('');
     document.getElementById('shareText').value=r.share_text||'';
@@ -749,7 +757,7 @@ async function protocols(renderToken=window.__viewRenderToken){
   const x=d.xray,w=d.wireguard,o=d.openvpn,s=d.stunnel,ssh=d.ssh;
   const ready=(d.capabilities||[]).filter(x=>x.available).length,total=(d.capabilities||[]).length;
   const xActions=x.installed
-    ? '<button class="engine-btn primaryish" data-action="nav" data-view="access">Manage Xray Access</button><button class="engine-btn" data-action="xray-advanced">Advanced JSON</button><button class="engine-btn" data-action="xray-tunnel">Tunnel</button>'
+    ? '<button class="engine-btn primaryish" data-action="nav" data-view="access">Manage Xray Access</button><button class="engine-btn" data-action="xray-diagnostics">Diagnostics</button>'+(!x.service_active?'<button class="engine-btn warnish" data-action="xray-repair">Repair & Restart</button>':'')+'<button class="engine-btn" data-action="xray-advanced">Advanced JSON</button><button class="engine-btn" data-action="xray-tunnel">Tunnel</button>'
     : '<button class="engine-btn primaryish" data-action="protocol-setup" data-kind="xray">Install Xray Core</button>';
   const wActions=!w.installed
     ? '<button class="engine-btn primaryish" data-action="protocol-setup" data-kind="wireguard">Install & Setup</button>'
@@ -825,7 +833,7 @@ function xrayCredentialModal(r){
     '<div class="modal-backdrop"><div class="modal credential-modal">',
     '<div class="wizard-head"><div><div class="eyebrow">XRAY PROFILE READY</div><h3>'+htmlEsc(String(r.protocol||'').toUpperCase())+' · '+htmlEsc(r.name)+'</h3></div><button class="close-btn" data-action="modal-close">×</button></div>',
     '<div class="xray-share"><img src="'+htmlEsc(r.qr||'')+'" alt="QR"><div><div class="credential-grid compact"><div><span>Transport</span><b>'+htmlEsc(r.transport||'-')+'</b></div><div><span>Security</span><b>'+htmlEsc(r.security||'none')+'</b></div><div><span>Port</span><b>'+Number(r.port||0)+'</b></div><div><span>Quota</span><b>'+(r.quota_bytes?fmtBytes(r.quota_bytes):'Unlimited')+'</b></div></div><span>Share link</span><textarea id="xrayShare" readonly></textarea></div></div>',
-    '<div class="delivery-actions"><button class="primary" data-action="protected-export" data-kind="xray" data-key="'+dataEnc(String(r.client_id))+'" data-name="'+dataEnc(r.name)+'">Protected ZIP</button><button class="ghost" data-action="native-export" data-kind="xray" data-key="'+dataEnc(String(r.client_id))+'">Profile file</button><button class="ghost" data-action="copy-target" data-target="xrayShare">Copy link</button></div>',
+    '<div class="delivery-actions"><button class="primary" data-action="protected-export" data-kind="xray" data-key="'+dataEnc(String(r.client_id))+'" data-name="'+dataEnc(r.name)+'">Protected ZIP</button><button class="ghost" data-action="native-export" data-kind="xray" data-key="'+dataEnc(String(r.client_id))+'">Profile file</button><button class="ghost" data-action="copy-target" data-target="xrayShare">Copy link</button><button class="ghost" data-action="client-guide" data-kind="xray">راهنمای اتصال</button></div>',
     '<div class="wizard-note"><b>Subscription ready</b><span>Profile/QR/Subscription metadata داخل بسته تحویل هم قرار می‌گیرد.</span></div></div></div>'
   ].join('');
   document.getElementById('xrayShare').value=r.share_link||'';
@@ -854,6 +862,40 @@ async function openXrayAdvanced(){try{const r=await api('/api/protocols/xray/con
 function parseAdvancedXray(){try{return JSON.parse(xrayAdvancedText.value)}catch(e){throw new Error('JSON نامعتبر: '+e.message)}}
 async function validateXrayAdvanced(){try{const config=parseAdvancedXray();await api('/api/protocols/xray/config/validate',{method:'POST',body:JSON.stringify({config})});toast('Xray config valid ✓')}catch(e){alert(e.message)}}
 async function applyXrayAdvanced(){if(!confirm('Config اعتبارسنجی، Backup و سپس روی Xray اعمال شود؟'))return;try{const config=parseAdvancedXray();const r=await api('/api/protocols/xray/config',{method:'PUT',body:JSON.stringify({config})});toast('Xray config applied');closeModal();await protocols()}catch(e){alert(e.message)}}
+async function openXrayDiagnostics(){
+  try{
+    const d=await api('/api/protocols/xray/diagnostics');
+    const hints=(d.hints||[]).map(x=>'<div class="diagnostic-hint">• '+htmlEsc(x)+'</div>').join('');
+    const journal=String(d.journal||'').trim();
+    modalRoot.innerHTML=[
+      '<div class="modal-backdrop"><div class="modal diagnostics-modal xray-diagnostics-modal">',
+      '<div class="wizard-head"><div><div class="eyebrow">XRAY RUNTIME DIAGNOSTICS</div><h3>Xray Core · '+(d.service_active?'Running':'Attention')+'</h3></div><button class="close-btn" data-action="modal-close">×</button></div>',
+      '<div class="xray-diagnostic-grid">',
+        '<div><span>Version</span><b>'+htmlEsc(d.version||'Unknown')+'</b><em class="'+(d.validated_version?'ok-text':'warn-text')+'">'+(d.validated_version?'CI validated':'Version differs')+'</em></div>',
+        '<div><span>systemd user</span><b>'+htmlEsc(d.service_user||'root')+'</b><em>'+htmlEsc(d.config_mode||'-')+'</em></div>',
+        '<div><span>Root config test</span><b class="'+(d.root_validation?'ok-text':'bad-text')+'">'+(d.root_validation?'PASS':'FAIL')+'</b></div>',
+        '<div><span>Service-user test</span><b class="'+(d.service_validation?'ok-text':'bad-text')+'">'+(d.service_validation?'PASS':'FAIL')+'</b></div>',
+        '<div><span>Cert renewal hook</span><b class="'+(d.cert_sync_hook?'ok-text':'warn-text')+'">'+(d.cert_sync_hook?'READY':'MISSING')+'</b></div>',
+      '</div>',
+      (d.root_error?'<div class="wizard-note danger-note"><b>Root validation</b><span>'+htmlEsc(d.root_error)+'</span></div>':''),
+      (d.service_error?'<div class="wizard-note danger-note"><b>Service-user validation</b><span>'+htmlEsc(d.service_error)+'</span></div>':''),
+      (hints?'<div class="diagnostic-hints">'+hints+'</div>':''),
+      '<div class="journal-head"><b>آخرین لاگ Xray</b><span>journalctl -u xray</span></div>',
+      '<pre class="journal-box">'+htmlEsc(journal||'Journal output available نیست.')+'</pre>',
+      '<div class="wizard-footer"><button class="ghost" data-action="modal-close">Close</button><button class="ghost" data-action="client-guide" data-kind="xray">راهنمای کاربران</button><button class="primary" data-action="xray-repair">Repair & Restart</button></div>',
+      '</div></div>'
+    ].join('');
+  }catch(e){alert('Xray diagnostics: '+e.message)}
+}
+async function repairXrayRuntime(){
+  if(!confirm('Makia از کانفیگ Xray بکاپ می‌گیرد، دسترسی فایل‌ها و TLS را اصلاح می‌کند، با همان کاربر systemd اعتبارسنجی می‌کند و سپس Xray را Restart می‌کند. ادامه؟'))return;
+  try{
+    const r=await api('/api/protocols/xray/repair',{method:'POST'});
+    toast(r?.diagnostics?.service_active?'Xray repaired and running':'Xray repair completed');
+    await openXrayDiagnostics();
+  }catch(e){alert('Xray repair: '+e.message)}
+}
+
 async function bootstrapWireGuard(){const port=Number(prompt('WireGuard UDP port','51820'));if(!port)return;const cidr=prompt('Server tunnel CIDR','10.66.66.1/24');if(!cidr)return;try{const r=await api('/api/protocols/wireguard/bootstrap',{method:'POST',body:JSON.stringify({port,cidr})});toast('WireGuard '+r.interface+' started');await protocols()}catch(e){alert(e.message)}}
 async function createWireGuardPeer(){const d=window.__operatorSettings?.defaults||{};const name=prompt('Peer name','client01');if(!name)return;const endpoint=prompt('Public domain or server IP',window.PANEL_DOMAIN||location.hostname);if(!endpoint)return;const dns=prompt('Client DNS',d.wireguard_dns||'1.1.1.1')||'1.1.1.1';try{const r=await api('/api/protocols/wireguard/peers',{method:'POST',body:JSON.stringify({name,endpoint,dns,mtu:Number(d.wireguard_mtu||1280),keepalive:Number(d.wireguard_keepalive??15),allowed_ips:d.wireguard_allowed_ips||'0.0.0.0/0'})});configModal('WireGuard · '+name,r.config,name+'.conf','wireguard',name)}catch(e){alert(e.message)}}
 async function bootstrapOpenVPN(){const port=Number(prompt('OpenVPN port','1194'));if(!port)return;const proto=(prompt('Protocol: udp or tcp','udp')||'udp').toLowerCase();try{await api('/api/protocols/openvpn/bootstrap',{method:'POST',body:JSON.stringify({port,proto})});toast('OpenVPN server started');await protocols()}catch(e){alert(e.message)}}
@@ -867,11 +909,22 @@ function configModal(titleText,textData,fileName,kind=null,key=null){
 function downloadText(name,text){const blob=new Blob([text],{type:'text/plain;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),500)}
 async function services(renderToken=window.__viewRenderToken){
   title.textContent='Services';setPageContext('SYSTEMD CONTROL');
-  const d=await api('/api/overview');if(renderToken!==window.__viewRenderToken||activeView!=='services')return;
-  const running=(d.services||[]).filter(x=>x.active).length;
-  content.innerHTML=viewIntro('ALLOWLISTED SERVICES','کنترل سرویس‌ها','فقط سرویس‌های تعریف‌شده Makia قابل Start/Stop/Restart هستند.','<div class="view-intro-stat"><b>'+running+'/'+d.services.length+'</b><span>RUNNING</span></div>')+
-  '<div class="panel modern-list"><div class="table">'+d.services.map(s=>'<div class="row"><div><i class="status-dot '+(s.active?'ok':'bad')+'"></i><b>'+htmlEsc(s.label)+'</b><div class="muted">'+htmlEsc(s.name)+'</div></div><div class="muted">'+htmlEsc(s.state)+'</div><div><span class="status-chip '+(s.active?'ok':'bad')+'">'+(s.active?'Running':'Stopped')+'</span></div><div class="toolbar"><button class="ghost" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="start">Start</button><button class="primary" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="restart">Restart</button><button class="danger" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="stop">Stop</button></div></div>').join('')+'</div></div>';
+  const [d,pstack]=await Promise.all([api('/api/overview'),api('/api/protocols').catch(()=>({}))]);
+  if(renderToken!==window.__viewRenderToken||activeView!=='services')return;
+  const running=(d.services||[]).filter(x=>x.active).length,xrayInstalled=Boolean(pstack?.xray?.installed);
+  const row=s=>{
+    let extra='';
+    if(s.name==='xray'){
+      extra=xrayInstalled
+        ? '<button class="ghost" data-action="xray-diagnostics">Diagnose</button>'+(!s.active?'<button class="soft warnish" data-action="xray-repair">Repair</button>':'')
+        : '<button class="soft" data-action="protocol-setup" data-kind="xray">Install</button>';
+    }
+    return '<div class="row"><div><i class="status-dot '+(s.active?'ok':'bad')+'"></i><b>'+htmlEsc(s.label)+'</b><div class="muted">'+htmlEsc(s.name)+'</div></div><div class="muted">'+htmlEsc(s.state)+'</div><div><span class="status-chip '+(s.active?'ok':'bad')+'">'+(s.active?'Running':xrayInstalled&&s.name==='xray'?'Attention':'Stopped')+'</span></div><div class="toolbar">'+extra+'<button class="ghost" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="start">Start</button><button class="primary" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="restart">Restart</button><button class="danger" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="stop">Stop</button></div></div>';
+  };
+  content.innerHTML=viewIntro('ALLOWLISTED SERVICES','کنترل سرویس‌ها','Start/Stop/Restart فقط برای سرویس‌های Allowlist شده است. برای Xray، Diagnose علت واقعی Failure را از Core و journal نشان می‌دهد.','<div class="view-intro-stat"><b>'+running+'/'+d.services.length+'</b><span>RUNNING</span></div>')+
+  '<div class="panel modern-list"><div class="table">'+d.services.map(row).join('')+'</div></div>';
 }
+
 async function svc(n,a){try{await api('/api/services/'+n+'/'+a,{method:'POST'});await services()}catch(e){alert(e.message)}}
 async function security(renderToken=window.__viewRenderToken){
   title.textContent='Security Center';setPageContext('DEFENSE LAYER');
@@ -906,6 +959,22 @@ async function auditView(renderToken=window.__viewRenderToken){
   '<div class="panel modern-list"><div class="table">'+(rows.length?rows.map(x=>'<div class="row audit-row"><div><b>'+htmlEsc(x.action)+'</b><div class="muted">'+htmlEsc(x.actor)+'</div></div><div class="muted">'+htmlEsc(x.target||'-')+'</div><div class="muted">'+htmlEsc(new Date(x.created_at).toLocaleString())+'</div><div class="muted">'+htmlEsc(x.ip||'-')+'</div></div>').join(''):'<div class="empty">رویدادی ثبت نشده است.</div>')+'</div></div>';
 }
 async function updates(renderToken=window.__viewRenderToken){title.textContent='Update Center';setPageContext('RELEASE MANAGEMENT');content.innerHTML='<div class="empty">در حال بررسی نسخه…</div>';let s;try{s=await api('/api/update/status')}catch(e){s={current:window.MAKIA_VERSION,latest:null,error:e.message}}if(renderToken!==window.__viewRenderToken||activeView!=='updates')return;const available=s.update_available;content.innerHTML=`<div class="panel update-hero"><div><div class="eyebrow">RELEASE CHANNEL · MAIN</div><h2>${available?'نسخه جدید آماده است':'Makia به‌روز است'}</h2><p class="muted">${s.error?'بررسی آنلاین نسخه ناموفق بود: '+s.error:'نسخه نصب‌شده با VERSION مخزن اصلی مقایسه شد.'}</p></div><div class="version-stack"><span>Installed</span><b>v${s.current||window.MAKIA_VERSION}</b><span>Latest</span><b class="${available?'accent':''}">${s.latest?'v'+s.latest:'Unavailable'}</b></div></div><div class="two-col"><div class="panel"><div class="panel-head"><h3>Safe update workflow</h3><span>CLI VERIFIED PATH</span></div><div class="timeline"><div><b>1</b><span>Pre-update backup</span></div><div><b>2</b><span>Download main</span></div><div><b>3</b><span>Dependencies + service files</span></div><div><b>4</b><span>Restart + health check</span></div></div><div class="command-box">sudo makia-upgrade <button class="soft" onclick="copyText('sudo makia-upgrade')">Copy</button></div></div><div class="panel"><div class="panel-head"><h3>Release status</h3><span>${available?'ACTION AVAILABLE':'NO ACTION'}</span></div><div class="quick-grid"><div class="quick-card"><b>${s.current||'-'}</b><span>Current</span></div><div class="quick-card"><b>${s.latest||'-'}</b><span>Latest on GitHub</span></div></div><div class="notice">آپدیت Web-triggered هنوز عمداً فعال نشده تا rollback اتمیک و امضای Release کامل شود؛ فعلاً CLI مسیر قابل بازیابی‌تری است.</div></div></div>`}
+async function guides(renderToken=window.__viewRenderToken){
+  title.textContent='Client Guides';setPageContext('DELIVERY EDUCATION');
+  if(renderToken!==window.__viewRenderToken||activeView!=='guides')return;
+  const cards=[
+    ['xray','Xray','VLESS / VMess / Trojan / Shadowsocks / Hysteria2','QR مستقیم، Import from Clipboard و Subscription برای v2rayNG / Hiddify / NekoBox و کلاینت‌های سازگار.'],
+    ['wireguard','WireGuard','.conf / QR','Import فایل Native یا اسکن QR با برنامه رسمی WireGuard.'],
+    ['openvpn','OpenVPN','.ovpn','Import فایل OVPN با OpenVPN Connect روی موبایل و دسکتاپ.'],
+    ['ssh','SSH / NPV','npvt-ssh / Credentials','Import لینک/QR در NPV Tunnel سازگار یا ورود دستی SSH با Server/User/Password.']
+  ];
+  content.innerHTML=[
+    viewIntro('CLIENT ONBOARDING','راهنمای اتصال کاربران','این صفحه لینک عمومی و قابل‌ارسال راهنماها را می‌سازد؛ Credential کاربران داخل لینک راهنما قرار نمی‌گیرد.','<a class="primary link-btn" target="_blank" rel="noopener" href="/help/connect">باز کردن راهنمای عمومی</a>'),
+    '<section class="guide-admin-grid">'+cards.map(x=>'<article class="guide-admin-card"><div class="guide-admin-head"><span>'+x[1].slice(0,1)+'</span><div><b>'+x[1]+'</b><small>'+x[2]+'</small></div></div><p>'+x[3]+'</p><div class="toolbar"><button class="primary" data-action="client-guide" data-kind="'+x[0]+'">Open guide</button><button class="ghost" data-action="client-guide-copy" data-kind="'+x[0]+'">Copy guide link</button></div></article>').join('')+'</section>',
+    '<section class="panel"><div class="panel-head"><div><h3>روش پیشنهادی تحویل</h3><span>LESS SUPPORT TICKETS</span></div></div><div class="guide-flow"><div><b>1</b><span>از Access Center QR/Link/File همان کاربر را بفرست.</span></div><div><b>2</b><span>لینک Guide همان پروتکل را همراه آن ارسال کن.</span></div><div><b>3</b><span>برای Xray، Client Page و Subscription روش ساده‌تر برای کاربر نهایی هستند.</span></div><div><b>4</b><span>در صورت خطا، کاربر فقط نام برنامه، سیستم‌عامل و متن Error را بفرستد؛ Credential را در گروه عمومی نفرستد.</span></div></div></section>'
+  ].join('');
+}
+
 async function settings(renderToken=window.__viewRenderToken){
   title.textContent='Settings';setPageContext('PANEL CONFIGURATION');
   const [general,two,tokens,operator,backupRows]=await Promise.all([
@@ -938,7 +1007,7 @@ async function settings(renderToken=window.__viewRenderToken){
   }else if(tab==='domain'){
     body=[
       '<section class="settings-section-head"><div><div class="eyebrow">PUBLIC PANEL EDGE</div><h2>Panel Domain / Nginx / HTTPS</h2><p>Domain، Nginx و Let\'s Encrypt با validation و rollback واقعی مدیریت می‌شوند.</p></div></section>',
-      '<div class="settings-card-v2"><div class="domain-health-v2"><div><span>Configured domain</span><b>'+htmlEsc(general.panel_domain||'IP Mode')+'</b></div><div><span>DNS IPv4</span><b>'+htmlEsc(ds.resolved_ipv4?.length?ds.resolved_ipv4.join(', '):'Not resolved')+'</b></div><div><span>Certificate</span><b class="'+(ds.certificate?'ok-text':'warn-text')+'">'+(ds.certificate?'Installed':'Not installed')+'</b></div><div><span>Certbot</span><b>'+(ds.certbot_installed?'Ready':'Will install on demand')+'</b></div></div>',
+      '<div class="settings-card-v2"><div class="domain-health-v2"><div><span>Configured domain</span><b>'+htmlEsc(general.panel_domain||'IP Mode')+'</b></div><div><span>DNS IPv4</span><b>'+htmlEsc(ds.resolved_ipv4?.length?ds.resolved_ipv4.join(', '):'Not resolved')+'</b></div><div><span>Certificate</span><b class="'+(ds.certificate&&Number(ds.certificate_days_left??99)>14?'ok-text':'warn-text')+'">'+(ds.certificate?('Installed'+(ds.certificate_days_left!==null&&ds.certificate_days_left!==undefined?' · '+Number(ds.certificate_days_left)+'d':'')):'Not installed')+'</b></div><div><span>Certbot</span><b>'+(ds.certbot_installed?'Ready':'Will install on demand')+'</b></div></div>',
       '<div class="settings-form-grid two"><label>Panel Domain<input id="domainName" value="'+htmlEsc(general.panel_domain||'')+'" placeholder="panel.example.com"></label><label>Let\'s Encrypt email<input id="tlsEmail" type="email" placeholder="admin@example.com"></label></div>',
       '<div class="wizard-note"><b>DNS gate</b><span>قبل از صدور HTTPS، رکورد A دامنه باید به همین VPS اشاره کند. Apply Nginx قبل از reload با nginx -t بررسی و در خطا rollback می‌شود.</span></div>',
       '<div class="settings-actions"><button class="ghost" data-action="settings-domain-apply">Apply domain to Nginx</button><button class="primary" data-action="settings-cert-issue">Issue / Renew HTTPS</button></div></div>'
@@ -962,7 +1031,7 @@ async function settings(renderToken=window.__viewRenderToken){
       '<label>Path / Service<input id="opXrayPath" value="'+htmlEsc(defs.xray_path||'/makia')+'"></label><label>SNI<input id="opXraySni" value="'+htmlEsc(defs.xray_sni||'www.microsoft.com')+'"></label><label>REALITY target<input id="opXrayTarget" value="'+htmlEsc(defs.xray_reality_target||'www.microsoft.com:443')+'"></label>',
       '<label>Quota GB<input id="opXrayQuota" type="number" min="0" value="'+Number(defs.xray_quota_gb??50)+'"></label><label>Expiry days<input id="opXrayDays" type="number" min="0" max="3650" value="'+Number(defs.xray_expire_days??30)+'"></label><label>IP limit<input id="opXrayIp" type="number" min="1" max="50" value="'+Number(defs.xray_ip_limit||1)+'"></label><label>Traffic reset days<input id="opXrayReset" type="number" min="0" max="3650" value="'+Number(defs.xray_reset_days??30)+'"></label></div>',
       '<div class="wizard-note"><b>Full Xray Core mode</b><span>Wizard بالا یک subset امن و ساختاریافته است. برای هر inbound/outbound/routing/fallback یا transport دیگری که Xray Core نصب‌شده پشتیبانی می‌کند از Advanced JSON استفاده کن؛ قبل از Apply با خود Xray validate و در خطا rollback می‌شود.</span></div>',
-      '<div class="settings-actions"><button class="ghost" data-action="xray-advanced">Advanced JSON</button><button class="primary" data-action="settings-operator-save">Save Xray defaults</button></div></div>'
+      '<div class="settings-actions"><button class="ghost" data-action="xray-diagnostics">Diagnostics</button><button class="ghost" data-action="xray-repair">Repair runtime</button><button class="ghost" data-action="xray-advanced">Advanced JSON</button><button class="primary" data-action="settings-operator-save">Save Xray defaults</button></div></div>'
     ].join('');
   }else if(tab==='vpn'){
     body=[
@@ -1095,7 +1164,7 @@ async function enable2FA(){try{await api('/api/admin/2fa/enable',{method:'POST',
 async function disable2FA(){const password=prompt('رمز فعلی مدیر:');if(password===null)return;const code=prompt('کد ۶ رقمی Authenticator:');if(code===null)return;try{await api('/api/admin/2fa/disable',{method:'POST',body:JSON.stringify({password,code})});alert('2FA غیرفعال شد.');await settings()}catch(e){alert(e.message)}}
 async function changePass(){try{await api('/api/admin/password',{method:'POST',body:JSON.stringify({current_password:oldP.value,new_password:newP.value})});alert('رمز مدیر تغییر کرد.')}catch(e){alert(e.message)}}
 function toast(msg){let t=document.getElementById('makiaToast');if(!t){t=document.createElement('div');t.id='makiaToast';t.className='toast';document.body.appendChild(t)}t.textContent=msg;t.classList.add('show');clearTimeout(window.__toastTimer);window.__toastTimer=setTimeout(()=>t.classList.remove('show'),2200)}
-const commandItems=[['Overview','dashboard'],['Access Center','access'],['Live Sessions','sessions'],['Protocols','protocols'],['Nodes','nodes'],['Services','services'],['Security','security'],['Backups','backups'],['Audit Logs','audit'],['Update Center','updates'],['Settings / 2FA / API Tokens','settings']];
+const commandItems=[['Overview','dashboard'],['Access Center','access'],['Live Sessions','sessions'],['Protocols','protocols'],['Client Guides','guides'],['Nodes','nodes'],['Services','services'],['Security','security'],['Backups','backups'],['Audit Logs','audit'],['Update Center','updates'],['Settings / 2FA / API Tokens','settings']];
 
 function openCommandPalette(){
   modalRoot.innerHTML='<div class="modal-backdrop command-backdrop"><div class="command-modal"><input id="commandSearch" autofocus placeholder="Search Makia…  (Ctrl+K)"><div id="commandList"></div></div></div>';
@@ -1161,8 +1230,12 @@ async function handleMakiaAction(btn){
   if(action==='protocol-install'){await performProtocolInstall(btn.dataset.kind);return}
   if(action==='protocol-bootstrap'){await performProtocolBootstrap(btn.dataset.kind,btn.dataset.installed==='1');return}
   if(action==='protocol-refresh'){await currentView();return}
+  if(action==='xray-diagnostics'){await openXrayDiagnostics();return}
+  if(action==='xray-repair'){await repairXrayRuntime();return}
   if(action==='xray-advanced'){await openXrayAdvanced();return}
   if(action==='xray-tunnel'){createXrayTunnel();return}
+  if(action==='client-guide'){openClientGuide(btn.dataset.kind||'xray');return}
+  if(action==='client-guide-copy'){copyClientGuide(btn.dataset.kind||'xray');return}
   if(action==='self-test'){await runSelfTest();return}
   if(action==='success-done'){closeModal();switchView('access');return}
   if(action==='modal-close'){closeModal();return}
@@ -1216,15 +1289,15 @@ document.addEventListener('click',e=>{
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();openCommandPalette()}if(e.key==='Escape')closeModal()});
 
 function applyLanguageShell(){
-  const fa={dashboard:'نمای کلی',access:'مرکز دسترسی',accounts:'کاربران SSH',sessions:'اتصال‌های زنده',services:'سرویس‌ها',protocols:'پروتکل‌ها',nodes:'نودها',security:'امنیت',backups:'بکاپ‌ها',audit:'گزارش رویدادها',updates:'بروزرسانی',settings:'تنظیمات'};
-  const en={dashboard:'Overview',access:'Access Center',accounts:'SSH Accounts',sessions:'Live Sessions',services:'Services',protocols:'Protocols',nodes:'Nodes',security:'Security',backups:'Backups',audit:'Audit Logs',updates:'Update Center',settings:'Settings'};
+  const fa={dashboard:'نمای کلی',access:'مرکز دسترسی',accounts:'کاربران SSH',sessions:'اتصال‌های زنده',services:'سرویس‌ها',protocols:'پروتکل‌ها',guides:'راهنمای اتصال',nodes:'نودها',security:'امنیت',backups:'بکاپ‌ها',audit:'گزارش رویدادها',updates:'بروزرسانی',settings:'تنظیمات'};
+  const en={dashboard:'Overview',access:'Access Center',accounts:'SSH Accounts',sessions:'Live Sessions',services:'Services',protocols:'Protocols',guides:'Client Guides',nodes:'Nodes',security:'Security',backups:'Backups',audit:'Audit Logs',updates:'Update Center',settings:'Settings'};
   const dict=window.MAKIA_LANG==='en'?en:fa;document.documentElement.lang=window.MAKIA_LANG==='en'?'en':'fa';document.documentElement.dir=window.MAKIA_LANG==='en'?'ltr':'rtl';
   document.querySelectorAll('nav button[data-view]').forEach(b=>{const label=dict[b.dataset.view];const t=b.querySelector('b');if(label&&t)t.textContent=label});
 }
-const views={dashboard,access,accounts,sessions,services,protocols,nodes,security,backups,audit:auditView,updates,settings};
+const views={dashboard,access,accounts,sessions,services,protocols,guides,nodes,security,backups,audit:auditView,updates,settings};
 window.__viewRenderToken=0;
 function currentView(){const token=++window.__viewRenderToken;return(views[activeView]||dashboard)(token)}
-function switchView(v){activeView=v;setPageContext(v==='dashboard'?'OPERATIONS COCKPIT':v==='access'?'IDENTITY & DELIVERY':'MAKIA CONTROL CENTER');document.querySelectorAll('nav button[data-view]').forEach(x=>x.classList.toggle('active',x.dataset.view===v));return currentView()}
+function switchView(v){activeView=v;setPageContext(v==='dashboard'?'OPERATIONS COCKPIT':v==='access'?'IDENTITY & DELIVERY':v==='guides'?'DELIVERY EDUCATION':'MAKIA CONTROL CENTER');document.querySelectorAll('nav button[data-view]').forEach(x=>x.classList.toggle('active',x.dataset.view===v));return currentView()}
 document.querySelectorAll('nav button[data-view]').forEach(b=>b.addEventListener('click',()=>switchView(b.dataset.view)));
 applyLanguageShell();switchView('dashboard');
 if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('/static/sw.js').catch(()=>{}));}

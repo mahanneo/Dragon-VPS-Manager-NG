@@ -57,6 +57,13 @@ fi
 [[ -d "$APP" ]] || { echo "Makia VPS Manager is not installed."; exit 1; }
 install -d -m 0700 /var/backups/makia-vps-manager
 
+XRAY_WAS_PRESENT=0
+XRAY_WAS_ACTIVE=0
+if command -v xray >/dev/null 2>&1 && { [[ -f /usr/local/etc/xray/config.json ]] || [[ -f /etc/xray/config.json ]]; }; then
+  XRAY_WAS_PRESENT=1
+  systemctl is-active --quiet xray 2>/dev/null && XRAY_WAS_ACTIVE=1 || true
+fi
+
 STAMP_DATA="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP="/var/backups/makia-vps-manager/makia-data-${STAMP_DATA}.tar.gz"
 BACKUP_TMP="$(mktemp -d)"
@@ -150,10 +157,39 @@ install -m 0755 "$SRC/scripts/uninstall.sh" /usr/local/sbin/makia-uninstall
 install -m 0755 "$SRC/scripts/doctor.sh" /usr/local/sbin/makia-doctor
 install -m 0755 "$SRC/scripts/uat-smoke.sh" /usr/local/sbin/makia-uat-smoke
 install -m 0755 "$SRC/scripts/restore-portable.py" /usr/local/sbin/makia-restore-portable
+install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
+install -m 0755 "$SRC/scripts/xray-cert-sync.sh" /etc/letsencrypt/renewal-hooks/deploy/makia-xray-sync
 install -m 0755 "$SRC/scripts/reset-admin.sh" /usr/local/sbin/makia-reset-admin
 install -m 0755 "$SRC/upgrade.sh" /usr/local/sbin/makia-upgrade
 
 systemctl daemon-reload
+
+# Repair the historical root-only Xray config/TLS permission mismatch before
+# the post-update UAT gate. This preserves credentials and rolls back the
+# Xray config internally if the repair itself cannot validate.
+if command -v xray >/dev/null 2>&1 && { [[ -f /usr/local/etc/xray/config.json ]] || [[ -f /etc/xray/config.json ]]; }; then
+  echo "Checking Xray runtime permissions as the real systemd user..."
+  if ! ( cd "$APP" && MAKIA_DATA_DIR="$APP/data" "$APP/.venv/bin/python" - <<'PY'
+from app import protocol_ops
+d=protocol_ops.xray_diagnostics()
+print("Xray:", d.get("version") or "unknown", "user="+str(d.get("service_user") or "root"))
+if not d.get("service_validation") or not d.get("service_active"):
+    result=protocol_ops.repair_xray_runtime()
+    d=result["diagnostics"]
+if not d.get("service_validation") or not d.get("service_active"):
+    raise SystemExit("Xray runtime remains unhealthy after repair")
+print("Xray runtime validation PASS")
+PY
+  ); then
+    if [[ "$XRAY_WAS_ACTIVE" -eq 1 ]]; then
+      echo "Xray was healthy before this update but is unhealthy now; updater will roll back."
+      exit 5
+    fi
+    echo "WARNING: Xray was already unhealthy before the update and automatic repair could not fix it."
+    echo "The panel update will continue so the new Diagnose/Repair UI is available."
+  fi
+fi
+
 nginx -t
 systemctl restart makia-vps-manager
 systemctl enable --now makia-policy-enforcer
@@ -181,7 +217,11 @@ fi
 
 echo
 echo "Running post-update Makia host smoke gate..."
-if ! /usr/local/sbin/makia-uat-smoke; then
+UAT_ENV=()
+if [[ "$XRAY_WAS_PRESENT" -eq 1 && "$XRAY_WAS_ACTIVE" -eq 0 ]] && ! systemctl is-active --quiet xray 2>/dev/null; then
+  UAT_ENV=(env MAKIA_ALLOW_PREEXISTING_XRAY_FAILURE=1)
+fi
+if ! "${UAT_ENV[@]}" /usr/local/sbin/makia-uat-smoke; then
   echo "Post-update host smoke failed."
   echo "The updater will restore the previous runtime automatically."
   exit 4

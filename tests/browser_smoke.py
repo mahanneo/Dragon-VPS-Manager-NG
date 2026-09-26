@@ -67,6 +67,13 @@ def main():
             assert portal.locator(".client-qr-card").count()==2
             assert portal.locator('img[alt="Profile QR"]').count()==1
             assert portal.locator('img[alt="Subscription QR"]').count()==1
+            assert portal.locator('a',has_text="راهنمای نصب و اتصال").count()==1
+            portal.goto(BASE_URL+"/help/connect",wait_until="networkidle")
+            assert portal.locator("#xray").count()==1
+            assert portal.locator("#wireguard").count()==1
+            assert portal.locator("#openvpn").count()==1
+            assert portal.locator("#ssh").count()==1
+            assert "چطور کانفیگ Makia را اضافه کنم؟" in portal.locator("body").inner_text()
             portal.close()
 
             page=browser.new_page(accept_downloads=True)
@@ -119,6 +126,8 @@ def main():
                 assert any(name.endswith("-qr.svg") for name in names)
                 assert any(name.endswith("-subscription.txt") for name in names)
                 assert any(name.endswith("-subscription-qr.svg") for name in names)
+                assert "connection-guide-fa.txt" in names
+                assert "راهنمای اتصال Makia" in zf.read("connection-guide-fa.txt").decode("utf-8")
 
             page.locator('.close-btn[data-action="modal-close"]').click()
             row=page.locator(".access-profile",has_text="browser-client")
@@ -140,12 +149,24 @@ def main():
             assert page.locator(".diagnostic-score.pass").count()==1
             page.locator('.close-btn[data-action="modal-close"]').click()
 
-            for view in ["sessions","protocols","services","nodes","security","backups","audit","updates","settings"]:
+            for view in ["sessions","protocols","guides","services","nodes","security","backups","audit","updates","settings"]:
                 nav=page.locator(f'aside.sidebar nav button[data-view="{view}"]')
                 nav.click()
                 page.wait_for_timeout(450)
                 assert page.locator("#content").inner_text().strip(), f"{view} rendered empty content"
                 assert "active" in (nav.get_attribute("class") or ""), f"{view} sidebar item not active"
+
+            page.evaluate("() => openXrayDiagnostics()")
+            page.locator(".xray-diagnostics-modal").wait_for()
+            assert "XRAY RUNTIME DIAGNOSTICS" in page.locator(".xray-diagnostics-modal").inner_text()
+            page.locator('.close-btn[data-action="modal-close"]').click()
+
+            page.locator('button[data-view="guides"]').click()
+            page.locator(".guide-admin-grid").wait_for()
+            assert page.locator(".guide-admin-card").count()==4
+            assert page.locator('[data-action="client-guide-copy"]').count()==4
+            page.locator('button[data-view="settings"]').click()
+            page.locator(".settings-content-v2").wait_for()
 
             page.locator('[data-action="settings-tab"][data-tab="delivery"]').click()
             page.locator("#opProfilePrefix").wait_for()
@@ -193,7 +214,7 @@ def main():
                 assert "makia-portable-migration" in manifest
             page.locator('.close-btn[data-action="modal-close"]').click()
 
-            for view in ["dashboard","access"]:
+            for view in ["dashboard","access","sessions","protocols","guides","services","nodes","security","backups","audit","updates","settings"]:
                 nav=page.locator(f'aside.sidebar nav button[data-view="{view}"]')
                 nav.click()
                 page.wait_for_timeout(450)
