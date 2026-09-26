@@ -430,7 +430,7 @@ function showProvisionSuccess(kind,key,name,packagePassword,loginSecret,result){
       '<p>پروفایل روی سرور ساخته شده و بسته‌های تحویل آماده دانلود هستند.</p>',
       '<div class="success-grid"><div><span>Protocol</span><b>'+htmlEsc(kind.toUpperCase())+'</b></div><div><span>Package PIN</span><b class="credential-secret">'+htmlEsc(packagePassword)+'</b></div>',
       (loginSecret?'<div><span>Login Password</span><b class="credential-secret">'+htmlEsc(loginSecret)+'</b></div>':'')+'</div>',
-      '<div class="delivery-actions"><button class="primary action-lg" data-action="protected-download-now" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'" data-name="'+dataEnc(name)+'" data-password="'+dataEnc(packagePassword)+'">Download Protected ZIP</button>',
+      '<div class="delivery-actions">'+((kind==='xray'||kind==='wireguard'||(kind==='ssh'&&(window.__operatorSettings?.delivery?.npv_enabled!==false)))?'<button class="primary action-lg" data-action="access-share" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'" data-name="'+dataEnc(name)+'">'+(kind==='ssh'?'NPV QR / Import':'QR / Share')+'</button>':'')+'<button class="primary action-lg" data-action="protected-download-now" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'" data-name="'+dataEnc(name)+'" data-password="'+dataEnc(packagePassword)+'">Protected ZIP</button>',
       '<button class="ghost action-lg" data-action="native-export" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'">Native file</button></div>',
       '<div class="wizard-note"><b>تحویل امن</b><span>فایل و PIN را در دو پیام/کانال جداگانه برای کاربر بفرست.</span></div>',
       '<button class="soft wide-btn" data-action="success-done">بازگشت به Access Center</button>',
@@ -464,6 +464,47 @@ async function performProtectedDownload(kind,key,name,password){
 async function downloadAccessNative(kind,key){
   try{await fetchDownload('/api/access/'+encodeURIComponent(kind)+'/'+encodeURIComponent(key)+'/native',{},'makia-'+kind+'-'+key);toast('Native file دانلود شد')}
   catch(e){alert('Native export: '+e.message)}
+}
+
+async function openAccessShare(kind,key,name){
+  try{
+    const r=await api('/api/access/'+encodeURIComponent(kind)+'/'+encodeURIComponent(key)+'/share');
+    const isSsh=kind==='ssh',isXray=kind==='xray';
+    const directTitle=isSsh?'NPV Tunnel / NapsternetV Import':isXray?'Xray Direct Profile':'WireGuard QR';
+    const directHelp=isSsh
+      ?'در NPV Tunnel از Scan QR یا Import from Clipboard استفاده کن. لینک npvt-ssh شامل Host/User/Password همین اکانت است.'
+      :isXray?'QR را در v2rayNG / Hiddify / NPV یا کلاینت سازگار اسکن کن؛ Copy Link نیز همان Share URI را می‌دهد.'
+      :'این QR همان WireGuard config است و در کلاینت رسمی WireGuard قابل اسکن است.';
+    const qrVisible=window.__operatorSettings?.delivery?.show_qr!==false;
+    const subBlock=r.subscription_url?[
+      '<div class="share-subscription">',
+        '<div><b>Subscription URL</b><span>برای کلاینت‌هایی که Subscription را پشتیبانی می‌کنند.</span></div>',
+        (qrVisible&&r.subscription_qr?'<img class="share-qr small" src="'+htmlEsc(r.subscription_qr)+'" alt="Subscription QR">':''),
+        '<textarea id="shareSubscription" readonly></textarea>',
+        '<div class="toolbar"><button class="ghost" data-action="copy-target" data-target="shareSubscription">Copy subscription</button></div>',
+      '</div>'
+    ].join(''):'';
+    modalRoot.innerHTML=[
+      '<div class="modal-backdrop"><div class="modal share-modal">',
+        '<div class="wizard-head"><div><div class="eyebrow">ONE-TAP DELIVERY</div><h3>'+htmlEsc(directTitle)+' · '+htmlEsc(name)+'</h3></div><button class="close-btn" data-action="modal-close">×</button></div>',
+        '<div class="share-layout">',
+          (qrVisible?'<div class="share-qr-wrap"><img class="share-qr" src="'+htmlEsc(r.qr)+'" alt="Connection QR"><span>'+htmlEsc(String(r.share_type||kind).toUpperCase())+'</span></div>':''),
+          '<div class="share-copy"><p>'+htmlEsc(directHelp)+'</p><label>Share / Import link<textarea id="shareText" readonly></textarea></label>',
+          '<div class="toolbar"><button class="primary" data-action="copy-target" data-target="shareText">Copy Import Link</button><button class="ghost" data-action="qr-download" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'" data-name="'+dataEnc(name)+'">Download QR</button></div></div>',
+        '</div>',
+        subBlock,
+        '<div class="wizard-note"><b>Security</b><span>QR و Share Link حاوی Credential اتصال هستند؛ فقط برای همان کاربر ارسال شوند. محدودیت IP/Device و Expiry همچنان روی سرور اعمال می‌شود.</span></div>',
+        '<div class="wizard-footer"><button class="ghost" data-action="modal-close">Done</button><button class="primary" data-action="protected-export" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'" data-name="'+dataEnc(name)+'">Protected ZIP</button></div>',
+      '</div></div>'
+    ].join('');
+    document.getElementById('shareText').value=r.share_text||'';
+    const sub=document.getElementById('shareSubscription');if(sub)sub.value=r.subscription_url||'';
+  }catch(e){alert('Share / QR: '+e.message)}
+}
+
+async function downloadAccessQr(kind,key,name){
+  try{await fetchDownload('/api/access/'+encodeURIComponent(kind)+'/'+encodeURIComponent(key)+'/qr.svg',{},'makia-'+kind+'-'+name+'-qr.svg');toast('QR دانلود شد')}
+  catch(e){alert('QR export: '+e.message)}
 }
 
 function manageAccess(id){
@@ -928,6 +969,8 @@ async function handleMakiaAction(btn){
     await performProtectedDownload(btn.dataset.kind,dataDec(btn.dataset.key),dataDec(btn.dataset.name),dataDec(btn.dataset.password));return;
   }
   if(action==='native-export'){await downloadAccessNative(btn.dataset.kind,dataDec(btn.dataset.key));return}
+  if(action==='access-share'){await openAccessShare(btn.dataset.kind,dataDec(btn.dataset.key),dataDec(btn.dataset.name));return}
+  if(action==='qr-download'){await downloadAccessQr(btn.dataset.kind,dataDec(btn.dataset.key),dataDec(btn.dataset.name));return}
   if(action==='manage-access'){manageAccess(dataDec(btn.dataset.id));return}
   if(action==='revoke-access'){await revokeAccess(btn.dataset.kind,dataDec(btn.dataset.key),dataDec(btn.dataset.name));return}
   if(action==='wg-reissue'){await reissueWireGuard(dataDec(btn.dataset.key));return}
