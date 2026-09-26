@@ -535,6 +535,23 @@ def xray_config_apply(payload:XrayConfigPayload,request:Request):
     audit(actor,"xray_config_apply",result.get("path"),f"backup={result.get('backup')}",ip(request))
     return result
 
+class XrayTunnelCreate(BaseModel):
+    listen_port:int=Field(ge=1,le=65535)
+    target_host:str=Field(min_length=1,max_length=255)
+    target_port:int=Field(ge=1,le=65535)
+    network:str="tcp,udp"
+    name:str=Field(default="tunnel",min_length=1,max_length=48)
+
+@app.post("/api/protocols/xray/tunnels")
+def xray_tunnel_create(payload:XrayTunnelCreate,request:Request):
+    actor=require_mutation(request)
+    try:
+        result=protocol_ops.create_xray_tunnel(payload.listen_port,payload.target_host,payload.target_port,payload.network,payload.name)
+    except protocol_ops.ProtocolError as e:
+        raise HTTPException(400,str(e))
+    audit(actor,"xray_tunnel_create",result["tag"],f"{payload.listen_port}->{payload.target_host}:{payload.target_port}/{payload.network}",ip(request))
+    return result
+
 class ProtocolInstall(BaseModel):
     component:str
 
