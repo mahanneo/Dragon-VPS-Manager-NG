@@ -71,7 +71,11 @@ def _resign(record,days=None):
     if days is None:
         expires=int(record.get("expires_at") or 0)
     else:
-        expires=0 if int(days)==0 else now+max(1,int(days))*86400
+        if int(days)==0:
+            expires=0
+        else:
+            base=max(now,int(record.get("expires_at") or 0))
+            expires=base+max(1,int(days))*86400
     customer_row=db.customer(record.get("customer_id")) if record.get("customer_id") else None
     payload={
         "v":1,"license_id":record["license_id"],"customer":(customer_row or {}).get("name",""),
