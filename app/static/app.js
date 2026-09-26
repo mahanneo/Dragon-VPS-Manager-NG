@@ -875,6 +875,7 @@ async function openXrayDiagnostics(){
         '<div><span>systemd user</span><b>'+htmlEsc(d.service_user||'root')+'</b><em>'+htmlEsc(d.config_mode||'-')+'</em></div>',
         '<div><span>Root config test</span><b class="'+(d.root_validation?'ok-text':'bad-text')+'">'+(d.root_validation?'PASS':'FAIL')+'</b></div>',
         '<div><span>Service-user test</span><b class="'+(d.service_validation?'ok-text':'bad-text')+'">'+(d.service_validation?'PASS':'FAIL')+'</b></div>',
+        '<div><span>Cert renewal hook</span><b class="'+(d.cert_sync_hook?'ok-text':'warn-text')+'">'+(d.cert_sync_hook?'READY':'MISSING')+'</b></div>',
       '</div>',
       (d.root_error?'<div class="wizard-note danger-note"><b>Root validation</b><span>'+htmlEsc(d.root_error)+'</span></div>':''),
       (d.service_error?'<div class="wizard-note danger-note"><b>Service-user validation</b><span>'+htmlEsc(d.service_error)+'</span></div>':''),
@@ -1006,7 +1007,7 @@ async function settings(renderToken=window.__viewRenderToken){
   }else if(tab==='domain'){
     body=[
       '<section class="settings-section-head"><div><div class="eyebrow">PUBLIC PANEL EDGE</div><h2>Panel Domain / Nginx / HTTPS</h2><p>Domain، Nginx و Let\'s Encrypt با validation و rollback واقعی مدیریت می‌شوند.</p></div></section>',
-      '<div class="settings-card-v2"><div class="domain-health-v2"><div><span>Configured domain</span><b>'+htmlEsc(general.panel_domain||'IP Mode')+'</b></div><div><span>DNS IPv4</span><b>'+htmlEsc(ds.resolved_ipv4?.length?ds.resolved_ipv4.join(', '):'Not resolved')+'</b></div><div><span>Certificate</span><b class="'+(ds.certificate?'ok-text':'warn-text')+'">'+(ds.certificate?'Installed':'Not installed')+'</b></div><div><span>Certbot</span><b>'+(ds.certbot_installed?'Ready':'Will install on demand')+'</b></div></div>',
+      '<div class="settings-card-v2"><div class="domain-health-v2"><div><span>Configured domain</span><b>'+htmlEsc(general.panel_domain||'IP Mode')+'</b></div><div><span>DNS IPv4</span><b>'+htmlEsc(ds.resolved_ipv4?.length?ds.resolved_ipv4.join(', '):'Not resolved')+'</b></div><div><span>Certificate</span><b class="'+(ds.certificate&&Number(ds.certificate_days_left??99)>14?'ok-text':'warn-text')+'">'+(ds.certificate?('Installed'+(ds.certificate_days_left!==null&&ds.certificate_days_left!==undefined?' · '+Number(ds.certificate_days_left)+'d':'')):'Not installed')+'</b></div><div><span>Certbot</span><b>'+(ds.certbot_installed?'Ready':'Will install on demand')+'</b></div></div>',
       '<div class="settings-form-grid two"><label>Panel Domain<input id="domainName" value="'+htmlEsc(general.panel_domain||'')+'" placeholder="panel.example.com"></label><label>Let\'s Encrypt email<input id="tlsEmail" type="email" placeholder="admin@example.com"></label></div>',
       '<div class="wizard-note"><b>DNS gate</b><span>قبل از صدور HTTPS، رکورد A دامنه باید به همین VPS اشاره کند. Apply Nginx قبل از reload با nginx -t بررسی و در خطا rollback می‌شود.</span></div>',
       '<div class="settings-actions"><button class="ghost" data-action="settings-domain-apply">Apply domain to Nginx</button><button class="primary" data-action="settings-cert-issue">Issue / Renew HTTPS</button></div></div>'
