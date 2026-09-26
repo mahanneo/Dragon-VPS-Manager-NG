@@ -259,12 +259,17 @@ def xray_status():
                 protocol=item.get("protocol") or "unknown"
                 if protocol=="hysteria" and isinstance(settings,dict) and int(settings.get("version") or 0)==2:
                     protocol="hysteria2"
+                stream=item.get("streamSettings") or {}
+                method=str(stream.get("method") or stream.get("network") or "raw").lower()
+                security=str(stream.get("security") or "none").lower()
                 inbounds.append({
                     "tag":item.get("tag") or "",
                     "protocol":protocol,
                     "listen":item.get("listen") or "0.0.0.0",
                     "port":item.get("port"),
                     "clients":client_count,
+                    "transport":method,
+                    "security":security,
                 })
         except Exception as exc:
             error=str(exc)[:300]
@@ -1019,7 +1024,8 @@ def xray_endpoint_diagnostics(endpoint):
     for inbound in status.get("inbounds") or []:
         port=int(inbound.get("port") or 0)
         proto=str(inbound.get("protocol") or "")
-        udp=proto=="hysteria2"
+        transport=str(inbound.get("transport") or "raw").lower()
+        udp=proto=="hysteria2" or transport in {"mkcp","kcp","hysteria"}
         listener=_listener_present(port,"udp" if udp else "tcp") if port else False
         inbound_rows.append({**inbound,"transport_protocol":"udp" if udp else "tcp","listener":listener,"ok":bool(status.get("service_active") and listener)})
     endpoint_ok=state["endpoint_is_ip"] or bool(state["resolved_ipv4"] and state["dns_matches_server"] is not False)
