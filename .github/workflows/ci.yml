@@ -162,7 +162,7 @@ jobs:
           grep -q 'License & Support' app/templates/dashboard.html
           grep -q 'license-tier-chip' app/static/app.js
           grep -q 'release proxy' docs/SECURITY-LICENSING.md
-          ! grep -R --line-number 'BEGIN PRIVATE KEY' app tools scripts docs .github || true
+          ! grep -R --line-number 'BEGIN PRIVATE KEY' app tools scripts docs .github
 
   browser-smoke:
     runs-on: ubuntu-24.04
