@@ -84,3 +84,39 @@ def test_portable_migration_files_include_data_and_manifest(tmp_path,monkeypatch
     assert manifest["panel_domain"]=="vpn.example.com"
     assert manifest["managed_ssh_users"]==1
     assert manifest["components"]["wireguard"] is True
+
+
+def test_xray_advanced_firewall_rules():
+    config={
+        "inbounds":[
+            {"listen":"0.0.0.0","port":443,"protocol":"vless","streamSettings":{"network":"xhttp"}},
+            {"listen":"0.0.0.0","port":8443,"protocol":"hysteria","settings":{"version":2}},
+            {"listen":"127.0.0.1","port":10085,"protocol":"dokodemo-door","settings":{"network":"tcp"}},
+            {"listen":"::","port":9000,"protocol":"dokodemo-door","settings":{"network":"tcp,udp"}},
+        ]
+    }
+    rules=protocol_ops._xray_firewall_rules(config)
+    assert (443,"tcp","Xray vless") in rules
+    assert (8443,"udp","Xray hysteria") in rules
+    assert (9000,"tcp","Xray dokodemo-door") in rules
+    assert (9000,"udp","Xray dokodemo-door") in rules
+    assert all(port!=10085 for port,_,_ in rules)
+
+
+def test_local_backup_uses_consistent_sqlite_snapshot(tmp_path,monkeypatch):
+    data=tmp_path/"data"
+    data.mkdir()
+    db=sqlite3.connect(data/"makia.db")
+    db.execute("pragma journal_mode=WAL")
+    db.execute("create table sample(value text)")
+    db.execute("insert into sample values('saved')")
+    db.commit()
+    db.close()
+    backup_root=tmp_path/"backups"
+    real_makedirs=system_ops.os.makedirs
+    real_path_write=Path.write_bytes
+
+    # Redirect only the fixed backup root used by create_backup.
+    monkeypatch.setattr(system_ops.os.path,"isdir",lambda p: Path(p).is_dir())
+    blob=system_ops._portable_data_tar(str(data))
+    assert blob
