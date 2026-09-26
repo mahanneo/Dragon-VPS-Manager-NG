@@ -1,5 +1,5 @@
 import pytest
-from app.protocol_ops import _validate_port, _validate_endpoint_host, _uri_host, ProtocolError
+from app.protocol_ops import _validate_port, _validate_endpoint_host, _uri_host, _endpoint_is_private, create_xray_inbound, ProtocolError
 
 def test_valid_port():
     assert _validate_port(443) == 443
@@ -37,3 +37,14 @@ def test_ipv6_uri_host_is_bracketed():
 
 def test_ipv4_uri_host_is_not_bracketed():
     assert _uri_host("178.83.45.215") == "178.83.45.215"
+
+
+def test_public_ipv4_is_not_private():
+    assert _endpoint_is_private("178.83.45.215") is False
+
+def test_private_ipv4_is_private():
+    assert _endpoint_is_private("10.10.0.2") is True
+
+def test_public_vless_none_is_rejected_before_core_mutation():
+    with pytest.raises(ProtocolError, match="choose REALITY or TLS"):
+        create_xray_inbound("vless",2087,"mahan","178.83.45.215","xhttp","none","/makia","","")
