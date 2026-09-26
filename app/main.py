@@ -158,6 +158,7 @@ def _support_operator_mutation_allowed(request:Request)->bool:
         return True
     return path in {
         "/api/protocols/xray/repair",
+        "/api/protocols/wireguard/repair",
         "/api/protocols/openvpn/repair",
         "/api/support/requests",
     }
@@ -854,6 +855,15 @@ def protocols(request:Request):
     require_user(request)
     return protocol_ops.catalog()
 
+@app.get("/api/protocols/connectivity")
+def protocol_connectivity(request:Request,endpoint:str=""):
+    require_user(request)
+    target=(endpoint or public_host(request)).strip()
+    try:
+        return protocol_ops.endpoint_connectivity_matrix(target)
+    except protocol_ops.ProtocolError as e:
+        raise HTTPException(400,str(e))
+
 class XrayQuickInbound(BaseModel):
     protocol:str
     port:int=Field(ge=1,le=65535)
@@ -1161,6 +1171,26 @@ def wireguard_bootstrap(payload:WireGuardBootstrap,request:Request):
     audit(actor,"wireguard_bootstrap","wg0",f"port={payload.port}; cidr={payload.cidr}; mtu={payload.mtu}",ip(request))
     return result
 
+@app.get("/api/protocols/wireguard/diagnostics")
+def wireguard_diagnostics_get(request:Request,endpoint:str=""):
+    require_feature(request,"wireguard")
+    target=(endpoint or public_host(request)).strip()
+    try:
+        return protocol_ops.wireguard_diagnostics("wg0",target)
+    except protocol_ops.ProtocolError as e:
+        raise HTTPException(400,str(e))
+
+@app.post("/api/protocols/wireguard/repair")
+def wireguard_repair(request:Request):
+    actor=require_feature(request,"wireguard",True)
+    try:
+        result=protocol_ops.repair_wireguard_runtime("wg0")
+    except protocol_ops.ProtocolError as e:
+        audit(actor,"wireguard_repair_failed","wg0",str(e)[:500],ip(request))
+        raise HTTPException(400,str(e))
+    audit(actor,"wireguard_repair","wg0",f"backup={result.get('backup')}",ip(request))
+    return result
+
 class WireGuardPeer(BaseModel):
     name:str=Field(min_length=1,max_length=48)
     endpoint:str=Field(min_length=1,max_length=255)
@@ -1174,10 +1204,13 @@ def wireguard_peer_create(payload:WireGuardPeer,request:Request):
     actor=require_feature(request,"wireguard",True)
     try:
         result=protocol_ops.create_wireguard_peer(payload.name,payload.endpoint,dns=payload.dns,mtu=payload.mtu,keepalive=payload.keepalive,allowed_ips=payload.allowed_ips)
-        delivery=access_ops.wireguard_payload(payload.name,result["config"],result.get("address"))
+        delivery=access_ops.wireguard_payload(
+            payload.name,result["config"],result.get("address"),
+            result.get("ip_config") or None,"ip"
+        )
         artifact_id=artifact_save("wireguard",payload.name,payload.name,"wireguard",delivery,{
             "public_key":result.get("public_key",""),"address":result.get("address",""),"interface":"wg0",
-            "endpoint":result.get("endpoint",""),"port":result.get("port"),"dns":result.get("dns",""),
+            "endpoint":result.get("endpoint",""),"fallback_ipv4":result.get("fallback_ipv4",""),"port":result.get("port"),"dns":result.get("dns",""),
             "mtu":result.get("mtu"),"keepalive":result.get("keepalive"),"allowed_ips":result.get("allowed_ips","")
         })
     except protocol_ops.ProtocolError as e:
