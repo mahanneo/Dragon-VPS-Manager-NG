@@ -109,6 +109,19 @@ def wireguard_status():
     installed=_installed("wg")
     interfaces=[]
     peers=0
+    latest_handshake=0
+    listen_port=0
+    mtu=0
+    conf=WG_DIR/"wg0.conf"
+    if conf.exists():
+        try:
+            text=conf.read_text(encoding="utf-8",errors="ignore")
+            m=re.search(r"(?m)^\s*ListenPort\s*=\s*(\d+)",text)
+            if m: listen_port=int(m.group(1))
+            m=re.search(r"(?m)^\s*MTU\s*=\s*(\d+)",text)
+            if m: mtu=int(m.group(1))
+        except Exception:
+            pass
     if installed:
         try:
             out=_run(["wg","show","interfaces"],timeout=5)
@@ -117,6 +130,11 @@ def wireguard_status():
                 dump=_run(["wg","show",iface,"dump"],timeout=5)
                 lines=[x for x in dump.splitlines() if x.strip()]
                 peers+=max(0,len(lines)-1)
+                for line in lines[1:]:
+                    cols=line.split("\t")
+                    if len(cols)>4:
+                        try: latest_handshake=max(latest_handshake,int(cols[4] or 0))
+                        except Exception: pass
         except Exception:
             pass
     return {
@@ -124,7 +142,10 @@ def wireguard_status():
         "service_active":_active("wg-quick@wg0"),
         "interfaces":interfaces,
         "peers":peers,
-        "config":str(WG_DIR/"wg0.conf") if (WG_DIR/"wg0.conf").exists() else None,
+        "listen_port":listen_port,
+        "mtu":mtu,
+        "latest_handshake":latest_handshake,
+        "config":str(conf) if conf.exists() else None,
     }
 
 def openvpn_status():
@@ -153,6 +174,21 @@ def ssh_status():
         "service_active":_active("ssh") or _active("sshd"),
     }
 
+def xray_guided_capabilities():
+    return {
+        "protocols":["vless","vmess","trojan","shadowsocks","hysteria2","http","socks"],
+        "transports":["tcp","ws","grpc","httpupgrade","xhttp","kcp"],
+        "security":["none","tls","reality"],
+        "reality_guided_protocols":["vless","trojan"],
+        "reality_transports":["tcp","grpc","xhttp"],
+        "advanced_json":True,
+        "notes":{
+            "hysteria2":"TLS + Hysteria transport is enforced",
+            "shadowsocks":"Guided profile uses native Shadowsocks transport security; Advanced JSON remains available",
+            "http_socks":"Guided profiles use RAW without transport TLS; Advanced JSON remains available",
+        },
+    }
+
 def catalog():
     x=xray_status()
     wg=wireguard_status()
@@ -165,6 +201,7 @@ def catalog():
         "openvpn":ovpn,
         "stunnel":st,
         "ssh":ssh,
+        "xray_guided":xray_guided_capabilities(),
         "capabilities":[
             {"id":"vless","engine":"xray","available":x["installed"]},
             {"id":"vmess","engine":"xray","available":x["installed"]},
@@ -269,10 +306,36 @@ def _endpoint_is_private(host):
         lowered=str(host or "").lower()
         return lowered=="localhost" or lowered.endswith(".local")
 
-def bootstrap_wireguard(port=51820, cidr="10.66.66.1/24", iface="wg0"):
+def _udp_port_in_use(port):
+    port=_validate_port(port)
+    s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+    try:
+        s.bind(("0.0.0.0",port))
+    except OSError:
+        return True
+    finally:
+        s.close()
+    return False
+
+def _validate_wireguard_mtu(mtu):
+    mtu=int(mtu or 0)
+    if mtu!=0 and not 1200<=mtu<=1500:
+        raise ProtocolError("WireGuard MTU must be 0 (auto) or between 1200 and 1500")
+    return mtu
+
+def _validate_keepalive(seconds):
+    seconds=int(seconds or 0)
+    if seconds<0 or seconds>3600:
+        raise ProtocolError("PersistentKeepalive must be between 0 and 3600 seconds")
+    return seconds
+
+def bootstrap_wireguard(port=51820, cidr="10.66.66.1/24", iface="wg0", mtu=0):
     if not re.fullmatch(r"wg\d{1,2}",iface):
         raise ProtocolError("invalid WireGuard interface name")
-    _validate_port(port)
+    port=_validate_port(port)
+    mtu=_validate_wireguard_mtu(mtu)
+    if _udp_port_in_use(port):
+        raise ProtocolError("this UDP port is already in use on the server")
     try:
         net=ipaddress.ip_interface(cidr)
     except Exception as exc:
@@ -293,7 +356,8 @@ def bootstrap_wireguard(port=51820, cidr="10.66.66.1/24", iface="wg0"):
         f"Address = {net}\n"
         f"ListenPort = {int(port)}\n"
         f"PrivateKey = {private}\n"
-        f"PostUp = iptables -A FORWARD -i {iface} -j ACCEPT; iptables -A FORWARD -o {iface} -j ACCEPT; iptables -t nat -A POSTROUTING -o {uplink} -j MASQUERADE\n"
+        + (f"MTU = {mtu}\n" if mtu else "")
+        + f"PostUp = iptables -A FORWARD -i {iface} -j ACCEPT; iptables -A FORWARD -o {iface} -j ACCEPT; iptables -t nat -A POSTROUTING -o {uplink} -j MASQUERADE\n"
         f"PostDown = iptables -D FORWARD -i {iface} -j ACCEPT; iptables -D FORWARD -o {iface} -j ACCEPT; iptables -t nat -D POSTROUTING -o {uplink} -j MASQUERADE\n",
         encoding="utf-8"
     )
@@ -301,7 +365,7 @@ def bootstrap_wireguard(port=51820, cidr="10.66.66.1/24", iface="wg0"):
     Path("/etc/sysctl.d/99-makia-wireguard.conf").write_text("net.ipv4.ip_forward=1\n",encoding="utf-8")
     _run(["sysctl","--system"],timeout=30)
     _run(["systemctl","enable","--now",f"wg-quick@{iface}"],timeout=30)
-    return {"interface":iface,"address":str(net),"port":int(port),"public_key":public}
+    return {"interface":iface,"address":str(net),"port":int(port),"mtu":mtu,"public_key":public}
 
 def _wg_used_ips(iface):
     used=set()
@@ -317,16 +381,19 @@ def _wg_used_ips(iface):
                     pass
     return used
 
-def create_wireguard_peer(name, endpoint, iface="wg0", dns="1.1.1.1"):
+def create_wireguard_peer(name, endpoint, iface="wg0", dns="1.1.1.1", mtu=0, persistent_keepalive=25):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
         raise ProtocolError("invalid peer name")
     endpoint=_validate_endpoint_host(endpoint)
+    mtu=_validate_wireguard_mtu(mtu)
+    persistent_keepalive=_validate_keepalive(persistent_keepalive)
     conf=WG_DIR/f"{iface}.conf"
     if not conf.exists():
         raise ProtocolError("WireGuard server is not bootstrapped")
     text=conf.read_text(encoding="utf-8",errors="ignore")
     m=re.search(r"Address\s*=\s*([^\n]+)",text)
     p=re.search(r"ListenPort\s*=\s*(\d+)",text)
+    server_mtu=re.search(r"(?m)^\s*MTU\s*=\s*(\d+)",text)
     if not m or not p:
         raise ProtocolError("invalid WireGuard server config")
     server_if=ipaddress.ip_interface(m.group(1).strip())
@@ -346,18 +413,24 @@ def create_wireguard_peer(name, endpoint, iface="wg0", dns="1.1.1.1"):
     with conf.open("a",encoding="utf-8") as fh:
         fh.write(f"\n# Makia peer: {name}\n[Peer]\nPublicKey = {client_public}\nAllowedIPs = {client_ip}/32\n")
     os.chmod(conf,0o600)
+    effective_mtu=mtu or (int(server_mtu.group(1)) if server_mtu else 0)
     client=(
         "[Interface]\n"
         f"PrivateKey = {client_private}\n"
         f"Address = {client_ip}/32\n"
-        f"DNS = {dns}\n\n"
-        "[Peer]\n"
+        f"DNS = {dns}\n"
+        + (f"MTU = {effective_mtu}\n" if effective_mtu else "")
+        + "\n[Peer]\n"
         f"PublicKey = {server_public}\n"
         f"Endpoint = {_uri_host(endpoint)}:{p.group(1)}\n"
         "AllowedIPs = 0.0.0.0/0, ::/0\n"
-        "PersistentKeepalive = 25\n"
+        + (f"PersistentKeepalive = {persistent_keepalive}\n" if persistent_keepalive else "")
     )
-    return {"name":name,"address":str(client_ip),"public_key":client_public,"config":client}
+    return {
+        "name":name,"address":str(client_ip),"public_key":client_public,"config":client,
+        "endpoint":endpoint,"port":int(p.group(1)),"mtu":effective_mtu,
+        "persistent_keepalive":persistent_keepalive,
+    }
 
 def list_wireguard_peers(iface="wg0"):
     conf=WG_DIR/f"{iface}.conf"
@@ -726,8 +799,8 @@ def _build_xray_stream(binary,protocol,transport,security,path_value,server_name
     if security not in {"none","tls","reality"}:
         raise ProtocolError("unsupported transport security")
     if security=="reality":
-        if protocol!="vless":
-            raise ProtocolError("Makia currently enables REALITY only for VLESS")
+        if protocol not in {"vless","trojan"}:
+            raise ProtocolError("Guided REALITY delivery is supported for VLESS and Trojan; use Advanced JSON for other Xray combinations")
         if transport not in {"raw","grpc","xhttp"}:
             raise ProtocolError("REALITY is only compatible with TCP/RAW, gRPC or XHTTP here")
     stream={"method":transport,"security":security}
