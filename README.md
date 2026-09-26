@@ -2,7 +2,7 @@
 
 Modern web-first VPS and access-infrastructure control center for Ubuntu.
 
-> **Current release candidate:** `v0.8.0-rc2`  
+> **Current release candidate:** `v0.9.0-rc1`  
 > CI-validated, but **not yet production-certified**. A real-host UAT is required before a `1.0.0 Stable` label.
 
 ## What Makia manages today
@@ -22,7 +22,7 @@ Modern web-first VPS and access-infrastructure control center for Ubuntu.
 
 ### Protocol Hub
 Guided, operational adapters:
-- Xray: VLESS, VMess, Trojan, Shadowsocks, Hysteria2
+- Xray guided: VLESS, VMess, Trojan, Shadowsocks, Hysteria2, HTTP Proxy, SOCKS5 and Dokodemo/Tunnel
 - WireGuard
 - OpenVPN
 - SSH
@@ -48,17 +48,18 @@ Advanced Xray JSON editor:
 - Restart/health gate
 - Automatic rollback on failed apply
 
-This advanced surface can be used for Xray features such as routing, outbounds, fallbacks, HTTP/SOCKS, Tunnel/Dokodemo and TUN while dedicated guided forms are still being built.
+This advanced surface remains available for routing, outbounds, fallbacks, TUN and other engine-level configuration. HTTP Proxy, SOCKS5 and Tunnel/Dokodemo now have dedicated guided workflows.
 
 ### Protocol Clients
 - First-class protocol-client records
-- Secure subscription IDs and `/sub/<id>` endpoint
+- Secure subscription IDs with Base64, raw and JSON outputs
+- Public `/client/<id>` status page for usage, expiry and device policy
 - QR/share links
 - Expiry
 - Traffic quota for Xray clients with per-user stats support
 - Persistent cumulative traffic counters across Xray restarts
 - Manual traffic reset
-- Recurring 7/30/custom-day traffic reset cycles
+- Recurring 7/30/60/90/custom-day traffic reset cycles
 - Automatic quota suspension
 - Automatic reactivation at the next quota-reset boundary
 - Live Xray online-IP/device visibility where supported by the installed Xray core
@@ -92,7 +93,7 @@ Per-client traffic enforcement currently applies to VLESS, VMess, Trojan and Hys
 - Update Center
 - Multi-node heartbeat foundation
 - Admin 2FA
-- Scoped API tokens
+- Scoped API tokens for status, accounts, protocol clients and nodes
 - Persistent login-rate limiting
 - Owner-only SQLite permissions
 - Domain management + Nginx validation/rollback
@@ -112,7 +113,7 @@ The Protocol Hub labels capabilities as:
 - **Advanced** — supported through the validated Xray configuration editor.
 - **Unavailable** — no tested adapter exists in this release.
 
-TUIC, AmneziaWG and MTProto are currently listed as unavailable rather than being simulated.
+TUIC v5, AmneziaWG and MTProto are currently listed as unavailable rather than being simulated because they require dedicated sidecar/runtime adapters. See `docs/PARITY-3XUI.md` for the explicit parity matrix.
 
 ## Quick install
 
@@ -126,7 +127,7 @@ The installer prints a unique administrator bootstrap password. Change it immedi
 
 ## Update
 
-For installations already on v0.8.0-rc2 or newer:
+For installations already using the Makia bootstrap updater:
 
 ```bash
 sudo makia-upgrade
@@ -200,7 +201,7 @@ Important:
 
 ## Release gate
 
-`v0.8.0-rc2` must pass:
+`v0.9.0-rc1` must pass:
 - Python compilation
 - unit tests
 - Bash syntax
@@ -209,7 +210,7 @@ Important:
 - packaging contract
 - real Ubuntu 22.04/24.04 host UAT
 
-See `docs/UAT-0.8.0-RC2.md`.
+See `docs/UAT-0.9.0-RC1.md` and `docs/PARITY-3XUI.md`.
 
 ## License
 
