@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.13.0-rc1] - 2026-09-26
+
+### WireGuard compatibility controls
+- Added configurable WireGuard UDP port, MTU, PersistentKeepalive, AllowedIPs and tunnel CIDR.
+- New compatibility defaults use UDP/443, MTU 1280, 15-second keepalive and IPv4 full-tunnel to reduce common NAT/MTU failures.
+- WireGuard client profiles prefer the configured panel domain as their endpoint, supporting DNS-based VPS cutover without changing client credentials.
+- The panel explicitly warns that these settings cannot guarantee connectivity where the WireGuard protocol itself is filtered; Xray/REALITY remains the alternative transport path.
+
+### Xray full-core administration
+- Promoted the existing validated Advanced JSON editor into Settings as the official full-core path.
+- Guided provisioning remains a safe subset, while administrators can apply any configuration supported by the installed Xray Core through JSON validation.
+- Advanced apply continues to run Xray's own config test and rollback on failure.
+- Domain/TLS provisioning remains backed by Nginx and Certbot/Let's Encrypt.
+
+### Portable VPS migration
+- Added an AES-256 password-protected Portable Migration Bundle downloadable from the panel.
+- The bundle carries a consistent Makia data/SQLite snapshot, the server .secret, Xray configuration/REALITY keys, WireGuard server and peer keys, OpenVPN PKI, Nginx config, Let's Encrypt state and managed SSH password hashes.
+- Added `makia-restore-portable` for restoring the bundle onto a fresh Makia VPS while preserving user credentials.
+- Restore validates bundle format and archive paths, installs missing protocol engines when needed, restores services and runs backend/Xray/WireGuard health checks.
+- Existing client credentials remain valid after migration when the same domain is retained and DNS is cut over to the destination VPS.
+
+### Verification
+- Added unit coverage for WireGuard compatibility validation/profile generation and portable migration bundle contents.
+- Browser smoke now covers WireGuard Settings V2 persistence and encrypted Portable Migration download.
+- Host UAT now verifies WireGuard runtime when configured and the portable restore command installation.
+
+### Release status
+Release candidate only. Stable requires a real two-VPS migration rehearsal, DNS/TLS cutover, external Xray client tests and WireGuard tests on target networks.
+
 ## [0.12.0-rc1] - 2026-09-26
 
 ### Xray QR and subscriptions
