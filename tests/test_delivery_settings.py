@@ -96,6 +96,9 @@ def test_operator_settings_persist_and_validate(monkeypatch):
         xray_ip_limit=1,
         xray_reset_days=30,
         wireguard_dns="1.1.1.1",
+        wireguard_port=443,
+        wireguard_mtu=1280,
+        wireguard_keepalive=25,
         openvpn_port=1194,
         openvpn_proto="udp",
         subscription_enabled=True,
@@ -107,6 +110,9 @@ def test_operator_settings_persist_and_validate(monkeypatch):
     assert result["delivery"]["profile_prefix"]=="Makia Test"
     assert result["defaults"]["ssh_sessions"]==2
     assert result["defaults"]["xray_transport"]=="xhttp"
+    assert result["defaults"]["wireguard_port"]==443
+    assert result["defaults"]["wireguard_mtu"]==1280
+    assert result["defaults"]["wireguard_keepalive"]==25
     assert result["subscription"]["enabled"] is True
     assert result["subscription"]["client_page_enabled"] is True
     assert result["subscription"]["default_format"]=="raw"
@@ -162,3 +168,15 @@ def test_protected_ssh_package_uses_current_npv_setting(monkeypatch):
         names=zf.namelist()
         assert "credentials.txt" in names
         assert all("npvt" not in name for name in names)
+
+
+def test_wireguard_diagnostics_reports_udp_truth(monkeypatch):
+    monkeypatch.setattr(main_app,"require_user",lambda request:"admin")
+    monkeypatch.setattr(main_app.protocol_ops,"wireguard_status",lambda:{
+        "installed":True,"service_active":True,"interfaces":["wg0"],"peers":2,
+        "listen_port":443,"mtu":1280,"latest_handshake":123,"config":"/etc/wireguard/wg0.conf",
+    })
+    result=main_app.wireguard_diagnostics(_request("/api/protocols/wireguard/diagnostics"))
+    assert result["transport"]=="udp"
+    assert result["listen_port"]==443
+    assert any("cannot" in note.lower() or "cannot bypass" in note.lower() for note in result["notes"])
