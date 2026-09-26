@@ -1,5 +1,5 @@
 import os, pwd, shutil, socket, subprocess, platform, re, time
-import io, json, tarfile
+import io, json, tarfile, sqlite3, tempfile
 from pathlib import Path
 from datetime import datetime
 import psutil
@@ -199,11 +199,35 @@ def create_portable_backup(data_dir: str, password: str, metadata=None, sources=
         "restore_command":"sudo makia-restore /path/to/bundle.zip --apply",
     }
     tar_buf=io.BytesIO()
+    data_root=Path(data_dir).resolve()
     try:
-        with tarfile.open(fileobj=tar_buf,mode="w:gz") as tf:
+        # dereference=True stores real certificate/key bytes instead of Let's Encrypt live symlinks.
+        with tarfile.open(fileobj=tar_buf,mode="w:gz",dereference=True) as tf, tempfile.TemporaryDirectory(prefix="makia-portable-") as td:
             for src,arc in chosen:
                 p=Path(src)
-                if p.exists():
+                if not p.exists():
+                    continue
+                try: same_data=p.resolve()==data_root
+                except Exception: same_data=False
+                if same_data and p.is_dir():
+                    # Copy the data directory except SQLite live files, then use SQLite's online backup API.
+                    for child in p.rglob("*"):
+                        rel=child.relative_to(p)
+                        if rel.as_posix() in {"makia.db","makia.db-wal","makia.db-shm"}:
+                            continue
+                        tf.add(str(child),arcname=str(Path(arc)/rel),recursive=False)
+                    db=p/"makia.db"
+                    if db.exists():
+                        snapshot=Path(td)/"makia.db"
+                        source=sqlite3.connect(f"file:{db}?mode=ro",uri=True)
+                        target=sqlite3.connect(snapshot)
+                        try:
+                            source.backup(target)
+                            target.commit()
+                        finally:
+                            target.close();source.close()
+                        tf.add(str(snapshot),arcname=str(Path(arc)/"makia.db"),recursive=False)
+                else:
                     tf.add(str(p),arcname=arc,recursive=True)
     except Exception as exc:
         raise OperationError(f"unable to build portable archive: {exc}") from exc
@@ -235,6 +259,8 @@ def verify_portable_backup(blob: bytes, password: str):
                 name=member.name
                 if name.startswith("/") or ".." in Path(name).parts:
                     raise OperationError("unsafe path detected in portable backup")
+                if member.issym() or member.islnk():
+                    raise OperationError("links are not allowed in portable backup payload")
             members=[m.name for m in tf.getmembers()]
         return {"ok":True,"manifest":manifest,"members":members}
     except OperationError:
