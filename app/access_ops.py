@@ -101,44 +101,55 @@ def ssh_payload(host,username,password,port=22,npv_options=None):
         "    ServerAliveCountMax 3\n"
     )
     opts=dict(npv_options or {})
-    npv=npvt_ssh_link(
-        host,username,password,port,
-        remarks=opts.get("remarks") or f"Makia {username}",
-        dns_mode=opts.get("dns_mode") or "UDP",
-        udpgw_port=int(opts.get("udpgw_port") or 7300),
-        transparent_dns=bool(opts.get("transparent_dns",False)),
-    )
+    npv_enabled=bool(opts.get("enabled",True))
+    npv=""
+    files={f"{safe_filename(username)}-ssh-config.txt":config.encode("utf-8")}
+    if npv_enabled:
+        npv=npvt_ssh_link(
+            host,username,password,port,
+            remarks=opts.get("remarks") or f"Makia {username}",
+            dns_mode=opts.get("dns_mode") or "UDP",
+            udpgw_port=int(opts.get("udpgw_port") or 7300),
+            transparent_dns=bool(opts.get("transparent_dns",False)),
+        )
     credentials=(
         "Makia SSH Access\n"
         f"Server: {host}\n"
         f"Port: {port}\n"
         f"Username: {username}\n"
         f"Password: {password}\n"
-        "\nNPV Tunnel / NapsternetV quick import:\n"
-        f"{npv}\n"
-        "\nOpenSSH does not support embedding passwords in config files.\n"
-        "Use the OpenSSH fragment for regular SSH clients, or import the npvt-ssh link/QR in NPV Tunnel.\n"
     )
-    npv_name=f"{safe_filename(username)}-npvt-ssh.txt"
-    return {
+    if npv_enabled:
+        credentials += (
+            "\nNPV Tunnel / NapsternetV quick import:\n"
+            f"{npv}\n"
+            "\nImport the npvt-ssh link from clipboard or scan its QR in a compatible NPV client.\n"
+        )
+    credentials += (
+        "\nOpenSSH does not support embedding passwords in config files.\n"
+        "Use the included OpenSSH fragment for ordinary SSH clients.\n"
+    )
+    files["credentials.txt"]=credentials.encode("utf-8")
+    summary={"host":host,"port":port,"username":username,"npv_enabled":npv_enabled}
+    result={
         "native_filename":f"{safe_filename(username)}-ssh-config.txt",
-        "files":{
-            f"{safe_filename(username)}-ssh-config.txt":config.encode("utf-8"),
-            "credentials.txt":credentials.encode("utf-8"),
-            npv_name:(npv+"\n").encode("utf-8"),
-            f"{safe_filename(username)}-npvt-qr.svg":make_qr_svg(npv),
-        },
+        "files":files,
         "primary_text":credentials,
-        "share_text":npv,
-        "share_type":"npvt-ssh",
-        "summary":{
-            "host":host,"port":port,"username":username,
+        "summary":summary,
+    }
+    if npv_enabled:
+        npv_name=f"{safe_filename(username)}-npvt-ssh.txt"
+        files[npv_name]=(npv+"\n").encode("utf-8")
+        files[f"{safe_filename(username)}-npvt-qr.svg"]=make_qr_svg(npv)
+        result["share_text"]=npv
+        result["share_type"]="npvt-ssh"
+        summary.update({
             "npv_link":npv,"npv_filename":npv_name,
             "npv_dns_mode":str(opts.get("dns_mode") or "UDP").upper(),
             "npv_udpgw_port":int(opts.get("udpgw_port") or 7300),
             "npv_transparent_dns":bool(opts.get("transparent_dns",False)),
-        },
-    }
+        })
+    return result
 
 def wireguard_payload(name,config,address=None):
     filename=f"{safe_filename(name)}.conf"
