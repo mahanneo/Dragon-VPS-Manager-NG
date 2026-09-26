@@ -84,6 +84,10 @@ def main():
             page.locator('input[name="password"]').fill(PASSWORD)
             page.locator('button[type="submit"]').click()
             page.wait_for_url(BASE_URL+"/")
+            assert page.locator('body[data-theme="glass"]').count()==1
+            page.locator(".glass-status-hero").wait_for()
+            assert page.locator(".glass-summary-grid article").count()==4
+            assert page.locator(".glass-service-card").count()>=8
 
             page.locator('button[data-view="access"]').click()
             page.locator(".access-profile",has_text="browser-client").wait_for()
@@ -143,7 +147,7 @@ def main():
             page.locator('.close-btn[data-action="modal-close"]').click()
 
             page.locator('button[data-view="dashboard"]').click()
-            page.locator(".command-hero").wait_for()
+            page.locator(".glass-status-hero").wait_for()
             page.locator('[data-action="self-test"]').click()
             page.locator(".diagnostics-modal").wait_for()
             assert page.locator(".diagnostic-score.pass").count()==1
@@ -189,6 +193,10 @@ def main():
             assert page.locator("#opWgMtu").input_value()=="1280"
             assert page.locator("#opWgKeepalive").input_value()=="15"
             assert page.locator("#opWgAllowedIps").input_value()=="0.0.0.0/0"
+            page.locator('[data-action="openvpn-diagnostics"]').click()
+            page.locator(".openvpn-diagnostics-modal").wait_for()
+            assert "OPENVPN DOMAIN DIAGNOSTICS" in page.locator(".openvpn-diagnostics-modal").inner_text()
+            page.locator('.close-btn[data-action="modal-close"]').click()
             page.locator('[data-action="settings-operator-save"]').click()
             page.locator("#opWgPort").wait_for()
             assert page.locator("#opWgPort").input_value()=="443"
