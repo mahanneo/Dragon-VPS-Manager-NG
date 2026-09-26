@@ -165,6 +165,8 @@ def main():
             page.locator(".guide-admin-grid").wait_for()
             assert page.locator(".guide-admin-card").count()==4
             assert page.locator('[data-action="client-guide-copy"]').count()==4
+            page.locator('button[data-view="settings"]').click()
+            page.locator(".settings-content-v2").wait_for()
 
             page.locator('[data-action="settings-tab"][data-tab="delivery"]').click()
             page.locator("#opProfilePrefix").wait_for()
