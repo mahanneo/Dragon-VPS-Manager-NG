@@ -92,6 +92,7 @@
 - HTTP Proxy.
 - SOCKS5.
 - Config قبل از Apply با Xray test شود.
+- Xray 26.3.27 temp JSON: فایل موقت Validate باید با `.json` تمام شود و `-format=json` صریحاً پاس شود؛ خطای `Failed to get format` مجاز نیست.
 - در Failure config قبلی Rollback شود.
 - Subscription/QR/Profile صحیح باشد.
 - Quota/Expiry/Traffic reset روی پروتکل‌هایی که Accounting دارند تست شود.
