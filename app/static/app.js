@@ -890,19 +890,37 @@ async function services(renderToken=window.__viewRenderToken){
   title.textContent='Services';setPageContext('SYSTEMD CONTROL');
   const [d,pstack]=await Promise.all([api('/api/overview'),api('/api/protocols').catch(()=>({}))]);
   if(renderToken!==window.__viewRenderToken||activeView!=='services')return;
-  const running=(d.services||[]).filter(x=>x.active).length,xrayInstalled=Boolean(pstack?.xray?.installed);
+  const running=(d.services||[]).filter(x=>x.active).length;
+  const installed={
+    xray:Boolean(pstack?.xray?.installed),
+    'openvpn-server@server':Boolean(pstack?.openvpn?.installed),
+    'wg-quick@wg0':Boolean(pstack?.wireguard?.installed)
+  };
   const row=s=>{
+    const protocolKind=s.name==='xray'?'xray':s.name==='openvpn-server@server'?'openvpn':s.name==='wg-quick@wg0'?'wireguard':'';
+    const missing=protocolKind&&installed[s.name]===false;
     let extra='';
     if(s.name==='xray'){
-      extra=xrayInstalled
-        ? '<button class="ghost" data-action="xray-diagnostics">Diagnose</button>'+(!s.active?'<button class="soft warnish" data-action="xray-repair">Repair</button>':'')
-        : '<button class="soft" data-action="protocol-setup" data-kind="xray">Install</button>';
+      extra=missing
+        ? '<button class="soft" data-action="protocol-setup" data-kind="xray">Install Xray</button>'
+        : '<button class="ghost" data-action="xray-diagnostics">Diagnose</button>'+(!s.active?'<button class="soft warnish" data-action="xray-repair">Repair</button>':'');
     }else if(s.name==='openvpn-server@server'){
-      extra='<button class="ghost" data-action="openvpn-diagnostics">Domain</button>'+(!s.active?'<button class="soft warnish" data-action="openvpn-repair">Repair</button>':'');
+      extra=missing
+        ? '<button class="soft" data-action="protocol-setup" data-kind="openvpn">Setup OpenVPN</button>'
+        : '<button class="ghost" data-action="openvpn-diagnostics">Domain</button>'+(!s.active?'<button class="soft warnish" data-action="openvpn-repair">Repair</button>':'');
+    }else if(s.name==='wg-quick@wg0'&&missing){
+      extra='<button class="soft" data-action="protocol-setup" data-kind="wireguard">Setup WireGuard</button>';
     }
-    return '<div class="row"><div><i class="status-dot '+(s.active?'ok':'bad')+'"></i><b>'+htmlEsc(s.label)+'</b><div class="muted">'+htmlEsc(s.name)+'</div></div><div class="muted">'+htmlEsc(s.state)+'</div><div><span class="status-chip '+(s.active?'ok':'bad')+'">'+(s.active?'Running':xrayInstalled&&s.name==='xray'?'Attention':'Stopped')+'</span></div><div class="toolbar">'+extra+'<button class="ghost" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="start">Start</button><button class="primary" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="restart">Restart</button><button class="danger" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="stop">Stop</button></div></div>';
+    const controls=missing?'':[
+      '<button class="ghost" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="start">Start</button>',
+      '<button class="primary" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="restart">Restart</button>',
+      '<button class="danger" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="stop">Stop</button>'
+    ].join('');
+    const stateLabel=missing?'Not installed':s.active?'Running':'Attention';
+    const stateClass=missing?'warn':s.active?'ok':'bad';
+    return '<div class="row"><div><i class="status-dot '+(s.active?'ok':'bad')+'"></i><b>'+htmlEsc(s.label)+'</b><div class="muted">'+htmlEsc(s.name)+'</div></div><div class="muted">'+htmlEsc(s.state)+'</div><div><span class="status-chip '+stateClass+'">'+stateLabel+'</span></div><div class="toolbar">'+extra+controls+'</div></div>';
   };
-  content.innerHTML=viewIntro('ALLOWLISTED SERVICES','کنترل سرویس‌ها','Start/Stop/Restart فقط برای سرویس‌های Allowlist شده است. برای Xray، Diagnose علت واقعی Failure را از Core و journal نشان می‌دهد.','<div class="view-intro-stat"><b>'+running+'/'+d.services.length+'</b><span>RUNNING</span></div>')+
+  content.innerHTML=viewIntro('ALLOWLISTED SERVICES','کنترل سرویس‌ها','Start/Stop/Restart فقط برای سرویس‌های نصب‌شده و Allowlist شده نمایش داده می‌شود؛ Xray و OpenVPN Diagnostics علت Failure را از Runtime واقعی بررسی می‌کنند.','<div class="view-intro-stat"><b>'+running+'/'+d.services.length+'</b><span>RUNNING</span></div>')+
   '<div class="panel modern-list"><div class="table">'+d.services.map(row).join('')+'</div></div>';
 }
 
