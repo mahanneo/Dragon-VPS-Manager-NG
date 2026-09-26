@@ -144,6 +144,7 @@ install -m 0755 "$SRC/scripts/update.sh" /usr/local/sbin/makia-update
 install -m 0755 "$SRC/scripts/backup.sh" /usr/local/sbin/makia-backup
 install -m 0755 "$SRC/scripts/uninstall.sh" /usr/local/sbin/makia-uninstall
 install -m 0755 "$SRC/scripts/doctor.sh" /usr/local/sbin/makia-doctor
+install -m 0755 "$SRC/scripts/uat-smoke.sh" /usr/local/sbin/makia-uat-smoke
 install -m 0755 "$SRC/scripts/reset-admin.sh" /usr/local/sbin/makia-reset-admin
 install -m 0755 "$SRC/upgrade.sh" /usr/local/sbin/makia-upgrade
 
@@ -171,6 +172,14 @@ if [[ "$healthy" -ne 1 ]]; then
   echo "Health check failed after update."
   echo "The updater will restore the previous runtime automatically."
   exit 3
+fi
+
+echo
+echo "Running post-update Makia host smoke gate..."
+if ! /usr/local/sbin/makia-uat-smoke; then
+  echo "Post-update host smoke failed."
+  echo "The updater will restore the previous runtime automatically."
+  exit 4
 fi
 
 ROLLBACK_ARMED=0

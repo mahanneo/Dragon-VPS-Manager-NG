@@ -56,3 +56,32 @@ jobs:
           test -f app/static/manifest.webmanifest
           test -f app/static/sw.js
           test -f docs/UAT-0.8.0-RC2.md
+          test -f docs/UAT-0.11.0-RC1.md
+          test -f scripts/uat-smoke.sh
+          grep -q 'makia-uat-smoke' scripts/install.sh
+          grep -q 'makia-uat-smoke' scripts/update.sh
+      - name: UAT v0.11 contract
+        run: |
+          grep -q 'Protected ZIP' docs/UAT-0.11.0-RC1.md
+          grep -q 'Browser Smoke' docs/UAT-0.11.0-RC1.md
+          grep -q 'data-action="protected-export"' app/static/app.js
+
+  browser-smoke:
+    runs-on: ubuntu-24.04
+    env:
+      PYTHONPATH: .
+      MAKIA_DATA_DIR: /tmp/makia-browser
+      MAKIA_INITIAL_ADMIN_PASSWORD: BrowserTestPass!123
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install browser test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Protected export browser smoke
+        run: python tests/browser_smoke.py
