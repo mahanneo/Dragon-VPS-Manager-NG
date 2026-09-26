@@ -802,9 +802,9 @@ async function protocols(renderToken=window.__viewRenderToken){
     '<section class="protocol-command"><div><div class="eyebrow">ENGINE & TRANSPORT CONTROL</div><h2>Protocol Hub</h2><p>Engineها، Server Bootstrap و تنظیمات پیشرفته اینجا مدیریت می‌شوند؛ ساخت Client فقط در Access Center انجام می‌شود.</p><div class="hero-actions"><button class="primary action-lg" data-action="nav" data-view="access">Open Access Center</button><button class="ghost action-lg" data-action="protocol-refresh">Refresh Engines</button></div></div>',
     '<div class="protocol-readiness"><b>'+ready+'/'+total+'</b><span>CAPABILITIES READY</span><button class="engine-btn connectivity-lab-btn" data-action="connectivity-lab">IP / Domain Lab</button></div></section>',
     '<section class="engine-grid">',
-      engineCard('X','Xray Core','VLESS / VMess / Trojan / Shadowsocks / Hysteria2 / Proxy',protocolState(x.installed,x.service_active),'<span>'+htmlEsc(x.version||'Version unavailable')+'</span><span>'+Number((x.inbounds||[]).length)+' inbounds</span>',xActions),
-      engineCard('W','WireGuard','Kernel/userspace WireGuard with managed wg0 bootstrap',protocolState(w.installed,w.service_active),'<span>'+Number((w.interfaces||[]).length)+' interfaces</span><span>'+Number(w.peers||0)+' peers</span>',wActions),
-      engineCard('O','OpenVPN','PKI-backed OpenVPN server and inline client profiles',protocolState(o.installed,o.service_active),'<span>'+Number((o.servers||[]).length)+' server profiles</span><span>Easy-RSA PKI</span>',oActions),
+      engineCard('X','Xray Core','VLESS / VMess / Trojan / Shadowsocks / Hysteria2 / Proxy',protocolState(x.installed,x.config_path?x.runtime_ok:x.service_active),'<span>'+htmlEsc(x.version||'Version unavailable')+'</span><span>'+Number((x.inbounds||[]).length)+' inbounds</span><span>'+(x.config_path?(x.runtime_ok?'Runtime ready':'Runtime attention'):'No active config')+'</span>',xActions),
+      engineCard('W','WireGuard','Kernel/userspace WireGuard with managed wg0 bootstrap',protocolState(w.installed,w.config?w.runtime_ok:w.service_active),'<span>'+Number((w.interfaces||[]).length)+' interfaces</span><span>'+Number(w.peers||0)+' peers</span><span>'+(w.config?(w.runtime_ok?'Runtime ready':'Runtime attention'):'Not bootstrapped')+'</span>',wActions),
+      engineCard('O','OpenVPN','PKI-backed OpenVPN server and inline client profiles',protocolState(o.installed,o.config?o.runtime_ok:o.service_active),'<span>'+Number((o.servers||[]).length)+' server profiles</span><span>'+htmlEsc(String(o.proto||'PKI'))+(o.port?' · '+Number(o.port):'')+'</span><span>'+(o.config?(o.runtime_ok?'Runtime ready':'Runtime attention'):'Not bootstrapped')+'</span>',oActions),
       engineCard('S','OpenSSH','System SSH access with Makia expiry/session policy',protocolState(ssh.installed,ssh.service_active),'<span>Linux accounts</span><span>Policy worker</span>','<button class="engine-btn primaryish" data-action="nav" data-view="access">Manage SSH Access</button>'),
       engineCard('T','Stunnel','TLS wrapper for selected TCP services',protocolState(s.installed,s.service_active),'<span>Optional sidecar</span>',stActions),
     '</section>',
@@ -1025,6 +1025,8 @@ async function services(renderToken=window.__viewRenderToken){
     const protocolKind=s.name==='xray'?'xray':s.name==='openvpn-server@server'?'openvpn':s.name==='wg-quick@wg0'?'wireguard':'';
     const missing=protocolKind&&installed[s.name]===false;
     const licensed=!protocolKind||hasLicenseFeature(protocolKind);
+    const runtimeData=protocolKind?pstack?.[protocolKind]:null;
+    const runtimeAttention=Boolean(protocolKind&&!missing&&runtimeData?.config&&runtimeData?.runtime_ok===false);
     let extra='';
     if(protocolKind&&!licensed){
       extra='<button class="soft warnish" data-action="nav" data-view="license">◆ Full Access</button>';
@@ -1039,15 +1041,15 @@ async function services(renderToken=window.__viewRenderToken){
     }else if(s.name==='wg-quick@wg0'){
       extra=missing
         ? '<button class="soft" data-action="protocol-setup" data-kind="wireguard">Setup WireGuard</button>'
-        : '<button class="ghost" data-action="wireguard-diagnostics">Diagnose</button>'+(!s.active?'<button class="soft warnish" data-action="wireguard-repair">Repair</button>':'');
+        : '<button class="ghost" data-action="wireguard-diagnostics">Diagnose</button>'+((!s.active||runtimeAttention)?'<button class="soft warnish" data-action="wireguard-repair">Repair</button>':'');
     }
     const controls=(missing||!licensed)?'':[
       '<button class="ghost" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="start">Start</button>',
       '<button class="primary" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="restart">Restart</button>',
       '<button class="danger" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="stop">Stop</button>'
     ].join('');
-    const stateLabel=!licensed?'License locked':missing?'Not installed':s.active?'Running':'Attention';
-    const stateClass=!licensed?'warn':missing?'warn':s.active?'ok':'bad';
+    const stateLabel=!licensed?'License locked':missing?'Not installed':runtimeAttention?'Runtime attention':s.active?'Running':'Attention';
+    const stateClass=!licensed?'warn':missing?'warn':runtimeAttention?'bad':s.active?'ok':'bad';
     return '<div class="row"><div><i class="status-dot '+(s.active?'ok':'bad')+'"></i><b>'+htmlEsc(s.label)+'</b><div class="muted">'+htmlEsc(s.name)+'</div></div><div class="muted">'+htmlEsc(s.state)+'</div><div><span class="status-chip '+stateClass+'">'+stateLabel+'</span></div><div class="toolbar">'+extra+controls+'</div></div>';
   };
   content.innerHTML=viewIntro('ALLOWLISTED SERVICES','کنترل سرویس‌ها','Start/Stop/Restart فقط برای سرویس‌های نصب‌شده و Allowlist شده نمایش داده می‌شود؛ Xray و OpenVPN Diagnostics علت Failure را از Runtime واقعی بررسی می‌کنند.','<div class="view-intro-stat"><b>'+running+'/'+d.services.length+'</b><span>RUNNING</span></div>')+
