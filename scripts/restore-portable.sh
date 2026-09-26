@@ -118,6 +118,34 @@ restore_file(){
   cp -a "$src" "$dst"
 }
 
+install_engine(){
+  local component="$1"
+  echo "Installing missing protocol engine: $component"
+  (
+    cd "$APP"
+    COMPONENT="$component" MAKIA_DATA_DIR="$APP/data" "$APP/.venv/bin/python" - <<'PY'
+import os
+from app import protocol_ops
+protocol_ops.install_component(os.environ["COMPONENT"])
+PY
+  )
+}
+
+if [[ -f "$TMP/stage/host/usr/local/etc/xray/config.json" || -f "$TMP/stage/host/etc/xray/config.json" ]]; then
+  if ! command -v xray >/dev/null 2>&1; then install_engine xray; fi
+  systemctl stop xray 2>/dev/null || true
+fi
+if [[ -d "$TMP/stage/host/etc/wireguard" ]]; then
+  if ! command -v wg >/dev/null 2>&1; then install_engine wireguard; fi
+  systemctl stop wg-quick@wg0 2>/dev/null || true
+fi
+if [[ -d "$TMP/stage/host/etc/openvpn" ]]; then
+  if ! command -v openvpn >/dev/null 2>&1; then install_engine openvpn; fi
+  for unit in $(systemctl list-unit-files 'openvpn-server@*.service' --no-legend 2>/dev/null | awk '{print $1}'); do
+    systemctl stop "$unit" 2>/dev/null || true
+  done
+fi
+
 restore_tree "$TMP/stage/host/etc/wireguard" /etc/wireguard
 restore_file "$TMP/stage/host/usr/local/etc/xray/config.json" /usr/local/etc/xray/config.json
 restore_file "$TMP/stage/host/etc/xray/config.json" /etc/xray/config.json
