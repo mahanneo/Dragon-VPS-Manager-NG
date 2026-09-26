@@ -120,6 +120,10 @@ def api_license_issue(payload:LicenseIssue,request:Request):
     require_mutation(request)
     customer=db.customer(payload.customer_id)
     if not customer:raise HTTPException(404,"customer not found")
+    installation=db.installation(payload.installation_id)
+    if not installation:raise HTTPException(404,"installation not registered")
+    if int(installation.get("customer_id") or 0)!=int(payload.customer_id):
+        raise HTTPException(400,"installation belongs to a different customer")
     try:item=license_service.issue(payload.customer_id,payload.installation_id,customer["name"],payload.days,payload.features)
     except Exception as exc:raise HTTPException(400,str(exc))
     db.audit("license_issue",item["license_id"],f"{item['installation_id']}; days={payload.days}",client_ip(request))
