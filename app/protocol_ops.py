@@ -20,6 +20,7 @@ XRAY_TLS_DIR=Path("/usr/local/etc/xray/tls")
 WG_DIR=Path("/etc/wireguard")
 OVPN_DIR=Path("/etc/openvpn")
 OVPN_EASYRSA=OVPN_DIR/"easy-rsa"
+BACKUP_DIR=Path("/var/backups/makia-vps-manager")
 
 class ProtocolError(RuntimeError):
     pass
@@ -783,7 +784,7 @@ def repair_wireguard_runtime(iface="wg0"):
         while rebuilt and not rebuilt[-1].strip():
             rebuilt.pop()
         rebuilt.extend([post_up,post_down])
-    backup_dir=Path("/var/backups/makia-vps-manager")
+    backup_dir=BACKUP_DIR
     backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
     backup=backup_dir/f"{iface}-repair-{int(time.time())}.conf"
     shutil.copy2(conf,backup)
