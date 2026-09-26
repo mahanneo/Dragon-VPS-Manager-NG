@@ -297,12 +297,26 @@ def wireguard_status():
                 peers+=max(0,len(lines)-1)
         except Exception:
             pass
+    config=str(WG_DIR/"wg0.conf") if (WG_DIR/"wg0.conf").exists() else None
+    service_active=_active("wg-quick@wg0")
+    runtime_ok=service_active
+    runtime_warnings=[]
+    if config:
+        try:
+            diag=wireguard_diagnostics("wg0")
+            runtime_ok=bool(diag.get("runtime_ok"))
+            runtime_warnings=list(diag.get("warnings") or [])
+        except Exception as exc:
+            runtime_ok=False
+            runtime_warnings=[str(exc)[:300]]
     return {
         "installed":installed,
-        "service_active":_active("wg-quick@wg0"),
+        "service_active":service_active,
+        "runtime_ok":runtime_ok,
+        "runtime_warnings":runtime_warnings,
         "interfaces":interfaces,
         "peers":peers,
-        "config":str(WG_DIR/"wg0.conf") if (WG_DIR/"wg0.conf").exists() else None,
+        "config":config,
     }
 
 def openvpn_status():
