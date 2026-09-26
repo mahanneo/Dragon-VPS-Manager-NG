@@ -37,6 +37,27 @@ def main():
         "sniffing":{"enabled":True,"destOverride":["http","tls","quic"],"routeOnly":True},
     })
 
+    trojan_stream,trojan_meta=protocol_ops._build_xray_stream(
+        binary,
+        "trojan",
+        "xhttp",
+        "reality",
+        "/trojan",
+        "www.microsoft.com",
+        "www.microsoft.com:443",
+    )
+    data["inbounds"].append({
+        "tag":"makia-ci-trojan-2088",
+        "listen":"127.0.0.1",
+        "port":2088,
+        "protocol":"trojan",
+        "settings":{
+            "clients":[{"password":"ci-trojan-secret","email":"ci-trojan","level":0}],
+        },
+        "streamSettings":trojan_stream,
+        "sniffing":{"enabled":True,"destOverride":["http","tls","quic"],"routeOnly":True},
+    })
+
     target=protocol_ops._xray_temp_json_path(Path("/tmp/config.json"),"runtime-smoke")
     target.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     try:
@@ -46,7 +67,9 @@ def main():
 
     assert meta["public_key"]
     assert meta["short_id"]
-    print("Xray 26.3.27 config smoke PASS")
+    assert trojan_meta["public_key"]
+    assert trojan_meta["short_id"]
+    print("Xray 26.3.27 VLESS + Trojan REALITY config smoke PASS")
 
 
 if __name__=="__main__":
