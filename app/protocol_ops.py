@@ -644,9 +644,15 @@ def revoke_openvpn_client(name):
             shutil.move(str(src),str(archive/src.name))
     return {"revoked":True,"name":name}
 
-def _port_in_use(port):
-    port=int(port)
-    for kind in (socket.SOCK_STREAM,socket.SOCK_DGRAM):
+def _port_in_use(port, network="tcp,udp"):
+    port=_validate_port(port)
+    network=str(network or "tcp,udp").lower()
+    if network not in {"tcp","udp","tcp,udp"}:
+        raise ProtocolError("network must be tcp, udp or tcp,udp")
+    kinds=[]
+    if "tcp" in network: kinds.append(socket.SOCK_STREAM)
+    if "udp" in network: kinds.append(socket.SOCK_DGRAM)
+    for kind in kinds:
         s=socket.socket(socket.AF_INET,kind)
         try:
             s.bind(("0.0.0.0",port))
@@ -877,10 +883,9 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
     inbounds=data.setdefault("inbounds",[])
     if not isinstance(inbounds,list):
         raise ProtocolError("invalid Xray inbounds collection")
-    if any(isinstance(i,dict) and int(i.get("port") or -1)==port for i in inbounds):
-        raise ProtocolError("this port is already used by another Xray inbound")
-    if _port_in_use(port):
-        raise ProtocolError("this port is already in use on the server")
+    port_network="udp" if protocol=="hysteria2" or str(transport or "").lower() in {"kcp","mkcp"} else "tcp"
+    if _port_in_use(port,port_network):
+        raise ProtocolError(f"this {port_network.upper()} port is already in use on the server")
     tag=f"makia-{protocol}-{port}"
     credential=None
     client_obj=None
@@ -1023,8 +1028,8 @@ def create_xray_tunnel(listen_port, target_host, target_port, network="tcp,udp",
     target_host=_validate_endpoint_host(target_host,"target host")
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
         raise ProtocolError("invalid tunnel name")
-    if _port_in_use(listen_port):
-        raise ProtocolError("listen port is already in use")
+    if _port_in_use(listen_port,network):
+        raise ProtocolError(f"listen port is already in use for {network}")
     config_path=_config_path() or "/usr/local/etc/xray/config.json"
     path=Path(config_path); path.parent.mkdir(parents=True,exist_ok=True)
     if path.exists():
