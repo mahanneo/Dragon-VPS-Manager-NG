@@ -942,14 +942,15 @@ def diagnostics_self_test(request:Request):
     except Exception as exc:
         add("protected_zip",False,exc,"error")
 
-    artifacts=list_access_artifacts()
+    with connect() as con:
+        artifact_rows=[dict(r) for r in con.execute("SELECT kind,external_key,payload_enc FROM access_artifacts ORDER BY id").fetchall()]
     broken=[]
-    for row in artifacts:
+    for row in artifact_rows:
         try:
             access_ops.open_payload(row["payload_enc"])
         except Exception as exc:
             broken.append(f"{row.get('kind')}:{row.get('external_key')}:{str(exc)[:80]}")
-    add("stored_artifacts",not broken,f"{len(artifacts)} checked"+(f"; broken={'; '.join(broken[:3])}" if broken else ""),"error")
+    add("stored_artifacts",not broken,f"{len(artifact_rows)} checked"+(f"; broken={'; '.join(broken[:3])}" if broken else ""),"error")
 
     for service_name,label in ALLOWED_SERVICES.items():
         try:
