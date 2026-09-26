@@ -1,6 +1,6 @@
 from pathlib import Path
 from datetime import date, datetime, timedelta
-import time, io, base64, secrets, string, urllib.request, json, os, stat, re, ipaddress
+import time, io, base64, secrets, string, urllib.request, urllib.parse, json, os, stat, re, ipaddress
 import pyotp, qrcode
 import qrcode.image.svg
 from fastapi import FastAPI, Request, Form, HTTPException
@@ -9,14 +9,52 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from .config import APP_NAME, VERSION, COOKIE_NAME, ALLOWED_SERVICES, DATA_DIR, SECRET_PATH
-from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client, reset_protocol_traffic, protocol_client_by_subscription, login_rate_state, record_login_failure, clear_login_failures, upsert_access_artifact, list_access_artifacts, get_access_artifact_by_key, delete_access_artifact_by_key
+from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client, reset_protocol_traffic, protocol_client_by_subscription, login_rate_state, record_login_failure, clear_login_failures, upsert_access_artifact, list_access_artifacts, get_access_artifact_by_key, delete_access_artifact_by_key, create_support_request, list_support_requests, update_support_request_delivery
 from .security import verify_password, make_session, read_session, hash_password, make_preauth, read_preauth
-from . import system_ops, protocol_ops, panel_ops, access_ops
+from . import system_ops, protocol_ops, panel_ops, access_ops, license_ops
 
 BASE=Path(__file__).resolve().parent
 app=FastAPI(title=APP_NAME,version=VERSION,docs_url=None,redoc_url=None)
 app.mount("/static",StaticFiles(directory=BASE/"static"),name="static")
 templates=Jinja2Templates(directory=BASE/"templates")
+
+@app.middleware("http")
+async def security_headers(request:Request,call_next):
+    allowed_raw=(os.getenv("MAKIA_ADMIN_ALLOWED_CIDRS") or "").strip()
+    public_path=(
+        request.url.path=="/healthz" or
+        request.url.path=="/help/connect" or
+        request.url.path.startswith("/static/") or
+        request.url.path.startswith("/sub/") or
+        request.url.path.startswith("/client/") or
+        request.url.path=="/api/node/heartbeat"
+    )
+    if allowed_raw and not public_path:
+        try:
+            client_ip=ipaddress.ip_address((request.client.host if request.client else "").strip())
+            networks=[ipaddress.ip_network(x.strip(),strict=False) for x in allowed_raw.split(",") if x.strip()]
+            if not networks or not any(client_ip in network for network in networks):
+                return PlainTextResponse("Makia admin access is not allowed from this network.",status_code=403)
+        except ValueError:
+            return PlainTextResponse("Makia admin network policy is invalid.",status_code=503)
+    response=await call_next(request)
+    response.headers.setdefault("X-Frame-Options","DENY")
+    response.headers.setdefault("X-Content-Type-Options","nosniff")
+    response.headers.setdefault("Referrer-Policy","no-referrer")
+    response.headers.setdefault("Permissions-Policy","camera=(), microphone=(), geolocation=(), payment=()")
+    response.headers.setdefault("Cross-Origin-Opener-Policy","same-origin")
+    response.headers.setdefault("Cross-Origin-Resource-Policy","same-origin")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; "
+        "img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
+        "connect-src 'self'; form-action 'self'"
+    )
+    if request.url.path.startswith("/api/") or request.url.path in {"/","/login","/login/2fa"}:
+        response.headers["Cache-Control"]="no-store"
+    if request.headers.get("x-forwarded-proto","").lower()=="https" or request.url.scheme=="https":
+        response.headers.setdefault("Strict-Transport-Security","max-age=31536000; includeSubDomains")
+    return response
 
 @app.on_event("startup")
 def startup():
@@ -35,7 +73,60 @@ def require_mutation(request:Request):
     user=require_user(request)
     if request.headers.get("x-makia-request")!="1":
         raise HTTPException(status_code=403,detail="invalid management request")
+    origin=(request.headers.get("origin") or "").strip()
+    if origin:
+        parsed=urllib.parse.urlparse(origin)
+        request_host=(request.headers.get("host") or request.url.netloc or "").lower()
+        if parsed.netloc.lower()!=request_host:
+            raise HTTPException(status_code=403,detail="cross-origin management request blocked")
+    fetch_site=(request.headers.get("sec-fetch-site") or "").lower()
+    if fetch_site and fetch_site not in {"same-origin","none"}:
+        raise HTTPException(status_code=403,detail="cross-site management request blocked")
     return user
+
+def license_snapshot():
+    return license_ops.license_status(get_setting("license_code",""))
+
+def license_feature_enabled(feature:str)->bool:
+    return str(feature or "").lower() in set(license_snapshot().get("features") or [])
+
+def assert_license_feature(feature:str):
+    if not license_feature_enabled(feature):
+        state=license_snapshot()
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code":"license_required",
+                "feature":feature,
+                "tier":state.get("tier","community"),
+                "installation_id":state.get("installation_id",""),
+                "message":"این قابلیت نیاز به دسترسی Full دارد."
+            }
+        )
+
+def require_feature(request:Request,feature:str,mutation:bool=False):
+    actor=require_mutation(request) if mutation else require_user(request)
+    assert_license_feature(feature)
+    return actor
+
+def require_access_kind(request:Request,kind:str,mutation:bool=False):
+    kind=str(kind or "").lower()
+    if kind=="ssh":
+        return require_mutation(request) if mutation else require_user(request)
+    feature={"xray":"xray","wireguard":"wireguard","openvpn":"openvpn"}.get(kind)
+    if not feature:
+        raise HTTPException(404,"unknown access type")
+    return require_feature(request,feature,mutation)
+
+def support_snapshot():
+    username=(os.getenv("MAKIA_SUPPORT_TELEGRAM") or "").strip().lstrip("@")
+    webhook=(os.getenv("MAKIA_SUPPORT_WEBHOOK_URL") or "").strip()
+    return {
+        "telegram_username":username,
+        "telegram_url":f"https://t.me/{username}" if username else "",
+        "webhook_enabled":bool(webhook),
+        "admin_network_restricted":bool((os.getenv("MAKIA_ADMIN_ALLOWED_CIDRS") or "").strip()),
+    }
 
 def ip(request:Request): return request.client.host if request.client else None
 
@@ -263,6 +354,92 @@ def logout(request:Request):
     if user: audit(user,"logout",ip=ip(request))
     r=RedirectResponse("/login",302); r.delete_cookie(COOKIE_NAME); return r
 
+class LicenseActivation(BaseModel):
+    code:str=Field(min_length=20,max_length=8192)
+
+@app.get("/api/license/status")
+def license_status_api(request:Request):
+    require_user(request)
+    return {**license_snapshot(),"support":support_snapshot()}
+
+@app.post("/api/license/activate")
+def license_activate(payload:LicenseActivation,request:Request):
+    actor=require_mutation(request)
+    try:
+        verified=license_ops.verify_license(payload.code)
+    except license_ops.LicenseError as exc:
+        audit(actor,"license_activation_failed","license",str(exc),ip(request))
+        raise HTTPException(400,str(exc))
+    set_setting("license_code",payload.code.strip())
+    audit(actor,"license_activated",verified.get("license_id") or "full",f"tier={verified.get('tier')}; customer={verified.get('customer')}",ip(request))
+    return {**license_snapshot(),"support":support_snapshot()}
+
+@app.delete("/api/license")
+def license_remove(request:Request):
+    actor=require_mutation(request)
+    set_setting("license_code","")
+    audit(actor,"license_removed","license",ip=ip(request))
+    return {**license_snapshot(),"support":support_snapshot()}
+
+class SupportRequestCreate(BaseModel):
+    subject:str=Field(min_length=3,max_length=160)
+    message:str=Field(min_length=3,max_length=5000)
+
+def _deliver_support_request(payload:dict):
+    url=(os.getenv("MAKIA_SUPPORT_WEBHOOK_URL") or "").strip()
+    if not url:
+        return {"delivered":False,"status":"local","remote_ticket_id":""}
+    parsed=urllib.parse.urlparse(url)
+    if parsed.scheme!="https" or not parsed.netloc:
+        return {"delivered":False,"status":"invalid_webhook","remote_ticket_id":""}
+    req=urllib.request.Request(
+        url,
+        data=json.dumps(payload,ensure_ascii=False,separators=(",",":")).encode("utf-8"),
+        headers={"Content-Type":"application/json","User-Agent":f"Makia/{VERSION}"},
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req,timeout=8) as response:
+            body=response.read(4096).decode("utf-8","replace")
+            remote=""
+            try:
+                obj=json.loads(body or "{}")
+                remote=str(obj.get("ticket_id") or obj.get("id") or "")
+            except Exception:
+                remote=""
+            ok=200<=int(response.status)<300
+            return {"delivered":ok,"status":"webhook" if ok else f"http_{response.status}","remote_ticket_id":remote}
+    except Exception:
+        return {"delivered":False,"status":"delivery_failed","remote_ticket_id":""}
+
+@app.get("/api/support/requests")
+def support_requests_get(request:Request):
+    require_user(request)
+    return {"items":list_support_requests(100),"support":support_snapshot()}
+
+@app.post("/api/support/requests")
+def support_requests_create(payload:SupportRequestCreate,request:Request):
+    actor=require_mutation(request)
+    license_state=license_snapshot()
+    body={
+        "product":APP_NAME,
+        "version":VERSION,
+        "installation_id":license_state.get("installation_id"),
+        "tier":license_state.get("tier"),
+        "domain":get_setting("panel_domain",""),
+        "subject":payload.subject.strip(),
+        "message":payload.message.strip(),
+    }
+    local_id=create_support_request(payload.subject,payload.message)
+    delivery=_deliver_support_request(body)
+    update_support_request_delivery(local_id,delivery["status"],delivery.get("remote_ticket_id",""))
+    audit(actor,"support_request_create",str(local_id),f"delivery={delivery['status']}",ip(request))
+    return {
+        "ok":True,"id":local_id,**delivery,
+        "request_text":f"Makia Support Request\nInstallation: {body['installation_id']}\nVersion: {VERSION}\nDomain: {body['domain'] or '-'}\nTier: {body['tier']}\nSubject: {body['subject']}\n\n{body['message']}",
+        "support":support_snapshot()
+    }
+
 @app.get("/api/overview")
 def overview(request:Request):
     require_user(request)
@@ -284,6 +461,7 @@ def overview(request:Request):
         "expiring_soon":expiring,
         "limit_violations":violations,
         "sessions":sessions[:25],
+        "license":license_snapshot(),
     }
 
 @app.get("/api/metrics/history")
@@ -463,6 +641,11 @@ def session_disconnect(payload:SessionDisconnect,request:Request):
 @app.post("/api/services/{name}/{action}")
 def service(name:str,action:str,request:Request):
     actor=require_mutation(request)
+    feature={"xray":"xray","openvpn-server@server":"openvpn","wg-quick@wg0":"wireguard"}.get(name)
+    if feature:
+        assert_license_feature(feature)
+    elif name not in {"ssh","nginx","fail2ban","makia-policy-enforcer","makia-metrics-sampler","makia-protocol-traffic"}:
+        assert_license_feature("advanced_services")
     try: result=system_ops.service_action(name,action)
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
     audit(actor,f"service_{action}",name,ip=ip(request))
@@ -495,7 +678,7 @@ class XrayQuickInbound(BaseModel):
 
 @app.post("/api/protocols/xray/quick-inbound")
 def xray_quick_inbound(payload:XrayQuickInbound,request:Request):
-    actor=require_mutation(request)
+    actor=require_feature(request,"xray",True)
     if any(row.get("engine")=="xray" and row.get("name")==payload.name for row in list_protocol_clients()):
         raise HTTPException(400,"Xray client name must be unique because traffic accounting uses the client email/name identity")
     try:
@@ -616,7 +799,7 @@ def subscription_page(subscription_id:str,request:Request):
 
 @app.get("/api/protocol-clients")
 def protocol_clients_get(request:Request):
-    require_user(request)
+    require_feature(request,"xray")
     rows=[]
     now_ts=int(time.time())
     for item in list_protocol_clients():
@@ -663,7 +846,7 @@ class ProtocolClientPolicy(BaseModel):
 
 @app.put("/api/protocol-clients/{client_id}")
 def protocol_client_update(client_id:int,payload:ProtocolClientPolicy,request:Request):
-    actor=require_mutation(request)
+    actor=require_feature(request,"xray",True)
     row=get_protocol_client(client_id)
     if not row: raise HTTPException(404,"client not found")
     quota_bytes=int(payload.quota_gb*1024*1024*1024) if payload.quota_gb is not None else None
@@ -685,7 +868,7 @@ def protocol_client_update(client_id:int,payload:ProtocolClientPolicy,request:Re
 
 @app.post("/api/protocol-clients/{client_id}/reset-traffic")
 def protocol_client_reset_traffic(client_id:int,request:Request):
-    actor=require_mutation(request)
+    actor=require_feature(request,"xray",True)
     row=get_protocol_client(client_id)
     if not row: raise HTTPException(404,"client not found")
     if row.get("engine")!="xray":
@@ -700,7 +883,7 @@ def protocol_client_reset_traffic(client_id:int,request:Request):
 
 @app.get("/api/protocols/xray/config")
 def xray_config_get(request:Request):
-    require_user(request)
+    require_feature(request,"xray")
     try: return protocol_ops.read_xray_config()
     except protocol_ops.ProtocolError as e: raise HTTPException(400,str(e))
 
@@ -709,13 +892,13 @@ class XrayConfigPayload(BaseModel):
 
 @app.post("/api/protocols/xray/config/validate")
 def xray_config_validate(payload:XrayConfigPayload,request:Request):
-    require_mutation(request)
+    require_feature(request,"xray",True)
     try: return protocol_ops.validate_xray_config(payload.config)
     except protocol_ops.ProtocolError as e: raise HTTPException(400,str(e))
 
 @app.put("/api/protocols/xray/config")
 def xray_config_apply(payload:XrayConfigPayload,request:Request):
-    actor=require_mutation(request)
+    actor=require_feature(request,"xray",True)
     try: result=protocol_ops.apply_xray_config(payload.config)
     except protocol_ops.ProtocolError as e: raise HTTPException(400,str(e))
     audit(actor,"xray_config_apply",result.get("path"),f"backup={result.get('backup')}",ip(request))
@@ -730,7 +913,7 @@ class XrayTunnelCreate(BaseModel):
 
 @app.post("/api/protocols/xray/tunnels")
 def xray_tunnel_create(payload:XrayTunnelCreate,request:Request):
-    actor=require_mutation(request)
+    actor=require_feature(request,"xray",True)
     try:
         result=protocol_ops.create_xray_tunnel(payload.listen_port,payload.target_host,payload.target_port,payload.network,payload.name)
     except protocol_ops.ProtocolError as e:
@@ -744,6 +927,9 @@ class ProtocolInstall(BaseModel):
 @app.post("/api/protocols/install")
 def protocol_install(payload:ProtocolInstall,request:Request):
     actor=require_mutation(request)
+    component=str(payload.component or "").lower()
+    feature={"xray":"xray","wireguard":"wireguard","openvpn":"openvpn"}.get(component,"advanced_services")
+    assert_license_feature(feature)
     try:
         result=protocol_ops.install_component(payload.component)
     except protocol_ops.ProtocolError as e:
@@ -753,12 +939,12 @@ def protocol_install(payload:ProtocolInstall,request:Request):
 
 @app.get("/api/protocols/xray/diagnostics")
 def xray_diagnostics_get(request:Request):
-    require_user(request)
+    require_feature(request,"xray")
     return protocol_ops.xray_diagnostics()
 
 @app.post("/api/protocols/xray/repair")
 def xray_repair(request:Request):
-    actor=require_mutation(request)
+    actor=require_feature(request,"xray",True)
     try:
         result=protocol_ops.repair_xray_runtime()
     except protocol_ops.ProtocolError as e:
@@ -774,7 +960,7 @@ class WireGuardBootstrap(BaseModel):
 
 @app.post("/api/protocols/wireguard/bootstrap")
 def wireguard_bootstrap(payload:WireGuardBootstrap,request:Request):
-    actor=require_mutation(request)
+    actor=require_feature(request,"wireguard",True)
     try:
         result=protocol_ops.bootstrap_wireguard(payload.port,payload.cidr,mtu=payload.mtu)
     except protocol_ops.ProtocolError as e:
@@ -792,7 +978,7 @@ class WireGuardPeer(BaseModel):
 
 @app.post("/api/protocols/wireguard/peers")
 def wireguard_peer_create(payload:WireGuardPeer,request:Request):
-    actor=require_mutation(request)
+    actor=require_feature(request,"wireguard",True)
     try:
         result=protocol_ops.create_wireguard_peer(payload.name,payload.endpoint,dns=payload.dns,mtu=payload.mtu,keepalive=payload.keepalive,allowed_ips=payload.allowed_ips)
         delivery=access_ops.wireguard_payload(payload.name,result["config"],result.get("address"))
@@ -813,7 +999,7 @@ class OpenVPNBootstrap(BaseModel):
 
 @app.post("/api/protocols/openvpn/bootstrap")
 def openvpn_bootstrap(payload:OpenVPNBootstrap,request:Request):
-    actor=require_mutation(request)
+    actor=require_feature(request,"openvpn",True)
     try:
         result=protocol_ops.bootstrap_openvpn(payload.port,payload.proto)
     except protocol_ops.ProtocolError as e:
@@ -823,7 +1009,7 @@ def openvpn_bootstrap(payload:OpenVPNBootstrap,request:Request):
 
 @app.get("/api/protocols/openvpn/diagnostics")
 def openvpn_diagnostics_get(request:Request,endpoint:str=""):
-    require_user(request)
+    require_feature(request,"openvpn")
     target=(endpoint or public_host(request)).strip()
     try:
         return protocol_ops.openvpn_endpoint_diagnostics(target)
@@ -832,7 +1018,7 @@ def openvpn_diagnostics_get(request:Request,endpoint:str=""):
 
 @app.post("/api/protocols/openvpn/repair")
 def openvpn_repair(request:Request):
-    actor=require_mutation(request)
+    actor=require_feature(request,"openvpn",True)
     try:
         result=protocol_ops.repair_openvpn_ipv4_runtime()
     except protocol_ops.ProtocolError as e:
@@ -849,7 +1035,7 @@ class OpenVPNClient(BaseModel):
 
 @app.post("/api/protocols/openvpn/clients")
 def openvpn_client_create(payload:OpenVPNClient,request:Request):
-    actor=require_mutation(request)
+    actor=require_feature(request,"openvpn",True)
     try:
         result=protocol_ops.create_openvpn_client(payload.name,payload.endpoint,payload.port,payload.proto)
         result["diagnostics"]=protocol_ops.openvpn_endpoint_diagnostics(payload.endpoint)
@@ -973,7 +1159,7 @@ def access_entries(request:Request):
             "legacy":not bool(art)
         })
 
-    protocol_rows=protocol_clients_get(request)
+    protocol_rows=protocol_clients_get(request) if license_feature_enabled("xray") else []
     for item in protocol_rows:
         key=str(item["id"])
         art=artifacts.get(("xray",key))
@@ -988,7 +1174,7 @@ def access_entries(request:Request):
         })
 
     known_wg={a["external_key"] for a in artifacts.values() if a["kind"]=="wireguard"}
-    for peer in protocol_ops.list_wireguard_peers():
+    for peer in (protocol_ops.list_wireguard_peers() if license_feature_enabled("wireguard") else []):
         key=peer["name"]
         art=artifacts.get(("wireguard",key))
         rows.append({
@@ -999,7 +1185,7 @@ def access_entries(request:Request):
         })
 
     known_ovpn={a["external_key"] for a in artifacts.values() if a["kind"]=="openvpn"}
-    for client in protocol_ops.list_openvpn_clients():
+    for client in (protocol_ops.list_openvpn_clients() if license_feature_enabled("openvpn") else []):
         key=client["name"]
         art=artifacts.get(("openvpn",key))
         rows.append({
@@ -1014,7 +1200,7 @@ def access_entries(request:Request):
 
 @app.get("/api/access/{kind}/{key}/share")
 def access_share(kind:str,key:str,request:Request):
-    require_user(request)
+    require_access_kind(request,kind)
     if kind not in {"ssh","xray","wireguard"}:
         raise HTTPException(404,"share view is not available for this access type")
     if kind=="ssh" and not operator_settings_snapshot()["delivery"]["npv_enabled"]:
@@ -1053,7 +1239,7 @@ def access_share(kind:str,key:str,request:Request):
 
 @app.get("/api/access/{kind}/{key}/qr.svg")
 def access_qr(kind:str,key:str,request:Request):
-    require_user(request)
+    require_access_kind(request,kind)
     if kind not in {"ssh","xray","wireguard"}:
         raise HTTPException(404,"QR is not available for this access type")
     if kind=="ssh" and not operator_settings_snapshot()["delivery"]["npv_enabled"]:
@@ -1066,7 +1252,7 @@ def access_qr(kind:str,key:str,request:Request):
 
 @app.get("/api/access/xray/{key}/subscription-qr.svg")
 def access_subscription_qr(key:str,request:Request):
-    require_user(request)
+    require_feature(request,"subscriptions")
     subscription_settings=operator_settings_snapshot()["subscription"]
     if not subscription_settings["enabled"]:
         raise HTTPException(409,"subscription delivery is disabled in Settings")
@@ -1079,7 +1265,7 @@ def access_subscription_qr(key:str,request:Request):
 
 @app.get("/api/access/{kind}/{key}/manifest")
 def access_manifest(kind:str,key:str,request:Request):
-    require_user(request)
+    require_access_kind(request,kind)
     payload,artifact=_resolve_access_payload(kind,key,request)
     payload=_current_delivery_payload(kind,key,payload,request)
     files=payload.get("files") or {}
@@ -1094,7 +1280,7 @@ def access_manifest(kind:str,key:str,request:Request):
 
 @app.get("/api/access/{kind}/{key}/native")
 def access_native(kind:str,key:str,request:Request):
-    require_user(request)
+    require_access_kind(request,kind)
     payload,_=_resolve_access_payload(kind,key,request)
     payload=_current_delivery_payload(kind,key,payload,request)
     filename=payload.get("native_filename") or "makia-access.txt"
@@ -1116,7 +1302,8 @@ def access_native(kind:str,key:str,request:Request):
 
 @app.post("/api/access/{kind}/{key}/package")
 def access_package(kind:str,key:str,payload:AccessPackageRequest,request:Request):
-    actor=require_mutation(request)
+    actor=require_access_kind(request,kind,True)
+    assert_license_feature("protected_delivery")
     access,_=_resolve_access_payload(kind,key,request)
     access=_current_delivery_payload(kind,key,access,request)
     try:
@@ -1137,7 +1324,7 @@ def access_package(kind:str,key:str,payload:AccessPackageRequest,request:Request
 
 @app.delete("/api/access/{kind}/{key}")
 def access_revoke(kind:str,key:str,request:Request):
-    actor=require_mutation(request)
+    actor=require_access_kind(request,kind,True)
     try:
         if kind=="ssh":
             system_ops.delete_user(key); delete_profile(key); delete_access_artifact_by_key("ssh",key)
@@ -1290,7 +1477,7 @@ class PortableBackupRequest(BaseModel):
 
 @app.post("/api/backups/portable")
 def backup_portable(payload:PortableBackupRequest,request:Request):
-    actor=require_mutation(request)
+    actor=require_feature(request,"portable_migration",True)
     try:
         files=system_ops.portable_migration_files(
             str(DATA_DIR),
@@ -1343,6 +1530,7 @@ def api_v1_accounts(request:Request):
 @app.get("/api/v1/protocol-clients")
 def api_v1_protocol_clients(request:Request):
     require_api_scope(request,"protocols:read")
+    assert_license_feature("xray")
     rows=[]
     for row in list_protocol_clients():
         snap=_subscription_snapshot(row)
@@ -1353,6 +1541,7 @@ def api_v1_protocol_clients(request:Request):
 @app.get("/api/v1/nodes")
 def api_v1_nodes(request:Request):
     require_api_scope(request,"nodes:read")
+    assert_license_feature("nodes")
     return list_nodes()
 
 class APITokenCreate(BaseModel):
@@ -1394,19 +1583,19 @@ class NodeHeartbeat(BaseModel):
 
 @app.get("/api/nodes")
 def nodes_get(request:Request):
-    require_user(request)
+    require_feature(request,"nodes")
     return list_nodes()
 
 @app.post("/api/nodes")
 def nodes_create(payload:NodeCreate,request:Request):
-    actor=require_mutation(request)
+    actor=require_feature(request,"nodes",True)
     result=create_node(payload.name)
     audit(actor,"node_create",payload.name,ip=ip(request))
     return result
 
 @app.post("/api/nodes/{node_id}/revoke")
 def nodes_revoke(node_id:int,request:Request):
-    actor=require_mutation(request)
+    actor=require_feature(request,"nodes",True)
     revoke_node(node_id)
     audit(actor,"node_revoke",str(node_id),ip=ip(request))
     return {"ok":True}

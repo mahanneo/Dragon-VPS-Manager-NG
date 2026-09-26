@@ -138,6 +138,17 @@ def init_db():
           UNIQUE(kind,external_key)
         );
         CREATE INDEX IF NOT EXISTS idx_access_artifacts_kind ON access_artifacts(kind);
+        CREATE TABLE IF NOT EXISTS support_requests (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          subject TEXT NOT NULL,
+          message TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'open',
+          delivery_status TEXT NOT NULL DEFAULT 'local',
+          remote_ticket_id TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_support_requests_created_at ON support_requests(created_at);
         ''')
         # Migration-safe columns for future profile growth.
         _add_column(con, "account_profiles", "plan TEXT NOT NULL DEFAULT ''")
@@ -465,6 +476,34 @@ def clear_login_failures(ip):
     with connect() as con:
         con.execute("DELETE FROM login_rate_limits WHERE ip=?",(str(ip),))
 
+
+def create_support_request(subject,message,delivery_status="local",remote_ticket_id=""):
+    ts=now()
+    subject=str(subject or "").strip()[:160]
+    message=str(message or "").strip()[:5000]
+    if not subject or not message:
+        raise ValueError("subject and message are required")
+    with connect() as con:
+        cur=con.execute(
+            "INSERT INTO support_requests(subject,message,status,delivery_status,remote_ticket_id,created_at,updated_at) VALUES(?,?, 'open', ?, ?, ?, ?)",
+            (subject,message,str(delivery_status or "local")[:40],str(remote_ticket_id or "")[:160],ts,ts)
+        )
+        return int(cur.lastrowid)
+
+def list_support_requests(limit=100):
+    with connect() as con:
+        rows=con.execute(
+            "SELECT id,subject,message,status,delivery_status,remote_ticket_id,created_at,updated_at FROM support_requests ORDER BY id DESC LIMIT ?",
+            (max(1,min(int(limit),500)),)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+def update_support_request_delivery(request_id,delivery_status,remote_ticket_id=""):
+    with connect() as con:
+        con.execute(
+            "UPDATE support_requests SET delivery_status=?,remote_ticket_id=?,updated_at=? WHERE id=?",
+            (str(delivery_status or "local")[:40],str(remote_ticket_id or "")[:160],now(),int(request_id))
+        )
 
 def upsert_access_artifact(kind,external_key,display_name,protocol,native_filename,payload_enc,metadata_json="{}"):
     ts=now()

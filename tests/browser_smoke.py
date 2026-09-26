@@ -4,7 +4,12 @@ import subprocess
 import sys
 import time
 import urllib.request
+import base64
+import json
 from pathlib import Path
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import pyzipper
 from playwright.sync_api import sync_playwright
@@ -17,10 +22,23 @@ PASSWORD=os.environ["MAKIA_INITIAL_ADMIN_PASSWORD"]
 def seed():
     shutil.rmtree(DATA,ignore_errors=True)
     DATA.mkdir(parents=True,exist_ok=True)
-    from app.db import init_db, create_protocol_client, upsert_access_artifact, get_protocol_client
-    from app import access_ops
+    from app.db import init_db, create_protocol_client, upsert_access_artifact, get_protocol_client, set_setting
+    from app import access_ops, license_ops
 
     init_db()
+    private=Ed25519PrivateKey.generate()
+    pub_path=DATA/"test-license-public.pem"
+    pub_path.write_bytes(private.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo))
+    os.environ["MAKIA_LICENSE_PUBLIC_KEY_PATH"]=str(pub_path)
+    now=int(time.time())
+    payload={
+        "v":1,"license_id":"LIC-BROWSER","customer":"CI",
+        "installation_id":license_ops.installation_id(),"tier":"full",
+        "features":sorted(license_ops.FULL_FEATURES),"issued_at":now,"not_before":now-60,"expires_at":now+86400,
+    }
+    raw=json.dumps(payload,sort_keys=True,separators=(",",":")).encode()
+    b64=lambda x: base64.urlsafe_b64encode(x).decode().rstrip("=")
+    set_setting("license_code","MKL1."+b64(raw)+"."+b64(private.sign(raw)))
     client_id=create_protocol_client(
         "browser-client","xray","vless","browser-inbound","browser-credential",
         "vless://browser-credential@example.test:443?type=tcp&security=none#browser-client",
@@ -88,7 +106,10 @@ def main():
             page.locator(".glass-status-hero").wait_for()
             assert page.locator(".glass-summary-grid article").count()==4
             assert page.locator(".glass-service-card").count()>=8
-
+            assert "FULL ACCESS" in page.locator(".license-tier-chip").inner_text()
+            page.locator('aside.sidebar button[data-view="license"]').click()
+            page.locator(".license-hero.full").wait_for()
+            assert "LIC-BROWSER" in page.locator("#content").inner_text()
             page.locator('aside.sidebar button[data-view="access"]').click()
             page.locator(".access-profile",has_text="browser-client").wait_for()
 
@@ -153,7 +174,7 @@ def main():
             assert page.locator(".diagnostic-score.pass").count()==1
             page.locator('.close-btn[data-action="modal-close"]').click()
 
-            for view in ["sessions","protocols","guides","services","nodes","security","backups","audit","updates","settings"]:
+            for view in ["sessions","protocols","guides","services","nodes","security","backups","audit","updates","settings","license"]:
                 nav=page.locator(f'aside.sidebar nav button[data-view="{view}"]')
                 nav.click()
                 page.wait_for_timeout(450)
@@ -222,11 +243,40 @@ def main():
                 assert "makia-portable-migration" in manifest
             page.locator('.close-btn[data-action="modal-close"]').click()
 
-            for view in ["dashboard","access","sessions","protocols","guides","services","nodes","security","backups","audit","updates","settings"]:
+            for view in ["dashboard","access","sessions","protocols","guides","services","nodes","security","backups","audit","updates","settings","license"]:
                 nav=page.locator(f'aside.sidebar nav button[data-view="{view}"]')
                 nav.click()
                 page.wait_for_timeout(450)
                 assert page.locator("#content").inner_text().strip(), f"{view} rendered empty content"
+
+            # Community regression: removing the signed license must immediately
+            # leave SSH management available while premium engines become locked
+            # in both the UI and backend.
+            status=page.evaluate("""async () => {
+              const r=await fetch('/api/license',{method:'DELETE',headers:{'X-Makia-Request':'1'}});
+              return {status:r.status,body:await r.json()};
+            }""")
+            assert status["status"]==200
+            assert status["body"]["tier"]=="community"
+            page.reload(wait_until="networkidle")
+            page.locator(".license-tier-chip.community").wait_for()
+            page.locator('aside.sidebar button[data-view="access"]').click()
+            page.locator(".protocol-launch-grid").wait_for()
+            assert page.locator(".launch-card.license-locked").count()==3
+            ssh_card=page.locator(".launch-card.ssh")
+            assert ssh_card.locator('[data-action="wizard-open"]').count()==1
+            assert "Full Access" in page.locator(".launch-card.xray").inner_text()
+            page.locator('aside.sidebar button[data-view="protocols"]').click()
+            page.locator(".license-lock-panel").wait_for()
+            assert "FULL ACCESS REQUIRED" in page.locator(".license-lock-panel").inner_text()
+            gate=page.evaluate("""async () => {
+              const r=await fetch('/api/protocols/openvpn/diagnostics?endpoint=127.0.0.1',{
+                headers:{'X-Makia-Request':'1'}
+              });
+              return {status:r.status,body:await r.json()};
+            }""")
+            assert gate["status"]==403
+            assert gate["body"]["detail"]["code"]=="license_required"
 
             assert not page_errors, "JavaScript page errors: "+repr(page_errors)
             browser.close()

@@ -2,6 +2,19 @@
 set -Eeuo pipefail
 [[ ${EUID:-$(id -u)} -eq 0 ]] || { echo "Run as root."; exit 1; }
 
+ENV_FILE=/etc/makia-vps-manager/makia.env
+if [[ -r "$ENV_FILE" ]]; then
+  while IFS='=' read -r key value; do
+    [[ -z "$key" || "$key" == \#* ]] && continue
+    case "$key" in
+      MAKIA_SUPPORT_TELEGRAM|MAKIA_SUPPORT_WEBHOOK_URL|MAKIA_RELEASE_ARCHIVE_URL|MAKIA_RELEASE_BEARER_TOKEN|MAKIA_ADMIN_ALLOWED_CIDRS)
+        printf -v "$key" '%s' "$value"
+        export "$key"
+        ;;
+    esac
+  done <"$ENV_FILE"
+fi
+
 REPO="mahanneo/Makia-VPS-Manager"
 REF="${MAKIA_REF:-${DRAGON_REF:-main}}"
 APP=/opt/makia-vps-manager
@@ -121,7 +134,12 @@ tar -C / -czf "$RELEASE_BACKUP" "${SNAPSHOT[@]}"
 chmod 0600 "$RELEASE_BACKUP"
 echo "Runtime rollback point: $RELEASE_BACKUP"
 
-curl -fL --retry 3 "https://github.com/${REPO}/archive/refs/heads/${REF}.tar.gz" -o "$TMP/source.tar.gz"
+ARCHIVE_URL="${MAKIA_RELEASE_ARCHIVE_URL:-https://github.com/${REPO}/archive/refs/heads/${REF}.tar.gz}"
+CURL_AUTH=()
+if [[ -n "${MAKIA_RELEASE_BEARER_TOKEN:-}" ]]; then
+  CURL_AUTH=(-H "Authorization: Bearer ${MAKIA_RELEASE_BEARER_TOKEN}")
+fi
+curl -fL --retry 3 "${CURL_AUTH[@]}" "$ARCHIVE_URL" -o "$TMP/source.tar.gz"
 tar -xzf "$TMP/source.tar.gz" -C "$TMP"
 SRC="$(find "$TMP" -mindepth 1 -maxdepth 1 -type d -name 'Makia-VPS-Manager-*' | head -n1)"
 [[ -n "$SRC" ]] || { echo "Unable to locate extracted source."; exit 1; }
@@ -130,8 +148,11 @@ ROLLBACK_ARMED=1
 systemctl stop makia-vps-manager
 rm -rf "$APP/app"
 cp -a "$SRC/app" "$APP/app"
-install -m 0644 "$SRC/requirements.txt" "$APP/requirements.txt"
-install -m 0644 "$SRC/VERSION" "$APP/VERSION"
+install -m 0640 "$SRC/requirements.txt" "$APP/requirements.txt"
+install -m 0640 "$SRC/VERSION" "$APP/VERSION"
+chown -R root:root "$APP/app"
+find "$APP/app" -type d -exec chmod 0750 {} +
+find "$APP/app" -type f -exec chmod 0640 {} +
 "$APP/.venv/bin/pip" install -r "$APP/requirements.txt"
 
 if ! command -v fail2ban-client >/dev/null 2>&1; then
@@ -167,6 +188,7 @@ install -m 0755 "$SRC/scripts/restore-portable.py" /usr/local/sbin/makia-restore
 install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
 install -m 0755 "$SRC/scripts/xray-cert-sync.sh" /etc/letsencrypt/renewal-hooks/deploy/makia-xray-sync
 install -m 0755 "$SRC/scripts/reset-admin.sh" /usr/local/sbin/makia-reset-admin
+install -m 0755 "$SRC/scripts/configure-owner.py" /usr/local/sbin/makia-owner-config
 install -m 0755 "$SRC/upgrade.sh" /usr/local/sbin/makia-upgrade
 
 systemctl daemon-reload

@@ -41,6 +41,7 @@ def test_share_response_is_no_store(monkeypatch):
         "files":{},
     }
     monkeypatch.setattr(main_app,"require_user",lambda request:"admin")
+    monkeypatch.setattr(main_app,"require_access_kind",lambda request,kind,mutation=False:"admin")
     monkeypatch.setattr(main_app,"_resolve_access_payload",lambda kind,key,request:(payload,{"id":1}))
     monkeypatch.setattr(main_app,"get_protocol_client",lambda client_id:{"subscription_id":"abc","protocol":"vless"})
     monkeypatch.setattr(main_app,"get_setting",lambda key,default=None: default)
@@ -158,6 +159,8 @@ def test_protected_ssh_package_uses_current_npv_setting(monkeypatch):
         {"enabled":True,"remarks":"Old","dns_mode":"UDP","udpgw_port":7300,"transparent_dns":False},
     )
     monkeypatch.setattr(main_app,"require_mutation",lambda request:"admin")
+    monkeypatch.setattr(main_app,"require_access_kind",lambda request,kind,mutation=False:"admin")
+    monkeypatch.setattr(main_app,"assert_license_feature",lambda feature:None)
     monkeypatch.setattr(main_app,"_resolve_access_payload",lambda kind,key,request:(original,{"id":1}))
     monkeypatch.setattr(main_app,"operator_settings_snapshot",lambda:{
         "delivery":{"npv_enabled":False,"profile_prefix":"Makia","npv_dns_mode":"UDP","npv_udpgw_port":7300,"npv_transparent_dns":False,"show_qr":True},

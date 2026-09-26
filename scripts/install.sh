@@ -51,8 +51,24 @@ if [[ ! -d "$DATA" && -d "$OLD_APP/data" ]]; then
 fi
 install -d -m 0750 "$DATA"
 install -d -m 0700 /var/backups/makia-vps-manager
+install -d -m 0700 /etc/makia-vps-manager
+if [[ ! -f /etc/makia-vps-manager/makia.env ]]; then
+  cat >/etc/makia-vps-manager/makia.env <<EOF
+# Makia owner/distribution configuration. Keep root-only.
+MAKIA_SUPPORT_TELEGRAM=${MAKIA_SUPPORT_TELEGRAM:-}
+MAKIA_SUPPORT_WEBHOOK_URL=${MAKIA_SUPPORT_WEBHOOK_URL:-}
+MAKIA_RELEASE_ARCHIVE_URL=${MAKIA_RELEASE_ARCHIVE_URL:-}
+MAKIA_RELEASE_BEARER_TOKEN=${MAKIA_RELEASE_BEARER_TOKEN:-}
+MAKIA_ADMIN_ALLOWED_CIDRS=${MAKIA_ADMIN_ALLOWED_CIDRS:-}
+EOF
+  chmod 0600 /etc/makia-vps-manager/makia.env
+fi
 
 cp -a "$SOURCE_DIR/app" "$SOURCE_DIR/requirements.txt" "$SOURCE_DIR/VERSION" "$APP/"
+chown -R root:root "$APP/app"
+find "$APP/app" -type d -exec chmod 0750 {} +
+find "$APP/app" -type f -exec chmod 0640 {} +
+chmod 0640 "$APP/requirements.txt" "$APP/VERSION"
 python3 -m venv "$APP/.venv"
 "$APP/.venv/bin/pip" install --upgrade pip
 "$APP/.venv/bin/pip" install -r "$APP/requirements.txt"
@@ -82,6 +98,7 @@ install -m 0755 "$SOURCE_DIR/scripts/restore-portable.py" /usr/local/sbin/makia-
 install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
 install -m 0755 "$SOURCE_DIR/scripts/xray-cert-sync.sh" /etc/letsencrypt/renewal-hooks/deploy/makia-xray-sync
 install -m 0755 "$SOURCE_DIR/scripts/reset-admin.sh" /usr/local/sbin/makia-reset-admin
+install -m 0755 "$SOURCE_DIR/scripts/configure-owner.py" /usr/local/sbin/makia-owner-config
 install -m 0755 "$SOURCE_DIR/upgrade.sh" /usr/local/sbin/makia-upgrade
 ln -sfn /usr/local/sbin/makia-update /usr/local/sbin/dragon-update
 ln -sfn /usr/local/sbin/makia-backup /usr/local/sbin/dragon-backup

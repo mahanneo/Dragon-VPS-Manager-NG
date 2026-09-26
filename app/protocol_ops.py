@@ -742,6 +742,8 @@ def openvpn_endpoint_diagnostics(endpoint):
         "proto":runtime.get("proto"),
         "certificate":cert_info,
         "warnings":warnings,
+        "hybrid_fallback_ipv4":next((x for x in resolved4 if x in set(local4)), "") if not is_ip else "",
+        "hybrid_available":bool((not is_ip) and any(x in set(local4) for x in resolved4)),
         "ok":bool(runtime.get("service_active") and runtime.get("listener") and (is_ip or (resolved4 and matches is not False))),
     }
 
@@ -843,6 +845,28 @@ def repair_openvpn_ipv4_runtime():
     runtime=_openvpn_server_runtime()
     return {"ok":True,"backup":str(backup),"runtime":runtime}
 
+def _openvpn_remote_block(endpoint,port):
+    endpoint=_validate_endpoint_host(endpoint,"OpenVPN endpoint")
+    candidates=[endpoint]
+    fallback=""
+    try:
+        parsed=ipaddress.ip_address(endpoint)
+        if parsed.version==4:
+            return f"remote {parsed.compressed} {int(port)}\n","",False
+    except ValueError:
+        pass
+    try:
+        diag=openvpn_endpoint_diagnostics(endpoint)
+        direct=[x for x in (diag.get("resolved_ipv4") or []) if x in set(diag.get("local_ipv4") or [])]
+        if direct:
+            fallback=direct[0]
+            if fallback not in candidates:
+                candidates.append(fallback)
+    except Exception:
+        fallback=""
+    lines="".join(f"remote {item} {int(port)}\n" for item in candidates)
+    return lines,fallback,len(candidates)>1
+
 def create_openvpn_client(name, endpoint, port=1194, proto="udp"):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
         raise ProtocolError("invalid client name")
@@ -862,15 +886,18 @@ def create_openvpn_client(name, endpoint, port=1194, proto="udp"):
     key=(pki/f"private/{name}.key").read_text(encoding="utf-8")
     ta=(OVPN_DIR/"server/ta.key").read_text(encoding="utf-8")
     transport=_openvpn_proto(proto,server=False)
+    remotes,fallback_ipv4,hybrid=_openvpn_remote_block(endpoint,port)
     client=(
         "client\ndev tun\n"
-        f"proto {transport}\nremote {endpoint} {port}\n"
-        "resolv-retry infinite\nconnect-retry 2 300\nnobind\npersist-key\npersist-tun\nauth-nocache\n"
+        f"proto {transport}\n"
+        +remotes+
+        ("resolv-retry 5\nserver-poll-timeout 8\n" if hybrid else "resolv-retry infinite\n")+
+        "connect-retry 2 30\nnobind\npersist-key\npersist-tun\nauth-nocache\n"
         "remote-cert-tls server\nverify-x509-name server name\n"
         "data-ciphers AES-256-GCM:AES-128-GCM\nauth SHA256\nverb 3\n"
         f"<ca>\n{ca}</ca>\n<cert>\n{cert}</cert>\n<key>\n{key}</key>\n<tls-crypt>\n{ta}</tls-crypt>\n"
     )
-    return {"name":name,"config":client,"endpoint":endpoint,"port":port,"proto":"udp" if transport.startswith("udp") else "tcp","client_proto":transport}
+    return {"name":name,"config":client,"endpoint":endpoint,"fallback_ipv4":fallback_ipv4,"hybrid_endpoint":hybrid,"port":port,"proto":"udp" if transport.startswith("udp") else "tcp","client_proto":transport}
 
 def list_openvpn_clients():
     issued=OVPN_EASYRSA/"pki/issued"
@@ -903,15 +930,18 @@ def render_openvpn_client(name,endpoint):
     cert_text=cert.read_text(encoding="utf-8")
     key_text=key.read_text(encoding="utf-8")
     ta=(OVPN_DIR/"server/ta.key").read_text(encoding="utf-8")
+    remotes,fallback_ipv4,hybrid=_openvpn_remote_block(endpoint,port)
     client=(
         "client\ndev tun\n"
-        f"proto {transport}\nremote {endpoint} {port}\n"
-        "resolv-retry infinite\nconnect-retry 2 300\nnobind\npersist-key\npersist-tun\nauth-nocache\n"
+        f"proto {transport}\n"
+        +remotes+
+        ("resolv-retry 5\nserver-poll-timeout 8\n" if hybrid else "resolv-retry infinite\n")+
+        "connect-retry 2 30\nnobind\npersist-key\npersist-tun\nauth-nocache\n"
         "remote-cert-tls server\nverify-x509-name server name\n"
         "data-ciphers AES-256-GCM:AES-128-GCM\nauth SHA256\nverb 3\n"
         f"<ca>\n{ca}</ca>\n<cert>\n{cert_text}</cert>\n<key>\n{key_text}</key>\n<tls-crypt>\n{ta}</tls-crypt>\n"
     )
-    return {"name":name,"config":client,"endpoint":endpoint,"port":port,"proto":"tcp" if transport.startswith("tcp") else "udp","client_proto":transport}
+    return {"name":name,"config":client,"endpoint":endpoint,"fallback_ipv4":fallback_ipv4,"hybrid_endpoint":hybrid,"port":port,"proto":"tcp" if transport.startswith("tcp") else "udp","client_proto":transport}
 
 def revoke_openvpn_client(name):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
