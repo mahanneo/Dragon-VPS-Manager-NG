@@ -89,7 +89,7 @@ def main():
             assert page.locator(".glass-summary-grid article").count()==4
             assert page.locator(".glass-service-card").count()>=8
 
-            page.locator('button[data-view="access"]').click()
+            page.locator('aside.sidebar button[data-view="access"]').click()
             page.locator(".access-profile",has_text="browser-client").wait_for()
 
             row=page.locator(".access-profile",has_text="browser-client")
@@ -146,7 +146,7 @@ def main():
             assert page.locator(".wizard-protocol").count()==4
             page.locator('.close-btn[data-action="modal-close"]').click()
 
-            page.locator('button[data-view="dashboard"]').click()
+            page.locator('aside.sidebar button[data-view="dashboard"]').click()
             page.locator(".glass-status-hero").wait_for()
             page.locator('[data-action="self-test"]').click()
             page.locator(".diagnostics-modal").wait_for()
@@ -165,11 +165,11 @@ def main():
             assert "XRAY RUNTIME DIAGNOSTICS" in page.locator(".xray-diagnostics-modal").inner_text()
             page.locator('.close-btn[data-action="modal-close"]').click()
 
-            page.locator('button[data-view="guides"]').click()
+            page.locator('aside.sidebar button[data-view="guides"]').click()
             page.locator(".guide-admin-grid").wait_for()
             assert page.locator(".guide-admin-card").count()==4
             assert page.locator('[data-action="client-guide-copy"]').count()==4
-            page.locator('button[data-view="settings"]').click()
+            page.locator('aside.sidebar button[data-view="settings"]').click()
             page.locator(".settings-content-v2").wait_for()
 
             page.locator('[data-action="settings-tab"][data-tab="delivery"]').click()
