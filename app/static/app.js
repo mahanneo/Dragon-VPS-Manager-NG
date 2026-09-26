@@ -631,35 +631,57 @@ async function createNode(){
 }
 async function revokeNode(id){if(!confirm('دسترسی این Node لغو شود؟'))return;try{await api('/api/nodes/'+id+'/revoke',{method:'POST'});await nodes()}catch(e){alert(e.message)}}
 
-function protocolState(installed,active){if(!installed)return'<span class="status-chip">Not installed</span>';return active?'<span class="status-chip ok">Running</span>':'<span class="status-chip warn">Installed</span>'}
-function protocolTile(icon,name,desc,status,actions=''){return`<article class="protocol-tile"><div class="protocol-icon">${icon}</div><div class="protocol-body"><div class="protocol-title"><h3>${name}</h3>${status}</div><p>${desc}</p><div class="toolbar">${actions}</div></div></article>`}
+function protocolState(installed,active){
+  if(!installed)return'<span class="engine-state missing">Not installed</span>';
+  return active?'<span class="engine-state running">Running</span>':'<span class="engine-state attention">Installed</span>';
+}
+function engineCard(icon,name,desc,status,meta,actions=''){
+  return '<article class="engine-card"><div class="engine-card-head"><span class="engine-icon">'+htmlEsc(icon)+'</span>'+status+'</div><h3>'+htmlEsc(name)+'</h3><p>'+htmlEsc(desc)+'</p><div class="engine-meta">'+meta+'</div><div class="engine-actions">'+actions+'</div></article>';
+}
 async function protocols(renderToken=window.__viewRenderToken){
   title.textContent='Protocol Hub';setPageContext('ENGINE CONTROL');
-  content.innerHTML='<div class="empty">در حال بررسی سرویس‌ها و Coreها…</div>';
+  content.innerHTML='<div class="loading-state"><span class="spinner"></span><b>در حال بررسی Engineها…</b></div>';
   const [d,clients]=await Promise.all([api('/api/protocols'),api('/api/protocol-clients')]);
   if(renderToken!==window.__viewRenderToken||activeView!=='protocols')return;
+  window.__protocolData=d;window.__protocolClients=clients;
   const x=d.xray,w=d.wireguard,o=d.openvpn,s=d.stunnel,ssh=d.ssh;
-  const xActions=x.installed?'<button class="primary" onclick="createXrayInbound()">+ Create Client</button><button class="ghost" onclick="createXrayTunnel()">+ Tunnel</button><button class="ghost" onclick="openXrayAdvanced()">Advanced Config</button><button class="ghost" onclick="showXrayInbounds()">Inbounds</button>':'<button class="primary" onclick="installProtocol(\'xray\')">Install Xray Core</button><span class="muted">Official XTLS installer</span>';
-  const wActions=!w.installed?'<button class="primary" onclick="installProtocol(\'wireguard\')">Install WireGuard</button>':(!w.config?'<button class="primary" onclick="bootstrapWireGuard()">Bootstrap Server</button>':'<button class="primary" onclick="createWireGuardPeer()">+ Create Peer</button>');
-  const oActions=!o.installed?'<button class="primary" onclick="installProtocol(\'openvpn\')">Install OpenVPN</button>':(!o.config?'<button class="primary" onclick="bootstrapOpenVPN()">Bootstrap Server</button>':'<button class="primary" onclick="createOpenVPNClient()">+ Create Client</button>');
-  const stActions=!s.installed?'<button class="ghost" onclick="installProtocol(\'stunnel\')">Install Stunnel</button>':'<span class="muted">Managed from Services after configuration.</span>';
-  content.innerHTML=`
-  <div class="panel protocol-hero">
-    <div><div class="eyebrow">UNIFIED ACCESS STACK</div><h2>Protocol Hub</h2><p class="muted">Makia فقط قابلیت‌هایی را فعال نشان می‌دهد که Backend واقعی دارند. Xray برای VLESS/VMess/Trojan/Shadowsocks، WireGuard و OpenVPN به‌صورت ماژول‌های مستقل مدیریت می‌شوند.</p></div>
-    <div class="protocol-count"><b>${d.capabilities.filter(x=>x.available).length}</b><span>capabilities ready</span></div>
-  </div>
-  <div class="capability-strip">${d.capabilities.map(x=>`<span class="capability ${x.available?'ready':''} ${x.mode||''}">${x.id}<small>${x.available?(x.mode==='advanced'?'ADVANCED':x.engine):'UNAVAILABLE'}</small></span>`).join('')}</div>
-  <div class="protocol-grid">
-    ${protocolTile('X','Xray Core','VLESS · VMess · Trojan · Shadowsocks · transport/TLS/REALITY via Xray configuration',protocolState(x.installed,x.service_active),xActions)}
-    ${protocolTile('W','WireGuard',`${w.interfaces.length} interface · ${w.peers} peers · native kernel/userspace tooling`,protocolState(w.installed,w.service_active),wActions)}
-    ${protocolTile('O','OpenVPN',`${o.servers.length} server profiles · generated .ovpn client bundles`,protocolState(o.installed,o.service_active),oActions)}
-    ${protocolTile('S','SSH','Linux account access · expiry · connection policy · live sessions',protocolState(ssh.installed,ssh.service_active),'<button class="ghost" onclick="switchView(\'access\')">Manage access</button>')}
-    ${protocolTile('T','Stunnel','TLS wrapper for TCP services',protocolState(s.installed,s.service_active),stActions)}
-  </div>
-  <div class="panel"><div class="panel-head"><h3>Xray Inbounds</h3><span>${x.inbounds.length} DETECTED</span></div><div class="table">${x.inbounds.length?x.inbounds.map(i=>`<div class="row"><div><b>${i.tag||'untagged'}</b><div class="muted">${i.protocol}</div></div><div class="muted">${i.listen}:${i.port??'-'}</div><div><span class="status-chip">${i.clients} clients</span></div><div></div></div>`).join(''):'<div class="empty">Inbound قابل‌خواندن پیدا نشد.</div>'}</div></div>
-  <div class="panel"><div class="panel-head"><div><h3>Protocol Clients</h3><span>REAL TRAFFIC ACCOUNTING</span></div><button class="ghost" onclick="protocols()">Refresh usage</button></div><div class="table protocol-clients-table">${clients.length?clients.map(protocolClientRow).join(''):'<div class="empty">هنوز Protocol Client ساخته نشده است.</div>'}</div></div>`;
-  window.__protocolData=d;
-  window.__protocolClients=clients;
+  const ready=(d.capabilities||[]).filter(x=>x.available).length,total=(d.capabilities||[]).length;
+  const xActions=x.installed
+    ? '<button class="engine-btn primaryish" data-action="nav" data-view="access">Manage Xray Access</button><button class="engine-btn" data-action="xray-advanced">Advanced JSON</button><button class="engine-btn" data-action="xray-tunnel">Tunnel</button>'
+    : '<button class="engine-btn primaryish" data-action="protocol-setup" data-kind="xray">Install Xray Core</button>';
+  const wActions=!w.installed
+    ? '<button class="engine-btn primaryish" data-action="protocol-setup" data-kind="wireguard">Install & Setup</button>'
+    : (!w.config
+      ? '<button class="engine-btn primaryish" data-action="protocol-setup" data-kind="wireguard">Bootstrap wg0</button>'
+      : '<button class="engine-btn primaryish" data-action="nav" data-view="access">Manage Peers</button>');
+  const oActions=!o.installed
+    ? '<button class="engine-btn primaryish" data-action="protocol-setup" data-kind="openvpn">Install & Setup</button>'
+    : (!o.config
+      ? '<button class="engine-btn primaryish" data-action="protocol-setup" data-kind="openvpn">Bootstrap Server</button>'
+      : '<button class="engine-btn primaryish" data-action="nav" data-view="access">Manage Clients</button>');
+  const stActions=!s.installed
+    ? '<button class="engine-btn" data-action="protocol-install" data-kind="stunnel">Install Stunnel</button>'
+    : '<button class="engine-btn" data-action="nav" data-view="services">Service Control</button>';
+
+  const capabilityHtml=(d.capabilities||[]).map(cap=>'<div class="capability-card '+(cap.available?'ready':'missing')+'"><div><b>'+htmlEsc(String(cap.id||'').toUpperCase())+'</b><span>'+htmlEsc(cap.engine||'')+'</span></div><em>'+htmlEsc(cap.available?(cap.mode==='advanced'?'ADVANCED':'READY'):'UNAVAILABLE')+'</em></div>').join('');
+  const inboundHtml=(x.inbounds||[]).length?(x.inbounds||[]).map(i=>'<div class="engine-inbound"><div><b>'+htmlEsc(i.tag||'untagged')+'</b><span>'+htmlEsc(i.protocol||'unknown')+'</span></div><div><b>'+htmlEsc((i.listen||'0.0.0.0')+':'+(i.port??'-'))+'</b><span>'+Number(i.clients||0)+' clients</span></div></div>').join(''):'<div class="empty compact">Inbound قابل‌خواندن پیدا نشد.</div>';
+
+  content.innerHTML=[
+    '<section class="protocol-command"><div><div class="eyebrow">ENGINE & TRANSPORT CONTROL</div><h2>Protocol Hub</h2><p>Engineها، Server Bootstrap و تنظیمات پیشرفته اینجا مدیریت می‌شوند؛ ساخت Client فقط در Access Center انجام می‌شود.</p><div class="hero-actions"><button class="primary action-lg" data-action="nav" data-view="access">Open Access Center</button><button class="ghost action-lg" data-action="protocol-refresh">Refresh Engines</button></div></div>',
+    '<div class="protocol-readiness"><b>'+ready+'/'+total+'</b><span>CAPABILITIES READY</span></div></section>',
+    '<section class="engine-grid">',
+      engineCard('X','Xray Core','VLESS / VMess / Trojan / Shadowsocks / Hysteria2 / Proxy',protocolState(x.installed,x.service_active),'<span>'+htmlEsc(x.version||'Version unavailable')+'</span><span>'+Number((x.inbounds||[]).length)+' inbounds</span>',xActions),
+      engineCard('W','WireGuard','Kernel/userspace WireGuard with managed wg0 bootstrap',protocolState(w.installed,w.service_active),'<span>'+Number((w.interfaces||[]).length)+' interfaces</span><span>'+Number(w.peers||0)+' peers</span>',wActions),
+      engineCard('O','OpenVPN','PKI-backed OpenVPN server and inline client profiles',protocolState(o.installed,o.service_active),'<span>'+Number((o.servers||[]).length)+' server profiles</span><span>Easy-RSA PKI</span>',oActions),
+      engineCard('S','OpenSSH','System SSH access with Makia expiry/session policy',protocolState(ssh.installed,ssh.service_active),'<span>Linux accounts</span><span>Policy worker</span>','<button class="engine-btn primaryish" data-action="nav" data-view="access">Manage SSH Access</button>'),
+      engineCard('T','Stunnel','TLS wrapper for selected TCP services',protocolState(s.installed,s.service_active),'<span>Optional sidecar</span>',stActions),
+    '</section>',
+    '<section class="protocol-detail-grid"><div class="panel"><div class="panel-head"><div><h3>Capability Matrix</h3><span>'+ready+' READY</span></div></div><div class="capability-grid-v11">'+capabilityHtml+'</div></div>',
+    '<div class="panel"><div class="panel-head"><div><h3>Xray Inbounds</h3><span>'+Number((x.inbounds||[]).length)+' DETECTED</span></div></div><div class="engine-inbounds">'+inboundHtml+'</div></div></section>',
+    '<section class="panel"><div class="panel-head"><div><h3>Client Policy Snapshot</h3><span>'+clients.length+' XRAY RECORDS</span></div><button class="ghost" data-action="nav" data-view="access">Manage in Access Center</button></div><div class="protocol-policy-mini">'+
+      (clients.length?clients.slice(0,8).map(pc=>'<div><div><b>'+htmlEsc(pc.name)+'</b><span>'+htmlEsc(String(pc.protocol||'').toUpperCase())+'</span></div><strong class="'+(pc.enabled&&!pc.expired?'ok-text':'bad-text')+'">'+(pc.enabled&&!pc.expired?'Active':'Attention')+'</strong></div>').join(''):'<div class="empty compact">هنوز Xray Client مدیریت‌شده وجود ندارد.</div>')+
+    '</div></section>'
+  ].join('');
 }
 function createXrayTunnel(){modalRoot.innerHTML=`<div class="modal-backdrop" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-head"><div><div class="eyebrow">XRAY TUNNEL</div><h3>Port Forward / Dokodemo</h3></div><button class="close-btn" onclick="closeModal()">×</button></div><div class="form-grid"><label>Name<input id="tnName" value="tunnel01"></label><label>Listen port<input id="tnListen" type="number" min="1" max="65535" value="8443"></label><label>Target host<input id="tnHost" placeholder="10.0.0.2 or example.com"></label><label>Target port<input id="tnPort" type="number" min="1" max="65535" value="443"></label><label>Network<select id="tnNetwork"><option value="tcp,udp">TCP + UDP</option><option value="tcp">TCP</option><option value="udp">UDP</option></select></label></div><div class="notice">Config قبل از Apply توسط Xray validate می‌شود و در خطا Rollback انجام می‌شود.</div><div class="toolbar"><button class="primary" onclick="submitXrayTunnel()">Create Tunnel</button><button class="ghost" onclick="closeModal()">Cancel</button></div></div></div>`}
 async function submitXrayTunnel(){const payload={name:tnName.value.trim(),listen_port:Number(tnListen.value),target_host:tnHost.value.trim(),target_port:Number(tnPort.value),network:tnNetwork.value};if(!payload.name||!payload.target_host||!payload.listen_port||!payload.target_port){alert('فیلدهای اصلی را کامل کنید.');return}try{const r=await api('/api/protocols/xray/tunnels',{method:'POST',body:JSON.stringify(payload)});closeModal();toast('Tunnel '+r.listen_port+' → '+r.target_host+':'+r.target_port+' created');await protocols()}catch(e){alert(e.message)}}
