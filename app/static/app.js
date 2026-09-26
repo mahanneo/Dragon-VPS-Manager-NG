@@ -1127,7 +1127,11 @@ async function submitSupportRequest(){
 async function settings(renderToken=window.__viewRenderToken){
   title.textContent='Settings';setPageContext('PANEL CONFIGURATION');
   const [general,two,tokens,operator,backupRows]=await Promise.all([
-    api('/api/settings/general'),api('/api/admin/2fa/status'),api('/api/admin/tokens'),api('/api/settings/operator'),api('/api/backups').catch(()=>[])
+    api('/api/settings/general'),
+    api('/api/admin/2fa/status').catch(()=>({enabled:false,configured:false,restricted:true})),
+    api('/api/admin/tokens').catch(()=>[]),
+    api('/api/settings/operator'),
+    api('/api/backups').catch(()=>[])
   ]);
   if(renderToken!==window.__viewRenderToken||activeView!=='settings')return;
   window.PANEL_DOMAIN=general.panel_domain||'';window.__operatorSettings=operator;
@@ -1214,7 +1218,7 @@ async function settings(renderToken=window.__viewRenderToken){
     ].join('');
   }else if(tab==='security'){
     body=[
-      '<section class="settings-section-head"><div><div class="eyebrow">ADMIN SECURITY</div><h2>Admin Security</h2><p>Session lifetime، رمز عبور مدیر و TOTP واقعی.</p></div></section>',
+      '<section class="settings-section-head"><div><div class="eyebrow">ADMIN SECURITY</div><h2>Admin Security</h2><p>'+(two.restricted?'این بخش هویتی فقط برای مدیر محلی قابل تغییر است.':'Session lifetime، رمز عبور مدیر و TOTP واقعی.')+'</p></div></section>',
       '<div class="settings-card-v2"><div class="settings-card-title"><div><b>Admin session</b><span>Signed cookie lifetime</span></div></div><div class="settings-form-grid two"><label>Session max age (minutes)<input id="opSessionMinutes" type="number" min="5" max="43200" value="'+Number(operator.session_max_age_minutes||720)+'"></label><div class="settings-inline-note"><b>'+Math.round(Number(operator.session_max_age_minutes||720)/60*10)/10+' hours</b><span>روی login بعدی اعمال می‌شود.</span></div></div><div class="settings-actions"><button class="primary" data-action="settings-operator-save">Save session policy</button></div></div>',
       '<div class="settings-card-v2"><div class="settings-card-title"><div><b>Administrator password</b><span>Minimum 12 characters</span></div></div><div class="settings-form-grid two"><label>Current password<input id="oldP" type="password"></label><label>New password<input id="newP" type="password" minlength="12"></label></div><div class="settings-actions"><button class="primary" data-action="settings-password-change">Change password</button></div></div>',
       '<div class="settings-card-v2"><div class="settings-card-title"><div><b>Two-Factor Authentication</b><span>TOTP authenticator</span></div><span class="status-chip '+(two.enabled?'ok':'warn')+'">'+(two.enabled?'Enabled':'Optional')+'</span></div><div class="security-feature-row"><div><b>'+(two.enabled?'2FA is active':'Add a second factor')+'</b><span>'+(two.enabled?'Password + 6-digit TOTP is required at login.':'Google Authenticator, Microsoft Authenticator or compatible TOTP app.')+'</span></div><button class="'+(two.enabled?'danger':'primary')+'" data-action="'+(two.enabled?'settings-2fa-disable':'settings-2fa-setup')+'">'+(two.enabled?'Disable 2FA':'Enable 2FA')+'</button></div></div>'
