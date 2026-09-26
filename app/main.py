@@ -1,6 +1,6 @@
 from pathlib import Path
 from datetime import date, datetime, timedelta
-import time, io, base64, secrets, string, urllib.request, urllib.parse, json, os, stat, re, ipaddress
+import time, io, base64, secrets, string, urllib.request, urllib.parse, json, os, stat, re, ipaddress, threading
 import pyotp, qrcode
 import qrcode.image.svg
 from fastapi import FastAPI, Request, Form, HTTPException
@@ -57,12 +57,56 @@ async def security_headers(request:Request,call_next):
         response.headers.setdefault("Strict-Transport-Security","max-age=31536000; includeSubDomains")
     return response
 
+_LICENSE_SYNC_STARTED=False
+
+def _sync_license_lease_once():
+    code=(get_setting("license_code","") or "").strip()
+    if not code:
+        return {"required":False}
+    try:
+        local=license_ops.verify_license(code)
+    except license_ops.LicenseError as exc:
+        set_setting("license_lease_error",str(exc))
+        return {"required":False,"error":str(exc)}
+    if not local.get("online_required"):
+        set_setting("license_lease_code","")
+        set_setting("license_lease_error","")
+        return {"required":False}
+    try:
+        result=license_ops.fetch_online_lease(code)
+        lease_code=result.get("lease_code") or ""
+        if lease_code:
+            set_setting("license_lease_code",lease_code)
+        replacement=result.get("replacement_license_code") or ""
+        if replacement and replacement!=code:
+            verified=license_ops.verify_license(replacement)
+            if verified["installation_id"]==local["installation_id"] and verified["license_id"]==local["license_id"]:
+                set_setting("license_code",replacement)
+                code=replacement
+        set_setting("license_lease_checked_at",int(time.time()))
+        set_setting("license_lease_error","")
+        return result
+    except Exception as exc:
+        set_setting("license_lease_checked_at",int(time.time()))
+        set_setting("license_lease_error",str(exc)[:500])
+        return {"required":True,"error":str(exc)}
+
+def _license_sync_loop():
+    while True:
+        try: _sync_license_lease_once()
+        except Exception: pass
+        time.sleep(900)
+
 @app.on_event("startup")
 def startup():
+    global _LICENSE_SYNC_STARTED
     init_db()
     if get_setting("ui_generation","")!="glass-v1":
         set_setting("theme","glass")
         set_setting("ui_generation","glass-v1")
+    if not _LICENSE_SYNC_STARTED and os.getenv("MAKIA_DISABLE_LICENSE_SYNC","0")!="1":
+        threading.Thread(target=_license_sync_loop,name="makia-license-sync",daemon=True).start()
+        _LICENSE_SYNC_STARTED=True
 
 def current_user(request:Request):
     actor=read_session(request.cookies.get(COOKIE_NAME))
@@ -114,7 +158,13 @@ def require_mutation(request:Request):
     return user
 
 def license_snapshot():
-    return license_ops.license_status(get_setting("license_code",""))
+    state=license_ops.license_status(
+        get_setting("license_code",""),
+        get_setting("license_lease_code",""),
+    )
+    state["lease_last_checked_at"]=int(get_setting("license_lease_checked_at",0) or 0)
+    state["lease_sync_error"]=get_setting("license_lease_error","") or ""
+    return state
 
 def license_feature_enabled(feature:str)->bool:
     return str(feature or "").lower() in set(license_snapshot().get("features") or [])
@@ -424,6 +474,13 @@ def license_status_api(request:Request):
     require_user(request)
     return {**license_snapshot(),"support":support_snapshot()}
 
+@app.post("/api/license/sync")
+def license_sync(request:Request):
+    actor=require_mutation(request)
+    result=_sync_license_lease_once()
+    audit(actor,"license_sync","license",str(result.get("lease",{}).get("status") or result.get("error") or "offline")[:200],ip(request))
+    return {**license_snapshot(),"support":support_snapshot()}
+
 @app.post("/api/license/activate")
 def license_activate(payload:LicenseActivation,request:Request):
     actor=require_mutation(request)
@@ -433,7 +490,11 @@ def license_activate(payload:LicenseActivation,request:Request):
         audit(actor,"license_activation_failed","license",str(exc),ip(request))
         raise HTTPException(400,str(exc))
     set_setting("license_code",payload.code.strip())
-    audit(actor,"license_activated",verified.get("license_id") or "full",f"tier={verified.get('tier')}; customer={verified.get('customer')}",ip(request))
+    set_setting("license_lease_code","")
+    set_setting("license_lease_error","")
+    if verified.get("online_required"):
+        _sync_license_lease_once()
+    audit(actor,"license_activated",verified.get("license_id") or "full",f"tier={verified.get('tier')}; customer={verified.get('customer')}; online={verified.get('online_required')}",ip(request))
     return {**license_snapshot(),"support":support_snapshot()}
 
 @app.delete("/api/license")
@@ -441,6 +502,8 @@ def license_remove(request:Request):
     actor=require_local_admin(request)
     require_mutation(request)
     set_setting("license_code","")
+    set_setting("license_lease_code","")
+    set_setting("license_lease_error","")
     audit(actor,"license_removed","license",ip=ip(request))
     return {**license_snapshot(),"support":support_snapshot()}
 
