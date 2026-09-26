@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.11.1-rc1] - 2026-09-26
+
+### Xray endpoint hotfix
+- Fixed the malformed endpoint-validation character class that rejected valid IPv4 addresses and hostnames such as `178.83.45.215`.
+- Replaced ad-hoc endpoint regexes with canonical IPv4/IPv6/IDNA hostname validation shared by Xray, WireGuard, OpenVPN and Xray Tunnel targets.
+- IPv6 endpoints are normalized correctly and bracketed only when serialized into URI/host:port forms.
+
+### Guided Xray safety
+- Guided VLESS now defaults to XHTTP + REALITY instead of public VLESS with `security=none`.
+- Public VLESS/Trojan profiles using `security=none` are rejected with an actionable REALITY/TLS message instead of creating a profile that will not work reliably on the public Internet.
+- REALITY server config now emits the current canonical `target` field instead of legacy `dest`.
+
+### Tests
+- Added IPv4/domain/IPv6 endpoint validation coverage.
+- Added public/private endpoint classification coverage.
+- Added a regression test for the exact public-IP VLESS failure path.
+- Added XHTTP + REALITY schema coverage.
+
+### Release status
+Hotfix release candidate. Real-host Xray creation and client connection UAT is still required before Stable.
+
 ## [0.11.0-rc1] - 2026-09-26
 
 ### Functional UI repair

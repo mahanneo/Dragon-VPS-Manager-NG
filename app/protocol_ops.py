@@ -216,6 +216,50 @@ def _validate_port(port):
         raise ProtocolError("invalid port")
     return port
 
+
+def _validate_endpoint_host(value, label="endpoint"):
+    raw=str(value or "").strip()
+    if not raw or len(raw)>255:
+        raise ProtocolError(f"invalid {label}")
+    if "://" in raw or any(ch.isspace() for ch in raw) or any(ch in raw for ch in "/?#@"):
+        raise ProtocolError(f"invalid {label}; enter only a hostname or IP address, without scheme, path or port")
+    host=raw
+    if host.startswith("[") and host.endswith("]"):
+        host=host[1:-1].strip()
+    try:
+        ip=ipaddress.ip_address(host)
+        return ip.compressed
+    except ValueError:
+        pass
+    if host.endswith("."):
+        host=host[:-1]
+    try:
+        ascii_host=host.encode("idna").decode("ascii")
+    except Exception as exc:
+        raise ProtocolError(f"invalid {label}") from exc
+    if not ascii_host or len(ascii_host)>253:
+        raise ProtocolError(f"invalid {label}")
+    label_re=re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+    if any(not label_re.fullmatch(part) for part in ascii_host.split(".")):
+        raise ProtocolError(f"invalid {label}")
+    return ascii_host.lower()
+
+def _uri_host(host):
+    try:
+        ip=ipaddress.ip_address(host)
+        return f"[{ip.compressed}]" if ip.version==6 else ip.compressed
+    except ValueError:
+        return host
+
+
+def _endpoint_is_private(host):
+    try:
+        ip=ipaddress.ip_address(host)
+        return bool(ip.is_private or ip.is_loopback or ip.is_link_local)
+    except ValueError:
+        lowered=str(host or "").lower()
+        return lowered=="localhost" or lowered.endswith(".local")
+
 def bootstrap_wireguard(port=51820, cidr="10.66.66.1/24", iface="wg0"):
     if not re.fullmatch(r"wg\d{1,2}",iface):
         raise ProtocolError("invalid WireGuard interface name")
@@ -267,8 +311,7 @@ def _wg_used_ips(iface):
 def create_wireguard_peer(name, endpoint, iface="wg0", dns="1.1.1.1"):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
         raise ProtocolError("invalid peer name")
-    if not re.fullmatch(r"[A-Za-z0-9.:[\]-]{1,255}",endpoint or ""):
-        raise ProtocolError("invalid endpoint")
+    endpoint=_validate_endpoint_host(endpoint)
     conf=WG_DIR/f"{iface}.conf"
     if not conf.exists():
         raise ProtocolError("WireGuard server is not bootstrapped")
@@ -301,7 +344,7 @@ def create_wireguard_peer(name, endpoint, iface="wg0", dns="1.1.1.1"):
         f"DNS = {dns}\n\n"
         "[Peer]\n"
         f"PublicKey = {server_public}\n"
-        f"Endpoint = {endpoint}:{p.group(1)}\n"
+        f"Endpoint = {_uri_host(endpoint)}:{p.group(1)}\n"
         "AllowedIPs = 0.0.0.0/0, ::/0\n"
         "PersistentKeepalive = 25\n"
     )
@@ -431,8 +474,7 @@ def bootstrap_openvpn(port=1194, proto="udp"):
 def create_openvpn_client(name, endpoint, port=1194, proto="udp"):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
         raise ProtocolError("invalid client name")
-    if not re.fullmatch(r"[A-Za-z0-9.:[\]-]{1,255}",endpoint or ""):
-        raise ProtocolError("invalid endpoint")
+    endpoint=_validate_endpoint_host(endpoint)
     port=_validate_port(port)
     if proto not in {"udp","tcp"}:
         raise ProtocolError("invalid OpenVPN protocol")
@@ -471,8 +513,7 @@ def list_openvpn_clients():
 def render_openvpn_client(name,endpoint):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
         raise ProtocolError("invalid client name")
-    if not re.fullmatch(r"[A-Za-z0-9.:[\\]-]{1,255}",endpoint or ""):
-        raise ProtocolError("invalid endpoint")
+    endpoint=_validate_endpoint_host(endpoint)
     server_conf=OVPN_DIR/"server/server.conf"
     pki=OVPN_EASYRSA/"pki"
     cert=pki/f"issued/{name}.crt"
@@ -717,7 +758,7 @@ def _build_xray_stream(binary,protocol,transport,security,path_value,server_name
         sid=secrets.token_hex(8)
         stream["realitySettings"]={
             "show":False,
-            "dest":target,
+            "target":target,
             "xver":0,
             "serverNames":[sni],
             "privateKey":private,
@@ -733,8 +774,10 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
     port=_validate_port(port)
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
         raise ProtocolError("invalid client name")
-    if not re.fullmatch(r"[A-Za-z0-9.:[\\]-]{1,255}",endpoint or ""):
-        raise ProtocolError("invalid endpoint")
+    endpoint=_validate_endpoint_host(endpoint)
+    security=(security or "none").lower()
+    if protocol in {"vless","trojan"} and security=="none" and not _endpoint_is_private(endpoint):
+        raise ProtocolError(f"{protocol.upper()} with security=none is not valid for a public endpoint in this guided mode; choose REALITY or TLS")
     binary=_binary()
     if not binary:
         raise ProtocolError("Xray core is not installed")
@@ -849,7 +892,7 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
             pass
         raise
     label=urllib.parse.quote(name,safe="")
-    host=endpoint
+    host=_uri_host(endpoint)
     method=stream.get("method","raw")
     link_type={"raw":"tcp","websocket":"ws","mkcp":"kcp"}.get(method,method)
     q={"type":link_type,"security":security}
@@ -895,8 +938,7 @@ def create_xray_tunnel(listen_port, target_host, target_port, network="tcp,udp",
     network=(network or "tcp,udp").lower()
     if network not in {"tcp","udp","tcp,udp"}:
         raise ProtocolError("network must be tcp, udp or tcp,udp")
-    if not re.fullmatch(r"[A-Za-z0-9.:[\\]-]{1,255}",target_host or ""):
-        raise ProtocolError("invalid target host")
+    target_host=_validate_endpoint_host(target_host,"target host")
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
         raise ProtocolError("invalid tunnel name")
     if _port_in_use(listen_port):
