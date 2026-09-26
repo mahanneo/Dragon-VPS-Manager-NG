@@ -2,7 +2,9 @@ import re
 import shutil
 import socket
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
+from cryptography import x509
 
 NGINX_SITE=Path("/etc/nginx/sites-available/makia-vps-manager")
 DOMAIN_RE=re.compile(r"^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[A-Za-z]{2,63}$")
@@ -34,12 +36,27 @@ def domain_status(domain=None):
         except Exception:
             resolved=[]
     cert_exists=False
+    cert_expires_at=None
+    cert_days_left=None
     if domain:
-        cert_exists=Path(f"/etc/letsencrypt/live/{domain}/fullchain.pem").exists()
+        cert_path=Path(f"/etc/letsencrypt/live/{domain}/fullchain.pem")
+        cert_exists=cert_path.exists()
+        if cert_exists:
+            try:
+                cert=x509.load_pem_x509_certificate(cert_path.read_bytes())
+                expires=getattr(cert,"not_valid_after_utc",None)
+                if expires is None:
+                    expires=cert.not_valid_after.replace(tzinfo=timezone.utc)
+                cert_expires_at=expires.isoformat()
+                cert_days_left=int((expires-datetime.now(timezone.utc)).total_seconds()//86400)
+            except Exception:
+                pass
     return {
         "domain":domain,
         "resolved_ipv4":resolved,
         "certificate":cert_exists,
+        "certificate_expires_at":cert_expires_at,
+        "certificate_days_left":cert_days_left,
         "certbot_installed":bool(shutil.which("certbot")),
         "nginx_site":str(NGINX_SITE),
     }
