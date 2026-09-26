@@ -4,8 +4,18 @@ Modern web-first VPS and access-infrastructure control center for Ubuntu.
 
 **[راهنمای کامل فارسی](README_FA.md)** · **[راهنمای اتصال کاربران](docs/CLIENT-GUIDE-FA.md)**
 
-> **Current release candidate:** `v0.13.1-rc1`  
+> **Current release candidate:** `v0.14.0-rc1`  
 > CI validation is required before merge; a real-host UAT is still required before any Stable designation.
+
+## v0.14 Glass Aurora & OpenVPN domain reliability
+- Glass Aurora is the new default panel experience, with a glass sidebar/topbar, translucent blue-violet surfaces, responsive service cards, live resource rings and a reorganized operational dashboard.
+- Existing installations migrate once to the Glass theme; Midnight, AMOLED and Graphite remain selectable.
+- OpenVPN domain profiles now use explicit IPv4 transports (`udp4` / `tcp4-client`) so an unrelated AAAA record cannot silently divert a profile away from the IPv4 server.
+- OpenVPN exports are regenerated against the current panel domain and current server transport, preserving existing EasyRSA client credentials.
+- Domain Diagnostics checks A/AAAA resolution, whether the A record reaches this VPS, the OpenVPN listener and service state, and warns about CDN/proxy records.
+- Panel HTTPS/Let's Encrypt is not the OpenVPN tunnel certificate: OpenVPN continues to use its own EasyRSA PKI.
+- A proxied Cloudflare/CDN record is not a raw OpenVPN transport. Use a DNS-only A record that resolves directly to the VPS.
+- OpenVPN TCP/443 cannot directly share the same IP:port with Nginx HTTPS/TCP 443; UDP/443 can coexist with HTTPS/TCP 443.
 
 ## v0.13.1 Xray runtime reliability & user guides
 - Xray config mutations preserve access for the actual systemd service user instead of leaving root-only `0600` files behind.
