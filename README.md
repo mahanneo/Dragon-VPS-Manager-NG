@@ -244,7 +244,7 @@ Important:
 - packaging contract
 - real Ubuntu 22.04/24.04 host UAT
 
-See `docs/UAT-0.11.0-RC1.md` and `docs/PARITY-3XUI.md`.
+See `docs/UAT-0.12.0-RC1.md` and `docs/PARITY-3XUI.md`.
 
 ## License
 
