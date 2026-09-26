@@ -451,6 +451,8 @@ function showProvisionSuccess(kind,key,name,packagePassword,loginSecret,result){
 }
 
 async function openProtectedExport(kind,key,name){
+  await ensureLicenseState();
+  if(!hasLicenseFeature('protected_delivery')){switchView('license');return}
   const r=await api('/api/accounts/generate-secret?mode=pin6').catch(()=>({secret:''}));
   modalRoot.innerHTML=[
     '<div class="modal-backdrop"><div class="modal export-modal">',
@@ -937,6 +939,7 @@ async function repairOpenVPNRuntime(){
 
 async function services(renderToken=window.__viewRenderToken){
   title.textContent='Services';setPageContext('SYSTEMD CONTROL');
+  await ensureLicenseState();
   const [d,pstack]=await Promise.all([api('/api/overview'),api('/api/protocols').catch(()=>({}))]);
   if(renderToken!==window.__viewRenderToken||activeView!=='services')return;
   const running=(d.services||[]).filter(x=>x.active).length;
@@ -948,8 +951,11 @@ async function services(renderToken=window.__viewRenderToken){
   const row=s=>{
     const protocolKind=s.name==='xray'?'xray':s.name==='openvpn-server@server'?'openvpn':s.name==='wg-quick@wg0'?'wireguard':'';
     const missing=protocolKind&&installed[s.name]===false;
+    const licensed=!protocolKind||hasLicenseFeature(protocolKind);
     let extra='';
-    if(s.name==='xray'){
+    if(protocolKind&&!licensed){
+      extra='<button class="soft warnish" data-action="nav" data-view="license">◆ Full Access</button>';
+    }else if(s.name==='xray'){
       extra=missing
         ? '<button class="soft" data-action="protocol-setup" data-kind="xray">Install Xray</button>'
         : '<button class="ghost" data-action="xray-diagnostics">Diagnose</button>'+(!s.active?'<button class="soft warnish" data-action="xray-repair">Repair</button>':'');
@@ -960,13 +966,13 @@ async function services(renderToken=window.__viewRenderToken){
     }else if(s.name==='wg-quick@wg0'&&missing){
       extra='<button class="soft" data-action="protocol-setup" data-kind="wireguard">Setup WireGuard</button>';
     }
-    const controls=missing?'':[
+    const controls=(missing||!licensed)?'':[
       '<button class="ghost" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="start">Start</button>',
       '<button class="primary" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="restart">Restart</button>',
       '<button class="danger" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="stop">Stop</button>'
     ].join('');
-    const stateLabel=missing?'Not installed':s.active?'Running':'Attention';
-    const stateClass=missing?'warn':s.active?'ok':'bad';
+    const stateLabel=!licensed?'License locked':missing?'Not installed':s.active?'Running':'Attention';
+    const stateClass=!licensed?'warn':missing?'warn':s.active?'ok':'bad';
     return '<div class="row"><div><i class="status-dot '+(s.active?'ok':'bad')+'"></i><b>'+htmlEsc(s.label)+'</b><div class="muted">'+htmlEsc(s.name)+'</div></div><div class="muted">'+htmlEsc(s.state)+'</div><div><span class="status-chip '+stateClass+'">'+stateLabel+'</span></div><div class="toolbar">'+extra+controls+'</div></div>';
   };
   content.innerHTML=viewIntro('ALLOWLISTED SERVICES','کنترل سرویس‌ها','Start/Stop/Restart فقط برای سرویس‌های نصب‌شده و Allowlist شده نمایش داده می‌شود؛ Xray و OpenVPN Diagnostics علت Failure را از Runtime واقعی بررسی می‌کنند.','<div class="view-intro-stat"><b>'+running+'/'+d.services.length+'</b><span>RUNNING</span></div>')+
@@ -985,6 +991,7 @@ async function security(renderToken=window.__viewRenderToken){
 }
 async function backups(renderToken=window.__viewRenderToken){
   title.textContent='Backups';setPageContext('RECOVERY');
+  await ensureLicenseState();
   const rows=await api('/api/backups');if(renderToken!==window.__viewRenderToken||activeView!=='backups')return;
   const total=rows.reduce((n,b)=>n+Number(b.size||0),0);
   content.innerHTML=viewIntro('RECOVERY POINTS','مرکز بکاپ','Snapshot محلی برای rollback و Portable Migration Bundle رمزگذاری‌شده برای انتقال VPS.','<div class="view-intro-actions"><div class="view-intro-stat"><b>'+rows.length+'</b><span>LOCAL BACKUPS</span></div>'+(hasLicenseFeature('portable_migration')?'<button class="ghost" data-action="portable-backup">Portable Migration</button>':'<button class="ghost" data-action="nav" data-view="license">◆ Portable Migration</button>')+'<button class="primary" data-action="backup-create">＋ Local Backup</button></div>')+
@@ -1006,7 +1013,7 @@ async function auditView(renderToken=window.__viewRenderToken){
   content.innerHTML=viewIntro('AUDIT TRAIL','گزارش رویدادها','عملیات مدیریتی، تغییرات، Exportها و دسترسی‌ها در ردپای قابل بررسی ثبت می‌شوند.','<div class="view-intro-stat"><b>'+rows.length+'</b><span>RECENT</span></div>')+
   '<div class="panel modern-list"><div class="table">'+(rows.length?rows.map(x=>'<div class="row audit-row"><div><b>'+htmlEsc(x.action)+'</b><div class="muted">'+htmlEsc(x.actor)+'</div></div><div class="muted">'+htmlEsc(x.target||'-')+'</div><div class="muted">'+htmlEsc(new Date(x.created_at).toLocaleString())+'</div><div class="muted">'+htmlEsc(x.ip||'-')+'</div></div>').join(''):'<div class="empty">رویدادی ثبت نشده است.</div>')+'</div></div>';
 }
-async function updates(renderToken=window.__viewRenderToken){title.textContent='Update Center';setPageContext('RELEASE MANAGEMENT');content.innerHTML='<div class="empty">در حال بررسی نسخه…</div>';let s;try{s=await api('/api/update/status')}catch(e){s={current:window.MAKIA_VERSION,latest:null,error:e.message}}if(renderToken!==window.__viewRenderToken||activeView!=='updates')return;const available=s.update_available;content.innerHTML=`<div class="panel update-hero"><div><div class="eyebrow">RELEASE CHANNEL · MAIN</div><h2>${available?'نسخه جدید آماده است':'Makia به‌روز است'}</h2><p class="muted">${s.error?'بررسی آنلاین نسخه ناموفق بود: '+s.error:'نسخه نصب‌شده با VERSION مخزن اصلی مقایسه شد.'}</p></div><div class="version-stack"><span>Installed</span><b>v${s.current||window.MAKIA_VERSION}</b><span>Latest</span><b class="${available?'accent':''}">${s.latest?'v'+s.latest:'Unavailable'}</b></div></div><div class="two-col"><div class="panel"><div class="panel-head"><h3>Safe update workflow</h3><span>CLI VERIFIED PATH</span></div><div class="timeline"><div><b>1</b><span>Pre-update backup</span></div><div><b>2</b><span>Download main</span></div><div><b>3</b><span>Dependencies + service files</span></div><div><b>4</b><span>Restart + health check</span></div></div><div class="command-box">sudo makia-upgrade <button class="soft" onclick="copyText('sudo makia-upgrade')">Copy</button></div></div><div class="panel"><div class="panel-head"><h3>Release status</h3><span>${available?'ACTION AVAILABLE':'NO ACTION'}</span></div><div class="quick-grid"><div class="quick-card"><b>${s.current||'-'}</b><span>Current</span></div><div class="quick-card"><b>${s.latest||'-'}</b><span>Latest on GitHub</span></div></div><div class="notice">آپدیت Web-triggered هنوز عمداً فعال نشده تا rollback اتمیک و امضای Release کامل شود؛ فعلاً CLI مسیر قابل بازیابی‌تری است.</div></div></div>`}
+async function updates(renderToken=window.__viewRenderToken){title.textContent='Update Center';setPageContext('RELEASE MANAGEMENT');content.innerHTML='<div class="empty">در حال بررسی نسخه…</div>';let s;try{s=await api('/api/update/status')}catch(e){s={current:window.MAKIA_VERSION,latest:null,error:e.message}}if(renderToken!==window.__viewRenderToken||activeView!=='updates')return;const available=s.update_available;content.innerHTML=`<div class="panel update-hero"><div><div class="eyebrow">RELEASE CHANNEL · MAIN</div><h2>${available?'نسخه جدید آماده است':'Makia به‌روز است'}</h2><p class="muted">${s.error?'بررسی آنلاین نسخه ناموفق بود: '+s.error:'نسخه نصب‌شده با VERSION مخزن اصلی مقایسه شد.'}</p></div><div class="version-stack"><span>Installed</span><b>v${s.current||window.MAKIA_VERSION}</b><span>Latest</span><b class="${available?'accent':''}">${s.latest?'v'+s.latest:'Unavailable'}</b></div></div><div class="two-col"><div class="panel"><div class="panel-head"><h3>Safe update workflow</h3><span>CLI VERIFIED PATH</span></div><div class="timeline"><div><b>1</b><span>Pre-update backup</span></div><div><b>2</b><span>Download main</span></div><div><b>3</b><span>Dependencies + service files</span></div><div><b>4</b><span>Restart + health check</span></div></div><div class="command-box">sudo makia-upgrade <button class="soft" onclick="copyText('sudo makia-upgrade')">Copy</button></div></div><div class="panel"><div class="panel-head"><h3>Release status</h3><span>${available?'ACTION AVAILABLE':'NO ACTION'}</span></div><div class="quick-grid"><div class="quick-card"><b>${s.current||'-'}</b><span>Current</span></div><div class="quick-card"><b>${s.latest||'-'}</b><span>Latest on GitHub</span></div></div><div class="notice">مسیر امن فعلی CLI است. v0.15 از Release Archive خصوصی و Bearer Token از فایل root-only /etc/makia-vps-manager/makia.env هم پشتیبانی می‌کند؛ بنابراین بعد از مهاجرت می‌توان مخزن را Private کرد.</div></div></div>`}
 async function guides(renderToken=window.__viewRenderToken){
   title.textContent='Client Guides';setPageContext('DELIVERY EDUCATION');
   if(renderToken!==window.__viewRenderToken||activeView!=='guides')return;
