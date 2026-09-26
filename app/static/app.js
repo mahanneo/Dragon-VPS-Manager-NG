@@ -29,6 +29,21 @@ function clientGuideUrl(kind){
 }
 function openClientGuide(kind){window.open(clientGuideUrl(kind),'_blank','noopener')}
 function copyClientGuide(kind){copyText(clientGuideUrl(kind));toast('لینک راهنما کپی شد')}
+window.__sessionContext=null;
+async function ensureSessionContext(force=false){
+  if(window.__sessionContext&&!force)return window.__sessionContext;
+  window.__sessionContext=await api('/api/session/context');
+  document.body.dataset.remoteSupport=window.__sessionContext?.remote_support?'1':'0';
+  let banner=document.getElementById('remoteSupportBanner');
+  if(window.__sessionContext?.remote_support){
+    if(!banner){
+      banner=document.createElement('div');banner.id='remoteSupportBanner';banner.className='remote-support-banner';
+      banner.innerHTML='<b>REMOTE SUPPORT SESSION</b><span>دسترسی موقت '+htmlEsc(window.__sessionContext.support_scope||'readonly')+' فعال است و عملیات در Audit ثبت می‌شوند.</span><form method="post" action="/support/logout"><button type="submit">End session</button></form>';
+      document.body.appendChild(banner);
+    }
+  }else if(banner){banner.remove()}
+  return window.__sessionContext;
+}
 window.__licenseState=null;
 async function ensureLicenseState(force=false){
   if(window.__licenseState&&!force)return window.__licenseState;
@@ -1033,7 +1048,12 @@ async function guides(renderToken=window.__viewRenderToken){
 async function licenseSupport(renderToken=window.__viewRenderToken){
   title.textContent='License & Support';setPageContext('ENTITLEMENT & SUPPORT');
   content.innerHTML='<div class="loading-state"><span class="spinner"></span><b>در حال بررسی مجوز…</b></div>';
-  const [state,requests]=await Promise.all([ensureLicenseState(true),api('/api/support/requests').catch(()=>({items:[],support:{}}))]);
+  const [state,requests,session,grants]=await Promise.all([
+    ensureLicenseState(true),
+    api('/api/support/requests').catch(()=>({items:[],support:{}})),
+    ensureSessionContext(true).catch(()=>({remote_support:false})),
+    api('/api/support/grants').catch(()=>({items:[]}))
+  ]);
   if(renderToken!==window.__viewRenderToken||activeView!=='license')return;
   const support=state.support||requests.support||{},expires=state.expires_at?new Date(state.expires_at*1000).toLocaleString():'بدون تاریخ انقضا';
   const featureLabels={xray:'Xray',wireguard:'WireGuard',openvpn:'OpenVPN',protected_delivery:'Protected ZIP',subscriptions:'Subscriptions',backups:'Backups',portable_migration:'Portable Migration',nodes:'Nodes',advanced_services:'Advanced Services',ssh:'SSH',security:'Security',domain:'Domain',updates:'Updates',support:'Support'};
@@ -1048,6 +1068,7 @@ async function licenseSupport(renderToken=window.__viewRenderToken){
     '<section class="license-grid">',
       '<div class="panel"><div class="panel-head"><div><h3>وضعیت License</h3><span>'+(state.valid?'VERIFIED':'COMMUNITY')+'</span></div></div>',
         '<div class="license-facts"><div><span>Tier</span><b>'+htmlEsc(state.tier||'community')+'</b></div><div><span>Customer</span><b>'+htmlEsc(state.customer||'-')+'</b></div><div><span>License ID</span><b>'+htmlEsc(state.license_id||'-')+'</b></div><div><span>Expiry</span><b>'+htmlEsc(expires)+'</b></div></div>',
+        (state.online_required?'<div class="wizard-note"><b>Online entitlement · '+htmlEsc(state.online_status||'pending')+'</b><span>'+(state.lease_expires_at?('Lease تا '+htmlEsc(new Date(state.lease_expires_at*1000).toLocaleString())):'در انتظار Sync')+(state.lease_sync_error?' · '+htmlEsc(state.lease_sync_error):'')+'</span></div><div class="toolbar"><button class="ghost" data-action="license-sync">Sync License</button></div>':''),
         '<div class="chips license-features">'+feats+'</div>',
         (state.error?'<div class="wizard-note danger-note"><b>License error</b><span>'+htmlEsc(state.error)+'</span></div>':''),
       '</div>',
@@ -1057,6 +1078,7 @@ async function licenseSupport(renderToken=window.__viewRenderToken){
         '<div class="toolbar"><button class="primary" data-action="license-activate">Activate</button>'+(state.valid?'<button class="danger" data-action="license-remove">Remove License</button>':'')+'</div>',
       '</div>',
     '</section>',
+    (!session.remote_support?'<section class="panel remote-support-panel"><div class="panel-head"><div><h3>Remote Support موقت</h3><span>CONSENT · ONE-TIME CODE</span></div></div><div class="remote-support-create"><div><p>فقط در زمان نیاز یک کد موقت بساز. کد پس از اولین Login مصرف می‌شود و Session حداکثر تا زمان انتخاب‌شده فعال می‌ماند.</p><div class="form-grid two"><label>مدت<select id="supportGrantMinutes"><option value="15">15 دقیقه</option><option value="30" selected>30 دقیقه</option><option value="60">60 دقیقه</option><option value="120">120 دقیقه</option></select></label><label>Scope<select id="supportGrantScope"><option value="readonly">Read-only</option><option value="operator" selected>Operator</option></select></label></div><button class="primary" data-action="support-grant-create">ساخت کد موقت</button></div><div class="support-grant-list">'+((grants.items||[]).slice(0,5).map(g=>'<div><span>…'+htmlEsc(g.token_last4)+'</span><b>'+htmlEsc(g.scope)+'</b><small>'+htmlEsc(new Date(Number(g.expires_at)*1000).toLocaleString())+'</small>'+(g.active?'<button class="danger" data-action="support-grant-revoke" data-id="'+Number(g.id)+'">Revoke</button>':'<em>Closed</em>')+'</div>').join('')||'<div class="empty compact">کد فعالی وجود ندارد.</div>')+'</div></div></section>':'<section class="wizard-note danger-note"><b>Remote Support Session</b><span>این Login موقت است. تنظیمات هویتی حساس مانند 2FA، API Token و حذف License برای Remote Support مسدود هستند.</span></section>'),
     '<section class="license-grid">',
       '<div class="panel"><div class="panel-head"><div><h3>درخواست دسترسی / پشتیبانی</h3><span>SUPPORT REQUEST</span></div></div>',
         '<div class="form-grid two"><label>Subject<input id="supportSubject" maxlength="160" value="درخواست دسترسی Full"></label><label>Installation ID<input value="'+htmlEsc(state.installation_id)+'" readonly></label></div>',
@@ -1067,6 +1089,21 @@ async function licenseSupport(renderToken=window.__viewRenderToken){
       '<div class="panel"><div class="panel-head"><div><h3>درخواست‌های اخیر</h3><span>LOCAL HISTORY</span></div></div><div class="support-ticket-list">'+(rows||'<div class="empty compact">درخواستی ثبت نشده.</div>')+'</div></div>',
     '</section>'
   ].join('');
+}
+
+async function createRemoteSupportGrant(){
+  const minutes=Number(document.getElementById('supportGrantMinutes')?.value||30),scope=document.getElementById('supportGrantScope')?.value||'operator';
+  try{
+    const r=await api('/api/support/grants',{method:'POST',body:JSON.stringify({minutes,scope})});
+    modalRoot.innerHTML='<div class="modal-backdrop"><div class="modal"><div class="wizard-head"><div><div class="eyebrow">ONE-TIME REMOTE SUPPORT</div><h3>کد موقت آماده است</h3></div><button class="close-btn" data-action="modal-close">×</button></div><div class="support-code-box" id="supportGrantCode">'+htmlEsc(r.code)+'</div><div class="wizard-note"><b>Login URL</b><span id="supportGrantUrl">'+htmlEsc(r.login_url)+'</span></div><div class="wizard-note"><b>Expiry</b><span>'+htmlEsc(new Date(r.expires_at*1000).toLocaleString())+' · '+htmlEsc(r.scope)+'</span></div><div class="wizard-footer"><button class="primary" data-action="copy-target" data-target="supportGrantCode">Copy Code</button><button class="ghost" data-action="copy-target" data-target="supportGrantUrl">Copy URL</button><button class="ghost" data-action="modal-close-refresh" data-view="license">Done</button></div></div></div>';
+  }catch(e){alert('Remote Support: '+e.message)}
+}
+async function revokeRemoteSupportGrant(id){
+  if(!confirm('این دسترسی پشتیبانی فوراً لغو شود؟'))return;
+  try{await api('/api/support/grants/'+Number(id),{method:'DELETE'});toast('Remote Support revoked');await currentView()}catch(e){alert(e.message)}
+}
+async function syncLicenseNow(){
+  try{window.__licenseState=await api('/api/license/sync',{method:'POST'});toast('License sync completed');syncLicenseShell();await currentView()}catch(e){alert('License sync: '+e.message)}
 }
 
 async function activateLicense(){
@@ -1378,6 +1415,9 @@ async function handleMakiaAction(btn){
   if(action==='portable-backup'){openPortableBackup();return}
   if(action==='portable-backup-download'){await downloadPortableBackup();return}
   if(action==='wg-compat-preset'){const values={opWgPort:443,opWgMtu:1280,opWgKeepalive:15,opWgAllowedIps:'0.0.0.0/0',opWgDns:'1.1.1.1'};for(const [id,v] of Object.entries(values)){const el=document.getElementById(id);if(el)el.value=v}toast('Compatibility preset applied; Save to persist');return}
+  if(action==='license-sync'){await syncLicenseNow();return}
+  if(action==='support-grant-create'){await createRemoteSupportGrant();return}
+  if(action==='support-grant-revoke'){await revokeRemoteSupportGrant(Number(btn.dataset.id));return}
   if(action==='license-activate'){await activateLicense();return}
   if(action==='license-remove'){await removeLicense();return}
   if(action==='support-submit'){await submitSupportRequest();return}
@@ -1420,5 +1460,5 @@ window.__viewRenderToken=0;
 function currentView(){const token=++window.__viewRenderToken;return(views[activeView]||dashboard)(token)}
 function switchView(v){activeView=v;setPageContext(v==='dashboard'?'OPERATIONS COCKPIT':v==='access'?'IDENTITY & DELIVERY':v==='guides'?'DELIVERY EDUCATION':'MAKIA CONTROL CENTER');document.querySelectorAll('nav button[data-view]').forEach(x=>x.classList.toggle('active',x.dataset.view===v));return currentView()}
 document.querySelectorAll('nav button[data-view]').forEach(b=>b.addEventListener('click',()=>switchView(b.dataset.view)));
-applyLanguageShell();ensureLicenseState().catch(()=>{});switchView('dashboard');
+applyLanguageShell();ensureSessionContext().catch(()=>{});ensureLicenseState().catch(()=>{});switchView('dashboard');
 if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('/static/sw.js').catch(()=>{}));}
