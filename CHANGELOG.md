@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.1-rc1] - 2026-09-26
+
+### Recovery hotfix
+- Added `makia-reset-admin` for local administrator password recovery without panel access.
+- Added optional `--generate`, `--user` and `--disable-2fa` recovery modes.
+- Admin recovery clears login throttling state and reactivates the selected administrator.
+- Installer/updater now deploy the recovery command; uninstaller removes it.
+- Updater now creates a complete runtime rollback point before replacing application code.
+- Any failed update, command failure after the rollback point, or failed backend health gate automatically restores the previous application/runtime files.
+- Rollback restarts the backend and reports whether the previous runtime recovered successfully.
+
+### Release status
+Recovery release candidate. Host UAT is still required before Stable.
+
 ## [0.9.0-rc1] - 2026-09-26
 
 ### Account and client policy UX
