@@ -102,6 +102,7 @@ def test_wireguard_repair_preserves_keys_and_peers(tmp_path,monkeypatch):
         "AllowedIPs = 10.66.66.2/32\n",
     )
     monkeypatch.setattr(protocol_ops,"WG_DIR",tmp_path)
+    monkeypatch.setattr(protocol_ops,"BACKUP_DIR",tmp_path/"backups")
     monkeypatch.setattr(protocol_ops,"_installed",lambda binary: True)
     monkeypatch.setattr(protocol_ops,"_default_iface",lambda:"eth0")
     monkeypatch.setattr(protocol_ops,"_run",lambda *args,**kwargs:"")
