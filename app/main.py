@@ -899,7 +899,14 @@ def access_share(kind:str,key:str,request:Request):
     share=str(payload.get("share_text") or payload.get("primary_text") or "")
     if not share: raise HTTPException(404,"share content is not available")
     qr=access_ops.make_qr_svg(share)
-    summary=payload.get("summary") or {}
+    summary=dict(payload.get("summary") or {})
+    if kind=="xray":
+        try: xray_row=get_protocol_client(int(key))
+        except Exception: xray_row=None
+        if xray_row and xray_row.get("subscription_id"):
+            sid=xray_row["subscription_id"]
+            summary["subscription_url"]=f"{public_origin(request)}/sub/{sid}?format=base64"
+            summary["client_url"]=f"{public_origin(request)}/client/{sid}"
     subscription=str(summary.get("subscription_url") or "")
     subscription_qr=""
     if subscription:
