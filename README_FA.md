@@ -4,6 +4,27 @@
 
 > وضعیت فعلی پروژه Release Candidate است. قبل از استفاده Production، UAT واقعی روی VPS مقصد انجام شود.
 
+## نسخه v0.16.0-rc1 — Owner Control Center و Remote Support امن
+
+از این نسخه، مدیریت تجاری Makia از یک **Owner Control Center جدا** انجام می‌شود. این سرویس روی VPS مشتری نصب نمی‌شود و Private Key صدور License فقط روی سرور مالک باقی می‌ماند.
+
+قابلیت‌های Owner Control Center:
+- ثبت مشتری و Installation ID
+- صدور Full یا Custom License
+- تمدید بدون نیاز به Paste مجدد Code توسط مشتری
+- Revoke واقعی از طریق Signed Online Lease
+- Inbox مرکزی Ticketها
+- Audit عملیات مالک
+- Password + TOTP برای ورود Owner
+
+برای مشتری، Remote Support نیز فقط با رضایت مدیر محلی فعال می‌شود. مدیر از License & Support یک Code یک‌بارمصرف ۱۵ تا ۱۲۰ دقیقه‌ای می‌سازد و Scope را Read-only یا Operator تعیین می‌کند. هیچ Master Password یا Backdoor دائمی وجود ندارد.
+
+حتی Remote Support Operator اجازه تغییر Password/2FA مدیر، API Token، حذف License، Export Credential یا Portable Backup را ندارد.
+
+راهنماها:
+- [Owner Control Center](docs/OWNER-CONTROL-CENTER-FA.md)
+- [امنیت Remote Support](docs/REMOTE-SUPPORT-SECURITY-FA.md)
+
 ## نسخه v0.14.0-rc1 — Glass Aurora و OpenVPN با دامنه
 
 ظاهر پیش‌فرض پنل به **Glass Aurora** تغییر کرده است: سایدبار و Topbar شیشه‌ای، کارت‌های شفاف آبی/بنفش، Dashboard جدید با وضعیت سرویس‌ها، چهار کارت خلاصه، حلقه‌های CPU/RAM/Disk، نمودار واقعی شبکه و نمایش Responsive. نصب‌های قبلی در اولین اجرای این Release یک‌بار به Glass منتقل می‌شوند و Themeهای قبلی همچنان از Settings قابل انتخاب‌اند.
