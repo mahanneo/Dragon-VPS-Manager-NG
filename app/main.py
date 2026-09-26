@@ -1377,6 +1377,7 @@ def access_entries(request:Request):
 @app.get("/api/access/{kind}/{key}/share")
 def access_share(kind:str,key:str,request:Request):
     require_access_kind(request,kind)
+    require_local_admin(request)
     if kind not in {"ssh","xray","wireguard"}:
         raise HTTPException(404,"share view is not available for this access type")
     if kind=="ssh" and not operator_settings_snapshot()["delivery"]["npv_enabled"]:
@@ -1429,6 +1430,7 @@ def access_qr(kind:str,key:str,request:Request):
 @app.get("/api/access/xray/{key}/subscription-qr.svg")
 def access_subscription_qr(key:str,request:Request):
     require_feature(request,"subscriptions")
+    require_local_admin(request)
     subscription_settings=operator_settings_snapshot()["subscription"]
     if not subscription_settings["enabled"]:
         raise HTTPException(409,"subscription delivery is disabled in Settings")
@@ -1457,6 +1459,7 @@ def access_manifest(kind:str,key:str,request:Request):
 @app.get("/api/access/{kind}/{key}/native")
 def access_native(kind:str,key:str,request:Request):
     require_access_kind(request,kind)
+    require_local_admin(request)
     payload,_=_resolve_access_payload(kind,key,request)
     payload=_current_delivery_payload(kind,key,payload,request)
     filename=payload.get("native_filename") or "makia-access.txt"
@@ -1478,6 +1481,7 @@ def access_native(kind:str,key:str,request:Request):
 
 @app.post("/api/access/{kind}/{key}/package")
 def access_package(kind:str,key:str,payload:AccessPackageRequest,request:Request):
+    require_local_admin(request)
     actor=require_access_kind(request,kind,True)
     assert_license_feature("protected_delivery")
     access,_=_resolve_access_payload(kind,key,request)
@@ -1642,7 +1646,8 @@ def backups(request:Request):
 
 @app.post("/api/backups")
 def backup_create(request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     try: result=system_ops.create_backup(str(DATA_DIR))
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
     audit(actor,"backup_create",result["name"],ip=ip(request))
@@ -1653,6 +1658,7 @@ class PortableBackupRequest(BaseModel):
 
 @app.post("/api/backups/portable")
 def backup_portable(payload:PortableBackupRequest,request:Request):
+    require_local_admin(request)
     actor=require_feature(request,"portable_migration",True)
     try:
         files=system_ops.portable_migration_files(
