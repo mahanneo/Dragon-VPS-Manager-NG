@@ -113,6 +113,8 @@ jobs:
           grep -q 'xray-repair' app/static/app.js
           grep -q 'README_FA.md' README.md
           grep -q 'makia-xray-sync' scripts/update.sh
+          grep -q 'repair_xray_runtime' scripts/update.sh
+          grep -q 'repair_xray_runtime' scripts/restore-portable.py
 
   browser-smoke:
     runs-on: ubuntu-24.04
