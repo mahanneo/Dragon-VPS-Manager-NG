@@ -162,3 +162,19 @@ def protected_zip(files:dict[str,bytes|str],password:str)->bytes:
             raw=data.encode("utf-8") if isinstance(data,str) else bytes(data)
             zf.writestr(filename,raw)
     return buf.getvalue()
+
+
+def verify_protected_zip(blob:bytes,password:str,expected_name:str|None=None)->dict:
+    try:
+        with pyzipper.AESZipFile(io.BytesIO(bytes(blob)),"r") as zf:
+            zf.setpassword(str(password).encode("utf-8"))
+            names=zf.namelist()
+            if not names:
+                raise AccessPackageError("protected package is empty")
+            target=expected_name if expected_name in names else names[0]
+            sample=zf.read(target)
+            return {"ok":True,"files":names,"sample_size":len(sample)}
+    except Exception as exc:
+        if isinstance(exc,AccessPackageError):
+            raise
+        raise AccessPackageError("protected package verification failed") from exc
