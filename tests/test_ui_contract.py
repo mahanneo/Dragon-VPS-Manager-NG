@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -40,3 +41,35 @@ def test_dashboard_uses_live_operational_sources():
     assert "api('/api/access')" in JS
     assert "api('/api/protocols')" in JS
     assert "OPERATIONS COCKPIT" in JS
+
+
+def test_every_literal_data_action_has_dispatch_handler():
+    actions=set(re.findall(r'data-action=["\']([a-z0-9-]+)["\']',JS))
+    handled=set(re.findall(r"action==='([a-z0-9-]+)'",JS))
+    missing=sorted(actions-handled)
+    assert not missing, f"UI data-action without dispatcher handler: {missing}"
+
+
+def test_every_shell_action_has_dispatch_handler():
+    actions=set(re.findall(r'data-shell-action=["\']([a-z0-9-]+)["\']',SHELL))
+    expected={"create-access","command","refresh"}
+    assert actions==expected
+    for action in actions:
+        assert f"a==='{action}'" in JS
+
+
+def test_inline_handler_functions_exist():
+    definitions=set(re.findall(r'(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(',JS))
+    calls=set()
+    for double,single in re.findall(r'onclick=(?:"([^"]*)"|\'([^\']*)\')',JS):
+        body=double or single
+        calls.update(re.findall(r'([A-Za-z_$][\w$]*)\s*\(',body))
+    browser_or_language={"if","confirm","prompt","alert","Number","String","JSON","encodeURIComponent","setTimeout","getElementById"}
+    missing=sorted(calls-definitions-browser_or_language)
+    assert not missing, f"inline handlers call missing functions: {missing}"
+
+
+def test_single_access_owner_in_primary_navigation():
+    assert 'data-view="access"' in SHELL
+    assert 'data-view="accounts"' not in SHELL
+    assert "['SSH Accounts','accounts']" not in JS
