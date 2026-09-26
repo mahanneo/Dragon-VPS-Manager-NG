@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from .config import APP_NAME, VERSION, COOKIE_NAME, ALLOWED_SERVICES, DATA_DIR, SECRET_PATH
-from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client, reset_protocol_traffic, protocol_client_by_subscription, login_rate_state, record_login_failure, clear_login_failures, upsert_access_artifact, list_access_artifacts, get_access_artifact_by_key, delete_access_artifact_by_key, create_support_request, list_support_requests, update_support_request_delivery
+from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client, reset_protocol_traffic, protocol_client_by_subscription, login_rate_state, record_login_failure, clear_login_failures, upsert_access_artifact, list_access_artifacts, get_access_artifact_by_key, delete_access_artifact_by_key, create_support_request, list_support_requests, update_support_request_delivery, create_support_grant, consume_support_grant, support_grant_by_id, list_support_grants, revoke_support_grant
 from .security import verify_password, make_session, read_session, hash_password, make_preauth, read_preauth
 from . import system_ops, protocol_ops, panel_ops, access_ops, license_ops
 
@@ -24,6 +24,7 @@ async def security_headers(request:Request,call_next):
     public_path=(
         request.url.path=="/healthz" or
         request.url.path=="/help/connect" or
+        request.url.path in {"/support/login","/support/logout"} or
         request.url.path.startswith("/static/") or
         request.url.path.startswith("/sub/") or
         request.url.path.startswith("/client/") or
@@ -63,14 +64,42 @@ def startup():
         set_setting("theme","glass")
         set_setting("ui_generation","glass-v1")
 
-def current_user(request:Request): return read_session(request.cookies.get(COOKIE_NAME))
+def current_user(request:Request):
+    actor=read_session(request.cookies.get(COOKIE_NAME))
+    if not actor:
+        return None
+    if actor.startswith("support:"):
+        parts=actor.split(":")
+        if len(parts)!=3:
+            return None
+        try: grant=support_grant_by_id(int(parts[1]))
+        except Exception: grant=None
+        if not grant or not grant.get("active") or grant.get("scope")!=parts[2]:
+            return None
+    return actor
+
+def is_support_actor(actor):
+    return bool(str(actor or "").startswith("support:"))
+
+def support_actor_scope(actor):
+    parts=str(actor or "").split(":")
+    return parts[2] if len(parts)==3 and parts[0]=="support" else ""
+
 def require_user(request:Request):
     user=current_user(request)
     if not user: raise HTTPException(status_code=401,detail="authentication required")
     return user
 
+def require_local_admin(request:Request):
+    actor=require_user(request)
+    if is_support_actor(actor):
+        raise HTTPException(status_code=403,detail="local administrator confirmation required")
+    return actor
+
 def require_mutation(request:Request):
     user=require_user(request)
+    if is_support_actor(user) and support_actor_scope(user)!="operator":
+        raise HTTPException(status_code=403,detail="remote support session is read-only")
     if request.headers.get("x-makia-request")!="1":
         raise HTTPException(status_code=403,detail="invalid management request")
     origin=(request.headers.get("origin") or "").strip()
@@ -300,6 +329,39 @@ def connection_help(request:Request):
     response.headers["X-Content-Type-Options"]="nosniff"
     return response
 
+@app.get("/support/login",response_class=HTMLResponse)
+def support_login_page(request:Request):
+    if current_user(request): return RedirectResponse("/",302)
+    return templates.TemplateResponse("support_login.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"error":None})
+
+@app.post("/support/login")
+def support_login(request:Request,code:str=Form(...)):
+    remote_ip=ip(request) or "unknown"
+    state=login_rate_state("support:"+remote_ip,int(time.time()))
+    if int(state.get("blocked_until") or 0)>int(time.time()):
+        return templates.TemplateResponse("support_login.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"error":"تلاش‌های ناموفق زیاد بوده است؛ کمی بعد دوباره امتحان کنید."},status_code=429)
+    grant=consume_support_grant(code)
+    if not grant:
+        state=record_login_failure("support:"+remote_ip,int(time.time()),max_failures=5,window_seconds=900,block_seconds=900)
+        audit("remote-support","support_login_failed",detail=f"failures={state['failures']}",ip=remote_ip)
+        return templates.TemplateResponse("support_login.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"error":"کد پشتیبانی نامعتبر، استفاده‌شده یا منقضی است."},status_code=401)
+    clear_login_failures("support:"+remote_ip)
+    actor=f"support:{grant['id']}:{grant['scope']}"
+    ttl=max(60,int(grant["expires_at"])-int(time.time()))
+    audit(actor,"support_login_success",str(grant["id"]),f"scope={grant['scope']}",ip=remote_ip)
+    response=RedirectResponse("/",302)
+    secure_cookie=request.headers.get("x-forwarded-proto","").lower()=="https"
+    response.set_cookie(COOKIE_NAME,make_session(actor,ttl),httponly=True,secure=secure_cookie,samesite="strict",max_age=ttl)
+    return response
+
+@app.post("/support/logout")
+def support_logout(request:Request):
+    actor=current_user(request)
+    if actor and is_support_actor(actor): audit(actor,"support_logout",ip=ip(request))
+    response=RedirectResponse("/support/login",302)
+    response.delete_cookie(COOKIE_NAME)
+    return response
+
 @app.get("/login",response_class=HTMLResponse)
 def login_page(request:Request):
     return templates.TemplateResponse("login.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"error":None})
@@ -376,7 +438,8 @@ def license_activate(payload:LicenseActivation,request:Request):
 
 @app.delete("/api/license")
 def license_remove(request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     set_setting("license_code","")
     audit(actor,"license_removed","license",ip=ip(request))
     return {**license_snapshot(),"support":support_snapshot()}
@@ -438,6 +501,40 @@ def support_requests_create(payload:SupportRequestCreate,request:Request):
         "ok":True,"id":local_id,**delivery,
         "request_text":f"Makia Support Request\nInstallation: {body['installation_id']}\nVersion: {VERSION}\nDomain: {body['domain'] or '-'}\nTier: {body['tier']}\nSubject: {body['subject']}\n\n{body['message']}",
         "support":support_snapshot()
+    }
+
+class SupportGrantCreate(BaseModel):
+    minutes:int=Field(default=30,ge=5,le=120)
+    scope:str=Field(default="operator",pattern="^(readonly|operator)$")
+
+@app.get("/api/support/grants")
+def support_grants_get(request:Request):
+    require_local_admin(request)
+    return {"items":list_support_grants(20)}
+
+@app.post("/api/support/grants")
+def support_grants_create(payload:SupportGrantCreate,request:Request):
+    actor=require_local_admin(request)
+    require_mutation(request)
+    grant=create_support_grant(actor,payload.minutes,payload.scope)
+    audit(actor,"support_grant_create",str(grant["id"]),f"scope={grant['scope']}; expires_at={grant['expires_at']}",ip(request))
+    return {**grant,"login_url":f"{public_origin(request)}/support/login"}
+
+@app.delete("/api/support/grants/{grant_id}")
+def support_grants_revoke(grant_id:int,request:Request):
+    actor=require_local_admin(request)
+    require_mutation(request)
+    result=revoke_support_grant(grant_id)
+    audit(actor,"support_grant_revoke",str(grant_id),ip=ip(request))
+    return result
+
+@app.get("/api/session/context")
+def session_context(request:Request):
+    actor=require_user(request)
+    return {
+        "actor":actor,
+        "remote_support":is_support_actor(actor),
+        "support_scope":support_actor_scope(actor),
     }
 
 @app.get("/api/overview")
@@ -1509,7 +1606,8 @@ class PasswordChange(BaseModel):
 
 @app.post("/api/admin/password")
 def change_password(payload:PasswordChange,request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     with connect() as con:
         row=con.execute("SELECT * FROM admins WHERE username=?",(actor,)).fetchone()
         if not row or not verify_password(payload.current_password,row["password_hash"]): raise HTTPException(400,"current password is incorrect")
@@ -1550,12 +1648,13 @@ class APITokenCreate(BaseModel):
 
 @app.get("/api/admin/tokens")
 def admin_tokens(request:Request):
-    require_user(request)
+    require_local_admin(request)
     return list_api_tokens()
 
 @app.post("/api/admin/tokens")
 def admin_token_create(payload:APITokenCreate,request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     allowed={"status:read","accounts:read","protocols:read","nodes:read"}
     scopes=[x for x in payload.scopes if x in allowed]
     if not scopes:
@@ -1566,7 +1665,8 @@ def admin_token_create(payload:APITokenCreate,request:Request):
 
 @app.post("/api/admin/tokens/{token_id}/revoke")
 def admin_token_revoke(token_id:int,request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     revoke_api_token(token_id)
     audit(actor,"api_token_revoke",str(token_id),ip=ip(request))
     return {"ok":True}
@@ -1776,13 +1876,14 @@ def certificate_issue(payload:CertificateIssue,request:Request):
 
 @app.get("/api/admin/2fa/status")
 def twofa_status(request:Request):
-    actor=require_user(request)
+    actor=require_local_admin(request)
     state=get_admin_2fa(actor) or {}
     return {"enabled":bool(state.get("totp_enabled")),"configured":bool(state.get("totp_secret"))}
 
 @app.post("/api/admin/2fa/setup")
 def twofa_setup(request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     secret=pyotp.random_base32()
     set_admin_totp_secret(actor,secret)
     uri=pyotp.TOTP(secret).provisioning_uri(name=actor,issuer_name="Makia VPS Manager")
@@ -1797,7 +1898,8 @@ class TwoFACode(BaseModel):
 
 @app.post("/api/admin/2fa/enable")
 def twofa_enable(payload:TwoFACode,request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     state=get_admin_2fa(actor)
     if not state or not state.get("totp_secret") or not pyotp.TOTP(state["totp_secret"]).verify(payload.code.strip(),valid_window=1):
         raise HTTPException(400,"invalid authenticator code")
@@ -1811,7 +1913,8 @@ class TwoFADisable(BaseModel):
 
 @app.post("/api/admin/2fa/disable")
 def twofa_disable(payload:TwoFADisable,request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     with connect() as con:
         row=con.execute("SELECT password_hash FROM admins WHERE username=?",(actor,)).fetchone()
     state=get_admin_2fa(actor)
