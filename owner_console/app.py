@@ -1,11 +1,12 @@
 import hmac, os, re, time
+import pyotp
 from pathlib import Path
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from .config import COOKIE_NAME, ADMIN_PASSWORD_HASH, INGEST_TOKEN, PUBLIC_URL, PRIVATE_KEY_PATH
+from .config import COOKIE_NAME, ADMIN_PASSWORD_HASH, INGEST_TOKEN, PUBLIC_URL, PRIVATE_KEY_PATH, TOTP_SECRET
 from .security import make_session, valid_session, verify_password
 from . import db, license_service
 
@@ -21,6 +22,8 @@ def startup():
         raise RuntimeError("MAKIA_OWNER_PRIVATE_KEY_PATH does not exist")
     if not ADMIN_PASSWORD_HASH:
         raise RuntimeError("MAKIA_OWNER_ADMIN_PASSWORD_HASH is required")
+    if not TOTP_SECRET:
+        raise RuntimeError("MAKIA_OWNER_TOTP_SECRET is required")
 
 @app.middleware("http")
 async def security_headers(request:Request,call_next):
@@ -36,6 +39,25 @@ async def security_headers(request:Request,call_next):
     return response
 
 def client_ip(request):return request.client.host if request.client else ""
+
+_LOGIN_STATE={}
+
+def _login_allowed(ip):
+    now=int(time.time())
+    state=_LOGIN_STATE.get(ip,{"fails":[],"blocked_until":0})
+    if int(state.get("blocked_until") or 0)>now:return False
+    state["fails"]=[x for x in state.get("fails",[]) if now-x<900]
+    _LOGIN_STATE[ip]=state
+    return True
+
+def _login_fail(ip):
+    now=int(time.time());state=_LOGIN_STATE.get(ip,{"fails":[],"blocked_until":0})
+    state["fails"]=[x for x in state.get("fails",[]) if now-x<900]+[now]
+    if len(state["fails"])>=5:state["blocked_until"]=now+900
+    _LOGIN_STATE[ip]=state
+
+def _login_clear(ip):_LOGIN_STATE.pop(ip,None)
+
 
 def require_owner(request):
     if not valid_session(request.cookies.get(COOKIE_NAME)):
@@ -56,11 +78,18 @@ def login_page(request:Request):
     return templates.TemplateResponse("login.html",{"request":request,"error":None})
 
 @app.post("/login")
-def login(request:Request,password:str=Form(...)):
-    if not verify_password(password,ADMIN_PASSWORD_HASH):
-        db.audit("login_failed",ip=client_ip(request))
-        return templates.TemplateResponse("login.html",{"request":request,"error":"رمز Owner صحیح نیست."},status_code=401)
-    db.audit("login_success",ip=client_ip(request))
+def login(request:Request,password:str=Form(...),code:str=Form(...)):
+    remote=client_ip(request)
+    if not _login_allowed(remote):
+        return templates.TemplateResponse("login.html",{"request":request,"error":"تلاش‌های ناموفق زیاد بوده است؛ ۱۵ دقیقه بعد دوباره امتحان کنید."},status_code=429)
+    valid_password=verify_password(password,ADMIN_PASSWORD_HASH)
+    valid_totp=pyotp.TOTP(TOTP_SECRET).verify(str(code or "").strip(),valid_window=1)
+    if not (valid_password and valid_totp):
+        _login_fail(remote)
+        db.audit("login_failed",detail="password_or_totp",ip=remote)
+        return templates.TemplateResponse("login.html",{"request":request,"error":"رمز Owner یا کد TOTP صحیح نیست."},status_code=401)
+    _login_clear(remote)
+    db.audit("login_success",ip=remote)
     r=RedirectResponse("/",302)
     secure=request.headers.get("x-forwarded-proto","").lower()=="https"
     r.set_cookie(COOKIE_NAME,make_session(),httponly=True,secure=secure,samesite="strict",max_age=43200)
