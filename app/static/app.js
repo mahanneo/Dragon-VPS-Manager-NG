@@ -889,6 +889,11 @@ async function handleMakiaAction(btn){
   if(action==='account-edit'){const u=dataDec(btn.dataset.user),row=accountCache.find(x=>x.username===u);if(row)editAccount(row);return}
   if(action==='account-disconnect'){await accountAction(dataDec(btn.dataset.user),'disconnect');return}
   if(action==='account-delete'){await accountAction(dataDec(btn.dataset.user),'delete');return}
+  if(action==='session-disconnect'){await disconnectSession(dataDec(btn.dataset.tty),dataDec(btn.dataset.user));return}
+  if(action==='node-create'){await createNode();return}
+  if(action==='node-revoke'){await revokeNode(Number(btn.dataset.id));return}
+  if(action==='service-action'){await svc(dataDec(btn.dataset.service),btn.dataset.serviceAction);return}
+  if(action==='backup-create'){await makeBackup();return}
   if(action==='refresh'){await currentView();return}
 }
 
