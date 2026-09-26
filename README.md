@@ -4,8 +4,19 @@ Modern web-first VPS and access-infrastructure control center for Ubuntu.
 
 **[راهنمای کامل فارسی](README_FA.md)** · **[راهنمای اتصال کاربران](docs/CLIENT-GUIDE-FA.md)**
 
-> **Current release candidate:** `v0.14.0-rc1`  
+> **Current release candidate:** `v0.16.0-rc1`  
 > CI validation is required before merge; a real-host UAT is still required before any Stable designation.
+
+## v0.16 Owner Control Center & consent-based Remote Support
+- A separate Owner Control Center manages customers, installations, signed licenses, renewals, revocations, support tickets and owner audit history.
+- Commercial licenses use signed online leases: revocation is enforced on sync, while temporary outages use a bounded offline grace period.
+- Renewals are delivered automatically as a higher signed license revision; the customer does not need to paste a new code.
+- Offline licenses remain available for owner/self-hosted installations.
+- Customer admins can create a one-time Remote Support grant (15–120 minutes, Read-only or Operator). There is no master password or permanent backdoor.
+- Sensitive identity and export operations stay local-admin-only even during an Operator support session.
+- Owner Control Center is deployed separately and keeps the Ed25519 private signing key outside the customer package and outside GitHub.
+- Persian deployment guide: `docs/OWNER-CONTROL-CENTER-FA.md`.
+- Remote Support threat model: `docs/REMOTE-SUPPORT-SECURITY-FA.md`.
 
 ## v0.14 Glass Aurora & OpenVPN domain reliability
 - Glass Aurora is the new default panel experience, with a glass sidebar/topbar, translucent blue-violet surfaces, responsive service cards, live resource rings and a reorganized operational dashboard.

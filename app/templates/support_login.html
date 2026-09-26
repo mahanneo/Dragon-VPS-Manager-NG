@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#071b34">
+  <title>Remote Support · Makia</title>
+  <link rel="stylesheet" href="/static/app.css?v={{version}}">
+</head>
+<body class="login-body" data-theme="glass">
+  <div class="login-orb one"></div><div class="login-orb two"></div>
+  <main class="login-shell">
+    <section class="login-card">
+      <div class="client-brand"><div class="brand-mark">M</div><div><b>MAKIA</b><span>REMOTE SUPPORT</span></div></div>
+      <div class="eyebrow">CONSENT-BASED ACCESS</div>
+      <h1>ورود پشتیبانی موقت</h1>
+      <p class="muted">این مسیر فقط با کد یک‌بارمصرفی که مدیر همین VPS از داخل پنل ساخته باشد فعال می‌شود. کد پس از اولین ورود مصرف می‌شود و Session در زمان تعیین‌شده منقضی خواهد شد.</p>
+      {% if error %}<div class="wizard-note danger-note"><b>ورود ناموفق</b><span>{{error}}</span></div>{% endif %}
+      <form method="post" action="/support/login" class="login-form">
+        <label>Support Code<input name="code" autocomplete="one-time-code" placeholder="SUP-XXXX-XXXX-XXXX-XXXX" required></label>
+        <button class="primary-btn" type="submit">ورود موقت</button>
+      </form>
+      <div class="wizard-note"><b>امنیت</b><span>هیچ Master Password یا Backdoor دائمی در Makia وجود ندارد. دسترسی Read-only یا Operator را مدیر محلی تعیین می‌کند و همه عملیات Audit می‌شوند.</span></div>
+      <div class="login-meta"><span>v{{version}}</span><a href="/login">ورود مدیر محلی</a></div>
+    </section>
+  </main>
+</body>
+</html>

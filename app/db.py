@@ -149,6 +149,18 @@ def init_db():
           updated_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_support_requests_created_at ON support_requests(created_at);
+        CREATE TABLE IF NOT EXISTS support_grants (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          token_hash TEXT UNIQUE NOT NULL,
+          token_last4 TEXT NOT NULL,
+          scope TEXT NOT NULL DEFAULT 'operator',
+          expires_at INTEGER NOT NULL,
+          used_at INTEGER NOT NULL DEFAULT 0,
+          revoked_at INTEGER NOT NULL DEFAULT 0,
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_support_grants_expires_at ON support_grants(expires_at);
         ''')
         # Migration-safe columns for future profile growth.
         _add_column(con, "account_profiles", "plan TEXT NOT NULL DEFAULT ''")
@@ -548,3 +560,66 @@ def delete_access_artifact(artifact_id):
 def delete_access_artifact_by_key(kind,external_key):
     with connect() as con:
         con.execute("DELETE FROM access_artifacts WHERE kind=? AND external_key=?",(str(kind),str(external_key)))
+
+
+def create_support_grant(created_by,minutes=30,scope="operator"):
+    scope=str(scope or "operator").strip().lower()
+    if scope not in {"readonly","operator"}:
+        raise ValueError("invalid support scope")
+    minutes=max(5,min(int(minutes or 30),120))
+    alphabet="ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    raw="SUP-"+"-".join("".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(4))
+    token_hash=_token_hash(raw)
+    expires_at=int(datetime.now(timezone.utc).timestamp())+minutes*60
+    with connect() as con:
+        con.execute("UPDATE support_grants SET revoked_at=? WHERE revoked_at=0 AND expires_at>?",(int(datetime.now(timezone.utc).timestamp()),int(datetime.now(timezone.utc).timestamp())))
+        cur=con.execute(
+            "INSERT INTO support_grants(token_hash,token_last4,scope,expires_at,used_at,revoked_at,created_by,created_at) VALUES(?,?,?,?,0,0,?,?)",
+            (token_hash,raw[-4:],scope,expires_at,str(created_by),now())
+        )
+        grant_id=int(cur.lastrowid)
+    return {"id":grant_id,"code":raw,"scope":scope,"expires_at":expires_at}
+
+def consume_support_grant(code):
+    token_hash=_token_hash(str(code or "").strip().upper())
+    now_ts=int(datetime.now(timezone.utc).timestamp())
+    with connect() as con:
+        row=con.execute("SELECT * FROM support_grants WHERE token_hash=?",(token_hash,)).fetchone()
+        if not row:
+            return None
+        item=dict(row)
+        if int(item.get("revoked_at") or 0)>0 or int(item.get("expires_at") or 0)<=now_ts or int(item.get("used_at") or 0)>0:
+            return None
+        con.execute("UPDATE support_grants SET used_at=? WHERE id=?",(now_ts,int(item["id"])))
+        item["used_at"]=now_ts
+        return item
+
+def support_grant_by_id(grant_id):
+    now_ts=int(datetime.now(timezone.utc).timestamp())
+    with connect() as con:
+        row=con.execute("SELECT * FROM support_grants WHERE id=?",(int(grant_id),)).fetchone()
+        if not row:
+            return None
+        item=dict(row)
+        item["active"]=bool(int(item.get("revoked_at") or 0)==0 and int(item.get("expires_at") or 0)>now_ts and int(item.get("used_at") or 0)>0)
+        return item
+
+def list_support_grants(limit=20):
+    now_ts=int(datetime.now(timezone.utc).timestamp())
+    with connect() as con:
+        rows=con.execute(
+            "SELECT id,token_last4,scope,expires_at,used_at,revoked_at,created_by,created_at FROM support_grants ORDER BY id DESC LIMIT ?",
+            (max(1,min(int(limit),100)),)
+        ).fetchall()
+        out=[]
+        for row in rows:
+            item=dict(row)
+            item["active"]=bool(int(item.get("revoked_at") or 0)==0 and int(item.get("expires_at") or 0)>now_ts)
+            out.append(item)
+        return out
+
+def revoke_support_grant(grant_id):
+    now_ts=int(datetime.now(timezone.utc).timestamp())
+    with connect() as con:
+        con.execute("UPDATE support_grants SET revoked_at=? WHERE id=?",(now_ts,int(grant_id)))
+    return {"ok":True,"id":int(grant_id)}

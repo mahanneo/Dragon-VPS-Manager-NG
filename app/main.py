@@ -1,6 +1,6 @@
 from pathlib import Path
 from datetime import date, datetime, timedelta
-import time, io, base64, secrets, string, urllib.request, urllib.parse, json, os, stat, re, ipaddress
+import time, io, base64, secrets, string, urllib.request, urllib.parse, json, os, stat, re, ipaddress, threading
 import pyotp, qrcode
 import qrcode.image.svg
 from fastapi import FastAPI, Request, Form, HTTPException
@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from .config import APP_NAME, VERSION, COOKIE_NAME, ALLOWED_SERVICES, DATA_DIR, SECRET_PATH
-from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client, reset_protocol_traffic, protocol_client_by_subscription, login_rate_state, record_login_failure, clear_login_failures, upsert_access_artifact, list_access_artifacts, get_access_artifact_by_key, delete_access_artifact_by_key, create_support_request, list_support_requests, update_support_request_delivery
+from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client, reset_protocol_traffic, protocol_client_by_subscription, login_rate_state, record_login_failure, clear_login_failures, upsert_access_artifact, list_access_artifacts, get_access_artifact_by_key, delete_access_artifact_by_key, create_support_request, list_support_requests, update_support_request_delivery, create_support_grant, consume_support_grant, support_grant_by_id, list_support_grants, revoke_support_grant
 from .security import verify_password, make_session, read_session, hash_password, make_preauth, read_preauth
 from . import system_ops, protocol_ops, panel_ops, access_ops, license_ops
 
@@ -24,12 +24,23 @@ async def security_headers(request:Request,call_next):
     public_path=(
         request.url.path=="/healthz" or
         request.url.path=="/help/connect" or
+        request.url.path in {"/support/login","/support/logout"} or
         request.url.path.startswith("/static/") or
         request.url.path.startswith("/sub/") or
         request.url.path.startswith("/client/") or
         request.url.path=="/api/node/heartbeat"
     )
-    if allowed_raw and not public_path:
+    support_override=False
+    raw_actor=read_session(request.cookies.get(COOKIE_NAME))
+    if raw_actor and raw_actor.startswith("support:"):
+        parts=raw_actor.split(":")
+        if len(parts)==3:
+            try:
+                grant=support_grant_by_id(int(parts[1]))
+                support_override=bool(grant and grant.get("active") and grant.get("scope")==parts[2])
+            except Exception:
+                support_override=False
+    if allowed_raw and not public_path and not support_override:
         try:
             client_ip=ipaddress.ip_address((request.client.host if request.client else "").strip())
             networks=[ipaddress.ip_network(x.strip(),strict=False) for x in allowed_raw.split(",") if x.strip()]
@@ -56,21 +67,108 @@ async def security_headers(request:Request,call_next):
         response.headers.setdefault("Strict-Transport-Security","max-age=31536000; includeSubDomains")
     return response
 
+_LICENSE_SYNC_STARTED=False
+
+def _sync_license_lease_once():
+    code=(get_setting("license_code","") or "").strip()
+    if not code:
+        return {"required":False}
+    try:
+        local=license_ops.verify_license(code)
+    except license_ops.LicenseError as exc:
+        set_setting("license_lease_error",str(exc))
+        return {"required":False,"error":str(exc)}
+    if not local.get("online_required"):
+        set_setting("license_lease_code","")
+        set_setting("license_lease_error","")
+        return {"required":False}
+    try:
+        result=license_ops.fetch_online_lease(code)
+        lease_code=result.get("lease_code") or ""
+        if lease_code:
+            set_setting("license_lease_code",lease_code)
+        replacement=result.get("replacement_license_code") or ""
+        if replacement and replacement!=code:
+            verified=license_ops.verify_license(replacement)
+            if verified["installation_id"]==local["installation_id"] and verified["license_id"]==local["license_id"]:
+                set_setting("license_code",replacement)
+                code=replacement
+        set_setting("license_lease_checked_at",int(time.time()))
+        set_setting("license_lease_error","")
+        return result
+    except Exception as exc:
+        set_setting("license_lease_checked_at",int(time.time()))
+        set_setting("license_lease_error",str(exc)[:500])
+        return {"required":True,"error":str(exc)}
+
+def _license_sync_loop():
+    while True:
+        try: _sync_license_lease_once()
+        except Exception: pass
+        time.sleep(900)
+
 @app.on_event("startup")
 def startup():
+    global _LICENSE_SYNC_STARTED
     init_db()
     if get_setting("ui_generation","")!="glass-v1":
         set_setting("theme","glass")
         set_setting("ui_generation","glass-v1")
+    if not _LICENSE_SYNC_STARTED and os.getenv("MAKIA_DISABLE_LICENSE_SYNC","0")!="1":
+        threading.Thread(target=_license_sync_loop,name="makia-license-sync",daemon=True).start()
+        _LICENSE_SYNC_STARTED=True
 
-def current_user(request:Request): return read_session(request.cookies.get(COOKIE_NAME))
+def current_user(request:Request):
+    actor=read_session(request.cookies.get(COOKIE_NAME))
+    if not actor:
+        return None
+    if actor.startswith("support:"):
+        parts=actor.split(":")
+        if len(parts)!=3:
+            return None
+        try: grant=support_grant_by_id(int(parts[1]))
+        except Exception: grant=None
+        if not grant or not grant.get("active") or grant.get("scope")!=parts[2]:
+            return None
+    return actor
+
+def is_support_actor(actor):
+    return bool(str(actor or "").startswith("support:"))
+
+def support_actor_scope(actor):
+    parts=str(actor or "").split(":")
+    return parts[2] if len(parts)==3 and parts[0]=="support" else ""
+
 def require_user(request:Request):
     user=current_user(request)
     if not user: raise HTTPException(status_code=401,detail="authentication required")
     return user
 
+def require_local_admin(request:Request):
+    actor=require_user(request)
+    if is_support_actor(actor):
+        raise HTTPException(status_code=403,detail="local administrator confirmation required")
+    return actor
+
+def _support_operator_mutation_allowed(request:Request)->bool:
+    if request.method.upper()!="POST":
+        return False
+    path=request.url.path
+    if re.fullmatch(r"/api/services/[^/]+/(start|stop|restart)",path):
+        return True
+    return path in {
+        "/api/protocols/xray/repair",
+        "/api/protocols/openvpn/repair",
+        "/api/support/requests",
+    }
+
 def require_mutation(request:Request):
     user=require_user(request)
+    if is_support_actor(user):
+        if support_actor_scope(user)!="operator":
+            raise HTTPException(status_code=403,detail="remote support session is read-only")
+        if not _support_operator_mutation_allowed(request):
+            raise HTTPException(status_code=403,detail="remote support operator is limited to approved runtime repair actions")
     if request.headers.get("x-makia-request")!="1":
         raise HTTPException(status_code=403,detail="invalid management request")
     origin=(request.headers.get("origin") or "").strip()
@@ -85,7 +183,13 @@ def require_mutation(request:Request):
     return user
 
 def license_snapshot():
-    return license_ops.license_status(get_setting("license_code",""))
+    state=license_ops.license_status(
+        get_setting("license_code",""),
+        get_setting("license_lease_code",""),
+    )
+    state["lease_last_checked_at"]=int(get_setting("license_lease_checked_at",0) or 0)
+    state["lease_sync_error"]=get_setting("license_lease_error","") or ""
+    return state
 
 def license_feature_enabled(feature:str)->bool:
     return str(feature or "").lower() in set(license_snapshot().get("features") or [])
@@ -121,10 +225,12 @@ def require_access_kind(request:Request,kind:str,mutation:bool=False):
 def support_snapshot():
     username=(os.getenv("MAKIA_SUPPORT_TELEGRAM") or "").strip().lstrip("@")
     webhook=(os.getenv("MAKIA_SUPPORT_WEBHOOK_URL") or "").strip()
+    webhook_token=(os.getenv("MAKIA_SUPPORT_WEBHOOK_TOKEN") or "").strip()
     return {
         "telegram_username":username,
         "telegram_url":f"https://t.me/{username}" if username else "",
         "webhook_enabled":bool(webhook),
+        "control_plane_connected":bool(webhook and webhook_token),
         "admin_network_restricted":bool((os.getenv("MAKIA_ADMIN_ALLOWED_CIDRS") or "").strip()),
     }
 
@@ -300,6 +406,39 @@ def connection_help(request:Request):
     response.headers["X-Content-Type-Options"]="nosniff"
     return response
 
+@app.get("/support/login",response_class=HTMLResponse)
+def support_login_page(request:Request):
+    if current_user(request): return RedirectResponse("/",302)
+    return templates.TemplateResponse("support_login.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"error":None})
+
+@app.post("/support/login")
+def support_login(request:Request,code:str=Form(...)):
+    remote_ip=ip(request) or "unknown"
+    state=login_rate_state("support:"+remote_ip,int(time.time()))
+    if int(state.get("blocked_until") or 0)>int(time.time()):
+        return templates.TemplateResponse("support_login.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"error":"تلاش‌های ناموفق زیاد بوده است؛ کمی بعد دوباره امتحان کنید."},status_code=429)
+    grant=consume_support_grant(code)
+    if not grant:
+        state=record_login_failure("support:"+remote_ip,int(time.time()),max_failures=5,window_seconds=900,block_seconds=900)
+        audit("remote-support","support_login_failed",detail=f"failures={state['failures']}",ip=remote_ip)
+        return templates.TemplateResponse("support_login.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"error":"کد پشتیبانی نامعتبر، استفاده‌شده یا منقضی است."},status_code=401)
+    clear_login_failures("support:"+remote_ip)
+    actor=f"support:{grant['id']}:{grant['scope']}"
+    ttl=max(60,int(grant["expires_at"])-int(time.time()))
+    audit(actor,"support_login_success",str(grant["id"]),f"scope={grant['scope']}",ip=remote_ip)
+    response=RedirectResponse("/",302)
+    secure_cookie=request.headers.get("x-forwarded-proto","").lower()=="https"
+    response.set_cookie(COOKIE_NAME,make_session(actor,ttl),httponly=True,secure=secure_cookie,samesite="strict",max_age=ttl)
+    return response
+
+@app.post("/support/logout")
+def support_logout(request:Request):
+    actor=current_user(request)
+    if actor and is_support_actor(actor): audit(actor,"support_logout",ip=ip(request))
+    response=RedirectResponse("/support/login",302)
+    response.delete_cookie(COOKIE_NAME)
+    return response
+
 @app.get("/login",response_class=HTMLResponse)
 def login_page(request:Request):
     return templates.TemplateResponse("login.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"error":None})
@@ -362,22 +501,38 @@ def license_status_api(request:Request):
     require_user(request)
     return {**license_snapshot(),"support":support_snapshot()}
 
+@app.post("/api/license/sync")
+def license_sync(request:Request):
+    actor=require_local_admin(request)
+    require_mutation(request)
+    result=_sync_license_lease_once()
+    audit(actor,"license_sync","license",str(result.get("lease",{}).get("status") or result.get("error") or "offline")[:200],ip(request))
+    return {**license_snapshot(),"support":support_snapshot()}
+
 @app.post("/api/license/activate")
 def license_activate(payload:LicenseActivation,request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     try:
         verified=license_ops.verify_license(payload.code)
     except license_ops.LicenseError as exc:
         audit(actor,"license_activation_failed","license",str(exc),ip(request))
         raise HTTPException(400,str(exc))
     set_setting("license_code",payload.code.strip())
-    audit(actor,"license_activated",verified.get("license_id") or "full",f"tier={verified.get('tier')}; customer={verified.get('customer')}",ip(request))
+    set_setting("license_lease_code","")
+    set_setting("license_lease_error","")
+    if verified.get("online_required"):
+        _sync_license_lease_once()
+    audit(actor,"license_activated",verified.get("license_id") or "full",f"tier={verified.get('tier')}; customer={verified.get('customer')}; online={verified.get('online_required')}",ip(request))
     return {**license_snapshot(),"support":support_snapshot()}
 
 @app.delete("/api/license")
 def license_remove(request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     set_setting("license_code","")
+    set_setting("license_lease_code","")
+    set_setting("license_lease_error","")
     audit(actor,"license_removed","license",ip=ip(request))
     return {**license_snapshot(),"support":support_snapshot()}
 
@@ -392,10 +547,14 @@ def _deliver_support_request(payload:dict):
     parsed=urllib.parse.urlparse(url)
     if parsed.scheme!="https" or not parsed.netloc:
         return {"delivered":False,"status":"invalid_webhook","remote_ticket_id":""}
+    webhook_token=(os.getenv("MAKIA_SUPPORT_WEBHOOK_TOKEN") or "").strip()
+    headers={"Content-Type":"application/json","User-Agent":f"Makia/{VERSION}"}
+    if webhook_token:
+        headers["Authorization"]="Bearer "+webhook_token
     req=urllib.request.Request(
         url,
         data=json.dumps(payload,ensure_ascii=False,separators=(",",":")).encode("utf-8"),
-        headers={"Content-Type":"application/json","User-Agent":f"Makia/{VERSION}"},
+        headers=headers,
         method="POST"
     )
     try:
@@ -438,6 +597,40 @@ def support_requests_create(payload:SupportRequestCreate,request:Request):
         "ok":True,"id":local_id,**delivery,
         "request_text":f"Makia Support Request\nInstallation: {body['installation_id']}\nVersion: {VERSION}\nDomain: {body['domain'] or '-'}\nTier: {body['tier']}\nSubject: {body['subject']}\n\n{body['message']}",
         "support":support_snapshot()
+    }
+
+class SupportGrantCreate(BaseModel):
+    minutes:int=Field(default=30,ge=5,le=120)
+    scope:str=Field(default="operator",pattern="^(readonly|operator)$")
+
+@app.get("/api/support/grants")
+def support_grants_get(request:Request):
+    require_local_admin(request)
+    return {"items":list_support_grants(20)}
+
+@app.post("/api/support/grants")
+def support_grants_create(payload:SupportGrantCreate,request:Request):
+    actor=require_local_admin(request)
+    require_mutation(request)
+    grant=create_support_grant(actor,payload.minutes,payload.scope)
+    audit(actor,"support_grant_create",str(grant["id"]),f"scope={grant['scope']}; expires_at={grant['expires_at']}",ip(request))
+    return {**grant,"login_url":f"{public_origin(request)}/support/login"}
+
+@app.delete("/api/support/grants/{grant_id}")
+def support_grants_revoke(grant_id:int,request:Request):
+    actor=require_local_admin(request)
+    require_mutation(request)
+    result=revoke_support_grant(grant_id)
+    audit(actor,"support_grant_revoke",str(grant_id),ip=ip(request))
+    return result
+
+@app.get("/api/session/context")
+def session_context(request:Request):
+    actor=require_user(request)
+    return {
+        "actor":actor,
+        "remote_support":is_support_actor(actor),
+        "support_scope":support_actor_scope(actor),
     }
 
 @app.get("/api/overview")
@@ -1201,6 +1394,7 @@ def access_entries(request:Request):
 @app.get("/api/access/{kind}/{key}/share")
 def access_share(kind:str,key:str,request:Request):
     require_access_kind(request,kind)
+    require_local_admin(request)
     if kind not in {"ssh","xray","wireguard"}:
         raise HTTPException(404,"share view is not available for this access type")
     if kind=="ssh" and not operator_settings_snapshot()["delivery"]["npv_enabled"]:
@@ -1253,6 +1447,7 @@ def access_qr(kind:str,key:str,request:Request):
 @app.get("/api/access/xray/{key}/subscription-qr.svg")
 def access_subscription_qr(key:str,request:Request):
     require_feature(request,"subscriptions")
+    require_local_admin(request)
     subscription_settings=operator_settings_snapshot()["subscription"]
     if not subscription_settings["enabled"]:
         raise HTTPException(409,"subscription delivery is disabled in Settings")
@@ -1281,6 +1476,7 @@ def access_manifest(kind:str,key:str,request:Request):
 @app.get("/api/access/{kind}/{key}/native")
 def access_native(kind:str,key:str,request:Request):
     require_access_kind(request,kind)
+    require_local_admin(request)
     payload,_=_resolve_access_payload(kind,key,request)
     payload=_current_delivery_payload(kind,key,payload,request)
     filename=payload.get("native_filename") or "makia-access.txt"
@@ -1302,6 +1498,7 @@ def access_native(kind:str,key:str,request:Request):
 
 @app.post("/api/access/{kind}/{key}/package")
 def access_package(kind:str,key:str,payload:AccessPackageRequest,request:Request):
+    require_local_admin(request)
     actor=require_access_kind(request,kind,True)
     assert_license_feature("protected_delivery")
     access,_=_resolve_access_payload(kind,key,request)
@@ -1466,7 +1663,8 @@ def backups(request:Request):
 
 @app.post("/api/backups")
 def backup_create(request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     try: result=system_ops.create_backup(str(DATA_DIR))
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
     audit(actor,"backup_create",result["name"],ip=ip(request))
@@ -1477,6 +1675,7 @@ class PortableBackupRequest(BaseModel):
 
 @app.post("/api/backups/portable")
 def backup_portable(payload:PortableBackupRequest,request:Request):
+    require_local_admin(request)
     actor=require_feature(request,"portable_migration",True)
     try:
         files=system_ops.portable_migration_files(
@@ -1509,7 +1708,8 @@ class PasswordChange(BaseModel):
 
 @app.post("/api/admin/password")
 def change_password(payload:PasswordChange,request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     with connect() as con:
         row=con.execute("SELECT * FROM admins WHERE username=?",(actor,)).fetchone()
         if not row or not verify_password(payload.current_password,row["password_hash"]): raise HTTPException(400,"current password is incorrect")
@@ -1550,12 +1750,13 @@ class APITokenCreate(BaseModel):
 
 @app.get("/api/admin/tokens")
 def admin_tokens(request:Request):
-    require_user(request)
+    require_local_admin(request)
     return list_api_tokens()
 
 @app.post("/api/admin/tokens")
 def admin_token_create(payload:APITokenCreate,request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     allowed={"status:read","accounts:read","protocols:read","nodes:read"}
     scopes=[x for x in payload.scopes if x in allowed]
     if not scopes:
@@ -1566,7 +1767,8 @@ def admin_token_create(payload:APITokenCreate,request:Request):
 
 @app.post("/api/admin/tokens/{token_id}/revoke")
 def admin_token_revoke(token_id:int,request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     revoke_api_token(token_id)
     audit(actor,"api_token_revoke",str(token_id),ip=ip(request))
     return {"ok":True}
@@ -1776,13 +1978,14 @@ def certificate_issue(payload:CertificateIssue,request:Request):
 
 @app.get("/api/admin/2fa/status")
 def twofa_status(request:Request):
-    actor=require_user(request)
+    actor=require_local_admin(request)
     state=get_admin_2fa(actor) or {}
     return {"enabled":bool(state.get("totp_enabled")),"configured":bool(state.get("totp_secret"))}
 
 @app.post("/api/admin/2fa/setup")
 def twofa_setup(request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     secret=pyotp.random_base32()
     set_admin_totp_secret(actor,secret)
     uri=pyotp.TOTP(secret).provisioning_uri(name=actor,issuer_name="Makia VPS Manager")
@@ -1797,7 +2000,8 @@ class TwoFACode(BaseModel):
 
 @app.post("/api/admin/2fa/enable")
 def twofa_enable(payload:TwoFACode,request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     state=get_admin_2fa(actor)
     if not state or not state.get("totp_secret") or not pyotp.TOTP(state["totp_secret"]).verify(payload.code.strip(),valid_window=1):
         raise HTTPException(400,"invalid authenticator code")
@@ -1811,7 +2015,8 @@ class TwoFADisable(BaseModel):
 
 @app.post("/api/admin/2fa/disable")
 def twofa_disable(payload:TwoFADisable,request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     with connect() as con:
         row=con.execute("SELECT password_hash FROM admins WHERE username=?",(actor,)).fetchone()
     state=get_admin_2fa(actor)
