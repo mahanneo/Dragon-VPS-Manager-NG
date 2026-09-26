@@ -1060,15 +1060,15 @@ def endpoint_connectivity_matrix(endpoint):
     try: result["ssh"]=ssh_endpoint_diagnostics(endpoint)
     except Exception as exc: result["ssh"]={"ok":False,"warnings":[str(exc)]}
     try:
-        if (WG_DIR/"wg0.conf").exists() or _installed("wg"):
+        if (WG_DIR/"wg0.conf").exists():
             result["wireguard"]=wireguard_diagnostics("wg0",endpoint)
     except Exception as exc: result["wireguard"]={"ok":False,"warnings":[str(exc)]}
     try:
-        if (OVPN_DIR/"server/server.conf").exists() or _installed("openvpn"):
+        if (OVPN_DIR/"server/server.conf").exists():
             result["openvpn"]=openvpn_endpoint_diagnostics(endpoint)
     except Exception as exc: result["openvpn"]={"ok":False,"warnings":[str(exc)]}
     try:
-        if _binary():
+        if _binary() and _config_path():
             result["xray"]=xray_endpoint_diagnostics(endpoint)
     except Exception as exc: result["xray"]={"ok":False,"warnings":[str(exc)]}
     checked=[x for x in [result["ssh"],result["wireguard"],result["openvpn"],result["xray"]] if isinstance(x,dict)]
