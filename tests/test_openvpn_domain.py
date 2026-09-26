@@ -25,15 +25,22 @@ def test_render_openvpn_domain_profile_is_ipv4_safe(tmp_path,monkeypatch):
     ovpn,easy=_write_openvpn_fixture(tmp_path,"udp")
     monkeypatch.setattr(protocol_ops,"OVPN_DIR",ovpn)
     monkeypatch.setattr(protocol_ops,"OVPN_EASYRSA",easy)
+    monkeypatch.setattr(protocol_ops,"_openvpn_remote_block",lambda endpoint,port:(
+        "remote vpn.example.com 1194\nremote 203.0.113.10 1194\n","203.0.113.10",True
+    ))
     result=protocol_ops.render_openvpn_client("client01","vpn.example.com")
     config=result["config"]
     assert "proto udp4\n" in config
     assert "remote vpn.example.com 1194\n" in config
-    assert "resolv-retry infinite" in config
+    assert "remote 203.0.113.10 1194\n" in config
+    assert "resolv-retry 5" in config
+    assert "server-poll-timeout 8" in config
     assert "auth-nocache" in config
     assert "remote-cert-tls server" in config
     assert "verify-x509-name server name" in config
     assert result["endpoint"]=="vpn.example.com"
+    assert result["fallback_ipv4"]=="203.0.113.10"
+    assert result["hybrid_endpoint"] is True
     assert result["proto"]=="udp"
 
 
@@ -41,6 +48,9 @@ def test_render_openvpn_tcp_domain_profile_uses_tcp4_client(tmp_path,monkeypatch
     ovpn,easy=_write_openvpn_fixture(tmp_path,"tcp-server")
     monkeypatch.setattr(protocol_ops,"OVPN_DIR",ovpn)
     monkeypatch.setattr(protocol_ops,"OVPN_EASYRSA",easy)
+    monkeypatch.setattr(protocol_ops,"_openvpn_remote_block",lambda endpoint,port:(
+        "remote vpn.example.com 1194\nremote 203.0.113.10 1194\n","203.0.113.10",True
+    ))
     result=protocol_ops.render_openvpn_client("client01","vpn.example.com")
     assert "proto tcp4-client\n" in result["config"]
     assert result["proto"]=="tcp"
@@ -62,6 +72,8 @@ def test_openvpn_domain_diagnostics_matches_vps_ipv4(monkeypatch,tmp_path):
     assert result["ok"] is True
     assert result["resolved_ipv4"]==["203.0.113.10"]
     assert result["dns_matches_server"] is True
+    assert result["hybrid_available"] is True
+    assert result["hybrid_fallback_ipv4"]=="203.0.113.10"
     assert result["warnings"]==[]
 
 
@@ -116,3 +128,24 @@ def test_openvpn_runtime_repair_normalizes_ipv4(tmp_path,monkeypatch):
     assert "local 0.0.0.0" in text
     assert Path(result["backup"]).exists()
     assert result["runtime"]["listener"] is True
+
+
+def test_openvpn_remote_block_domain_first_then_matching_vps_ip(monkeypatch):
+    monkeypatch.setattr(protocol_ops,"openvpn_endpoint_diagnostics",lambda endpoint:{
+        "resolved_ipv4":["203.0.113.10"],
+        "local_ipv4":["10.8.0.1","203.0.113.10"],
+    })
+    block,fallback,hybrid=protocol_ops._openvpn_remote_block("vpn.example.com",1194)
+    assert block.splitlines()==[
+        "remote vpn.example.com 1194",
+        "remote 203.0.113.10 1194",
+    ]
+    assert fallback=="203.0.113.10"
+    assert hybrid is True
+
+
+def test_openvpn_remote_block_ip_stays_single_endpoint():
+    block,fallback,hybrid=protocol_ops._openvpn_remote_block("203.0.113.10",1194)
+    assert block=="remote 203.0.113.10 1194\n"
+    assert fallback==""
+    assert hybrid is False
