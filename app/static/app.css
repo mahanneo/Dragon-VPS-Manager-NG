@@ -438,3 +438,18 @@ body[data-theme="glass"] .modal-backdrop{background:rgba(1,7,16,.62);backdrop-fi
 html[dir="ltr"] body[data-theme="glass"] .sidebar{left:12px;right:auto}
 html[dir="ltr"] body[data-theme="glass"] .workspace{margin-left:294px;margin-right:0}
 @media(max-width:780px){html[dir="ltr"] body[data-theme="glass"] .sidebar{left:8px;right:auto}html[dir="ltr"] body[data-theme="glass"] .workspace{margin-left:92px;margin-right:0}}
+
+body[data-theme="glass"].login-body{
+  background:
+    radial-gradient(circle at 20% 18%,rgba(48,166,255,.32),transparent 27%),
+    radial-gradient(circle at 80% 20%,rgba(135,78,255,.30),transparent 29%),
+    linear-gradient(150deg,#041126,#091a34 54%,#090d20);
+}
+body[data-theme="glass"] .login-card{
+  border-color:rgba(89,201,255,.38);
+  background:linear-gradient(145deg,rgba(10,42,70,.60),rgba(20,22,54,.56));
+  backdrop-filter:blur(30px) saturate(155%);-webkit-backdrop-filter:blur(30px) saturate(155%);
+  box-shadow:0 35px 110px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.09),0 0 60px rgba(64,164,255,.12)
+}
+body[data-theme="glass"] .login-card input{background:rgba(1,14,29,.58)!important;border-color:rgba(103,192,244,.30)!important}
+body[data-theme="glass"] .primary-btn{background:linear-gradient(105deg,#48e2ff,#648cff 57%,#a56dff);box-shadow:0 12px 34px rgba(64,174,255,.28)}
