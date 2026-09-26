@@ -810,6 +810,37 @@ def bootstrap_openvpn(port=1194, proto="udp"):
     firewall=_ufw_allow_if_active(port,"udp" if server_proto.startswith("udp") else "tcp","OpenVPN")
     return {"server":"server","port":port,"proto":"udp" if server_proto.startswith("udp") else "tcp","server_proto":server_proto,"firewall":firewall}
 
+def repair_openvpn_ipv4_runtime():
+    server_conf=OVPN_DIR/"server/server.conf"
+    if not server_conf.exists():
+        raise ProtocolError("OpenVPN server config is not available")
+    original=server_conf.read_text(encoding="utf-8",errors="ignore")
+    updated=original
+    proto_m=re.search(r"(?m)^proto\s+(\S+)\s*$",updated)
+    current=(proto_m.group(1) if proto_m else "udp").lower()
+    target="tcp4-server" if current.startswith("tcp") else "udp4"
+    if proto_m:
+        updated=re.sub(r"(?m)^proto\s+\S+\s*$",f"proto {target}",updated,count=1)
+    else:
+        updated=f"proto {target}\n"+updated
+    if not re.search(r"(?m)^local\s+",updated):
+        updated=re.sub(r"(?m)^(proto\s+\S+\s*)$",r"\1\nlocal 0.0.0.0",updated,count=1)
+    backup=server_conf.with_name(f"server.conf.makia-{int(time.time())}.bak")
+    shutil.copy2(server_conf,backup)
+    if updated!=original:
+        server_conf.write_text(updated,encoding="utf-8")
+    try:
+        _run(["systemctl","restart","openvpn-server@server"],timeout=30)
+        if not _active("openvpn-server@server"):
+            raise ProtocolError("OpenVPN did not become active after IPv4 normalization")
+    except Exception:
+        shutil.copy2(backup,server_conf)
+        try: _run(["systemctl","restart","openvpn-server@server"],timeout=30)
+        except Exception: pass
+        raise
+    runtime=_openvpn_server_runtime()
+    return {"ok":True,"backup":str(backup),"runtime":runtime}
+
 def create_openvpn_client(name, endpoint, port=1194, proto="udp"):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
         raise ProtocolError("invalid client name")
