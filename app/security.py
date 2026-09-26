@@ -23,8 +23,10 @@ def verify_password(password: str, encoded: str) -> bool:
     except Exception:
         return False
 
-def make_session(username: str) -> str:
-    payload = {"u": username, "exp": int(time.time()) + SESSION_TTL_SECONDS, "n": secrets.token_hex(8)}
+def make_session(username: str, ttl_seconds: int | None = None) -> str:
+    ttl=int(ttl_seconds or SESSION_TTL_SECONDS)
+    ttl=max(300,min(ttl,60*60*24*30))
+    payload = {"u": username, "exp": int(time.time()) + ttl, "n": secrets.token_hex(8)}
     raw = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
     sig = hmac.new(ensure_secret(), raw.encode(), hashlib.sha256).hexdigest()
     return f"{raw}.{sig}"
