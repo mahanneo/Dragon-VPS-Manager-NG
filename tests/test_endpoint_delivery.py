@@ -13,8 +13,8 @@ def _direct_dns(monkeypatch,host="vpn.example.test",ip="203.0.113.10"):
 def test_ssh_delivery_accepts_domain_and_ipv4():
     domain=access_ops.ssh_payload("vpn.example.test","user001","123456")
     direct=access_ops.ssh_payload("203.0.113.10","user001","123456")
-    assert "HostName vpn.example.test" in domain["primary_text"]
-    assert "HostName 203.0.113.10" in direct["primary_text"]
+    assert b"HostName vpn.example.test" in domain["files"]["user001-ssh-config.txt"]
+    assert b"HostName 203.0.113.10" in direct["files"]["user001-ssh-config.txt"]
     assert domain["summary"]["host"]=="vpn.example.test"
     assert direct["summary"]["host"]=="203.0.113.10"
 
