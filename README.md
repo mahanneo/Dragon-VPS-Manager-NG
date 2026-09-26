@@ -2,7 +2,7 @@
 
 Modern web-first VPS and access-infrastructure control center for Ubuntu.
 
-> **Current release candidate:** `v0.9.0-rc1`  
+> **Current release candidate:** `v0.9.1-rc1`  
 > CI-validated, but **not yet production-certified**. A real-host UAT is required before a `1.0.0 Stable` label.
 
 ## What Makia manages today
@@ -215,3 +215,33 @@ See `docs/UAT-0.9.0-RC1.md` and `docs/PARITY-3XUI.md`.
 ## License
 
 GPL-3.0-or-later. Third-party source is only incorporated where its license and attribution requirements are compatible.
+
+## Recovery
+
+If Nginx shows `502 Bad Gateway`, check the backend first:
+
+```bash
+sudo systemctl status makia-vps-manager --no-pager -l
+sudo journalctl -u makia-vps-manager -n 120 --no-pager
+curl -v http://127.0.0.1:8787/healthz
+```
+
+Reset a forgotten administrator password locally on the VPS:
+
+```bash
+sudo makia-reset-admin --generate
+```
+
+Or choose the password interactively:
+
+```bash
+sudo makia-reset-admin
+```
+
+If the TOTP secret is also unavailable:
+
+```bash
+sudo makia-reset-admin --generate --disable-2fa
+```
+
+From v0.9.1-rc1 onward, the updater creates a runtime rollback point before replacing the application and automatically restores the previous runtime when the new backend fails its health check.
