@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.12.0-rc2] - 2026-09-26
+
+### Domain-first continuity
+- Keeps Panel Domain / Nginx / Let's Encrypt as the canonical public edge and uses that domain as the default endpoint for newly provisioned clients.
+- Added migration-readiness checks for Xray, SSH, WireGuard and OpenVPN profiles so IP-bound profiles are not mislabeled as seamless-migration ready.
+- Domain-based profiles can move to a replacement VPS by preserving credentials/keys and repointing DNS; active sessions still reconnect rather than being physically transferred.
+
+### WireGuard network tuning
+- Added persisted WireGuard UDP port, MTU and PersistentKeepalive defaults.
+- Added a restricted-network preset: UDP 443, MTU 1280 and Keepalive 25.
+- WireGuard diagnostics now report UDP truth, configured port/MTU and latest handshake state.
+- TCP and UDP port occupancy are checked independently, so Nginx HTTPS on TCP 443 no longer falsely blocks WireGuard/Hysteria2 on UDP 443.
+- WireGuard is never represented as TCP; networks that fully block WireGuard/UDP require another transport such as Xray TLS/REALITY.
+
+### Xray flexibility
+- Guided REALITY support now includes Trojan in addition to VLESS, with RAW/gRPC/XHTTP compatibility gates.
+- Full Xray Config Studio remains unrestricted to presets: any JSON accepted by the installed Xray Core can be validated and applied with backup/restart/rollback.
+- CI real-core smoke now validates both VLESS + XHTTP + REALITY and Trojan + XHTTP + REALITY against Xray 26.3.27.
+
+### Portable backup and restore
+- Added encrypted `makia-portable-v1` recovery bundles containing Makia data/secret plus available Xray, WireGuard, OpenVPN, Nginx, Let's Encrypt and Fail2ban state.
+- Portable DB capture uses SQLite online backup and dereferences certificate symlinks before encryption.
+- Added `makia-restore` with validation-only mode, explicit `--apply`, destination safety backup, protocol-engine installation, Xray config validation, SSH-user recreation and post-restore host smoke.
+- Added path/link traversal protection for portable archives.
+
+### Verification
+- Added WireGuard MTU/Keepalive/domain-config tests and TCP-vs-UDP port-family regression coverage.
+- Added encrypted portable-backup round-trip/wrong-password tests.
+- Browser smoke now covers the WireGuard restricted preset and real portable-bundle download.
+- Added dedicated `docs/UAT-0.12.0-RC2.md` for two-VPS restore and DNS-cutover validation.
+
+### Release status
+Release candidate only. Stable requires real VPS-to-VPS restore, DNS cutover, external Xray tests, and real-client WireGuard tests across multiple networks.
+
+
 ## [0.12.0-rc1] - 2026-09-26
 
 ### Xray QR and subscriptions
