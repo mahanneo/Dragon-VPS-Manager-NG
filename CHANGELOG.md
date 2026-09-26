@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.11.0-rc1] - 2026-09-26
+
+### Functional UI repair
+- Fixed the Protected ZIP/Native/Manage/Revoke button class of failures caused by dynamic JSON strings being injected into quoted inline `onclick` attributes.
+- Access actions now use encoded `data-*` attributes plus one delegated action dispatcher.
+- Native and protected downloads now use fetch/blob handling with visible backend errors and no-store/nosniff response headers.
+- Protected ZIP is verified in memory on the server before being returned.
+
+### UX redesign
+- Rebuilt sidebar/application shell.
+- Replaced the old Access Center table with a responsive Access Directory and protocol launch cards.
+- Added a four-step provisioning wizard: Protocol, Identity, Policy, Review/Delivery.
+- Rebuilt Overview as an Operations Cockpit using live server, access, protocol, service and session data.
+- Added modern success/delivery, protocol setup and diagnostics modals.
+
+### Verification
+- Added `/api/diagnostics/self-test` for DB, secret mode, artifact decryption, AES ZIP and protocol/service checks.
+- Added `/api/access/{kind}/{key}/manifest`.
+- Added endpoint-level AES ZIP tests including wrong-password behavior.
+- Added static UI action contracts.
+- Added Playwright browser smoke that logs in and proves Protected ZIP + Native downloads through the real browser UI.
+- Added `makia-uat-smoke` and comprehensive `docs/UAT-0.11.0-RC1.md`.
+
+### Release status
+Release candidate. Automated CI is necessary but Stable still requires the real-host/client UAT matrix.
+
 ## [0.10.0-rc1] - 2026-09-26
 
 ### Unified Access Center
