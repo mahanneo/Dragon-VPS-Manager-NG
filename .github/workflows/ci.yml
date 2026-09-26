@@ -56,6 +56,15 @@ jobs:
           test -f app/static/manifest.webmanifest
           test -f app/static/sw.js
           test -f docs/UAT-0.8.0-RC2.md
+          test -f docs/UAT-0.11.0-RC1.md
+          test -f scripts/uat-smoke.sh
+          grep -q 'makia-uat-smoke' scripts/install.sh
+          grep -q 'makia-uat-smoke' scripts/update.sh
+      - name: UAT v0.11 contract
+        run: |
+          grep -q 'Protected ZIP' docs/UAT-0.11.0-RC1.md
+          grep -q 'Browser Smoke' docs/UAT-0.11.0-RC1.md
+          grep -q 'data-action="protected-export"' app/static/app.js
 
   browser-smoke:
     runs-on: ubuntu-24.04
