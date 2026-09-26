@@ -59,6 +59,13 @@ jobs:
           test -f docs/UAT-0.11.0-RC1.md
           test -f docs/UAT-0.12.0-RC1.md
           test -f docs/UAT-0.13.0-RC1.md
+          test -f docs/UAT-0.13.1-RC1.md
+          test -f README_FA.md
+          test -f docs/CLIENT-GUIDE-FA.md
+          test -f app/templates/client_guide.html
+          test -f scripts/xray-cert-sync.sh
+          grep -q 'makia-xray-sync' scripts/install.sh
+          grep -q 'makia-xray-sync' scripts/update.sh
           test -f scripts/uat-smoke.sh
           test -f scripts/restore-portable.py
           grep -q 'makia-restore-portable' scripts/install.sh
@@ -90,6 +97,22 @@ jobs:
           grep -q 'Preserving active Makia Nginx/Certbot configuration' scripts/update.sh
           grep -q '_xray_firewall_rules' app/protocol_ops.py
           grep -q '_ufw_allow_if_active' app/protocol_ops.py
+
+      - name: UAT v0.13.1 contract
+        run: |
+          grep -q 'Xray Runtime / Client Guide UAT' docs/UAT-0.13.1-RC1.md
+          grep -q '/api/protocols/xray/diagnostics' app/main.py
+          grep -q '/api/protocols/xray/repair' app/main.py
+          grep -q '_xray_test_config_as_service' app/protocol_ops.py
+          grep -q '_xray_secure_runtime_file' app/protocol_ops.py
+          grep -q 'XRAY_VALIDATED_VERSION="v26.3.27"' app/protocol_ops.py
+          grep -q '/help/connect' app/main.py
+          grep -q 'connection-guide-fa.txt' app/access_ops.py
+          grep -q "data-view=\"guides\"" app/templates/dashboard.html
+          grep -q 'xray-diagnostics' app/static/app.js
+          grep -q 'xray-repair' app/static/app.js
+          grep -q 'README_FA.md' README.md
+          grep -q 'makia-xray-sync' scripts/update.sh
 
   browser-smoke:
     runs-on: ubuntu-24.04
@@ -128,5 +151,5 @@ jobs:
           unzip -q /tmp/xray.zip -d /tmp/xray-runtime
           chmod +x /tmp/xray-runtime/xray
           /tmp/xray-runtime/xray version
-      - name: Validate generated VLESS XHTTP REALITY config
+      - name: Validate guided Xray protocol matrix
         run: python tests/xray_core_smoke.py
