@@ -9,7 +9,7 @@ bad(){ printf '✗ %s\n' "$1"; FAIL=1; }
 
 [[ -d "$APP" ]] || { bad "Makia runtime missing at $APP"; exit 1; }
 
-printf '\nMakia v0.11 host smoke\n'
+printf '\nMakia v0.13 host smoke\n'
 printf '%s\n' '---------------------'
 
 VERSION="$(cat "$APP/VERSION" 2>/dev/null || true)"
