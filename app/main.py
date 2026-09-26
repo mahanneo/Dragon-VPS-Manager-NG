@@ -1412,7 +1412,9 @@ def operator_settings_put(payload:OperatorSettings,request:Request):
         wg_allowed_ips=protocol_ops._validate_wireguard_allowed_ips(payload.wireguard_allowed_ips)
         protocol_ops._validate_wireguard_mtu(payload.wireguard_mtu)
         protocol_ops._validate_keepalive(payload.wireguard_keepalive)
-        ipaddress.ip_interface(payload.wireguard_cidr)
+        wg_cidr=ipaddress.ip_interface(payload.wireguard_cidr)
+        if wg_cidr.version!=4:
+            raise ValueError("WireGuard tunnel CIDR must be IPv4 in this release")
     except Exception as exc:
         raise HTTPException(400,str(exc))
     values={
