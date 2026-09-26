@@ -154,6 +154,16 @@ def main():
             page.locator("#opProfilePrefix").wait_for()
             assert page.locator("#opProfilePrefix").input_value()=="BrowserMakia"
 
+            page.locator('[data-action="settings-tab"][data-tab="vpn"]').click()
+            page.locator("#opWgPort").wait_for()
+            page.locator('[data-action="wg-restricted-preset"]').click()
+            assert page.locator("#opWgPort").input_value()=="443"
+            assert page.locator("#opWgMtu").input_value()=="1280"
+            assert page.locator("#opWgKeepalive").input_value()=="25"
+            page.locator('[data-action="settings-operator-save"]').click()
+            page.locator("#opWgPort").wait_for()
+            assert page.locator("#opWgPort").input_value()=="443"
+
             page.locator('[data-action="settings-tab"][data-tab="subscription"]').click()
             page.locator("#opSubscriptionFormat").wait_for()
             page.locator("#opSubscriptionFormat").select_option("raw")
@@ -165,6 +175,18 @@ def main():
                 page.locator(f'[data-action="settings-tab"][data-tab="{tab}"]').click()
                 page.wait_for_timeout(180)
                 assert page.locator(".settings-content-v2").inner_text().strip(), f"settings tab {tab} empty"
+
+            page.locator('[data-action="settings-tab"][data-tab="recovery"]').click()
+            page.locator('[data-action="portable-backup"]').wait_for()
+            page.once("dialog",lambda dialog: dialog.accept("BrowserBackupPass123"))
+            with page.expect_download() as portable:
+                page.locator('[data-action="portable-backup"]').click()
+            portable_path=Path("/tmp/makia-browser-portable.zip")
+            portable.value.save_as(str(portable_path))
+            with pyzipper.AESZipFile(portable_path,"r") as zf:
+                zf.setpassword(b"BrowserBackupPass123")
+                assert "manifest.json" in zf.namelist()
+                assert "makia-portable.tar.gz" in zf.namelist()
 
             for view in ["dashboard","access"]:
                 nav=page.locator(f'aside.sidebar nav button[data-view="{view}"]')
