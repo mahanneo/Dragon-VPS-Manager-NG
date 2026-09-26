@@ -249,6 +249,35 @@ def main():
                 page.wait_for_timeout(450)
                 assert page.locator("#content").inner_text().strip(), f"{view} rendered empty content"
 
+            # Community regression: removing the signed license must immediately
+            # leave SSH management available while premium engines become locked
+            # in both the UI and backend.
+            status=page.evaluate("""async () => {
+              const r=await fetch('/api/license',{method:'DELETE',headers:{'X-Makia-Request':'1'}});
+              return {status:r.status,body:await r.json()};
+            }""")
+            assert status["status"]==200
+            assert status["body"]["tier"]=="community"
+            page.reload(wait_until="networkidle")
+            page.locator(".license-tier-chip.community").wait_for()
+            page.locator('aside.sidebar button[data-view="access"]').click()
+            page.locator(".protocol-launch-grid").wait_for()
+            assert page.locator(".launch-card.license-locked").count()==3
+            ssh_card=page.locator(".launch-card.ssh")
+            assert ssh_card.locator('[data-action="wizard-open"]').count()==1
+            assert "Full Access" in page.locator(".launch-card.xray").inner_text()
+            page.locator('aside.sidebar button[data-view="protocols"]').click()
+            page.locator(".license-lock-panel").wait_for()
+            assert "FULL ACCESS REQUIRED" in page.locator(".license-lock-panel").inner_text()
+            gate=page.evaluate("""async () => {
+              const r=await fetch('/api/protocols/openvpn/diagnostics?endpoint=127.0.0.1',{
+                headers:{'X-Makia-Request':'1'}
+              });
+              return {status:r.status,body:await r.json()};
+            }""")
+            assert gate["status"]==403
+            assert gate["body"]["detail"]["code"]=="license_required"
+
             assert not page_errors, "JavaScript page errors: "+repr(page_errors)
             browser.close()
         print(f"browser smoke PASS; client_id={client_id}")
