@@ -172,6 +172,45 @@ def npvt_ssh_link(host,username,password,port=22,remarks=None,dns_mode="UDP",udp
     raw=json.dumps(profile,ensure_ascii=False,separators=(",",":")).encode("utf-8")
     return "npvt-ssh://"+base64.b64encode(raw).decode("ascii")
 
+def client_guide_text(kind,protocol=""):
+    kind=str(kind or "").lower()
+    protocol=str(protocol or "").upper()
+    common=(
+        "راهنمای اتصال Makia\n"
+        "====================\n"
+        "این فایل فقط راهنمای استفاده است. Credential را در گروه یا کانال عمومی ارسال نکنید.\n\n"
+    )
+    if kind=="xray":
+        return common+(
+            f"نوع پروفایل: {protocol or 'XRAY'}\n"
+            "1) روش ساده: QR مستقیم را با v2rayNG / Hiddify / NekoBox یا کلاینت سازگار اسکن کنید.\n"
+            "2) یا Share Link را کپی و Import from Clipboard را انتخاب کنید.\n"
+            "3) اگر Subscription URL دارید، آن را در بخش Subscription برنامه اضافه و Refresh کنید.\n"
+            "4) UUID/Password/SNI/Public Key/Short ID/Port را بدون هماهنگی تغییر ندهید.\n"
+            "5) اگر وصل نشد، Wi-Fi و Mobile Data را جداگانه تست و متن خطا را برای مدیر ارسال کنید.\n"
+        )
+    if kind=="wireguard":
+        return common+(
+            "WireGuard\n"
+            "1) موبایل: برنامه رسمی WireGuard > + > Create from QR code یا Import from file.\n"
+            "2) Windows/macOS: Import tunnel(s) from file و فایل .conf را انتخاب کنید.\n"
+            "3) Endpoint/Port/MTU/DNS را بدون هماهنگی تغییر ندهید.\n"
+        )
+    if kind=="openvpn":
+        return common+(
+            "OpenVPN\n"
+            "1) OpenVPN Connect را باز کنید.\n"
+            "2) Upload File / Import Profile را انتخاب کنید.\n"
+            "3) فایل .ovpn را Import و سپس Connect کنید.\n"
+            "4) فایل OVPN شامل اطلاعات اختصاصی همان کاربر است.\n"
+        )
+    return common+(
+        "SSH / NPV Tunnel\n"
+        "1) برای NPV Tunnel / NapsternetV سازگار، لینک npvt-ssh:// را Import from Clipboard کنید یا QR را اسکن کنید.\n"
+        "2) برای SSH معمولی از Server, Port, Username و Password داخل credentials.txt استفاده کنید.\n"
+        "3) OpenSSH رمز عبور را داخل config ذخیره نمی‌کند.\n"
+    )
+
 def ssh_payload(host,username,password,port=22,npv_options=None):
     host=str(host or "").strip()
     username=str(username or "").strip()
@@ -214,6 +253,7 @@ def ssh_payload(host,username,password,port=22,npv_options=None):
         "Use the included OpenSSH fragment for ordinary SSH clients.\n"
     )
     files["credentials.txt"]=credentials.encode("utf-8")
+    files["connection-guide-fa.txt"]=client_guide_text("ssh").encode("utf-8")
     summary={"host":host,"port":port,"username":username,"npv_enabled":npv_enabled}
     result={
         "native_filename":f"{safe_filename(username)}-ssh-config.txt",
@@ -242,6 +282,7 @@ def wireguard_payload(name,config,address=None):
         "files":{
             filename:str(config).encode("utf-8"),
             f"{safe_filename(name)}-qr.svg":make_qr_svg(str(config)),
+            "connection-guide-fa.txt":client_guide_text("wireguard").encode("utf-8"),
         },
         "primary_text":str(config),
         "share_text":str(config),
@@ -253,7 +294,10 @@ def openvpn_payload(name,config):
     filename=f"{safe_filename(name)}.ovpn"
     return {
         "native_filename":filename,
-        "files":{filename:str(config).encode("utf-8")},
+        "files":{
+            filename:str(config).encode("utf-8"),
+            "connection-guide-fa.txt":client_guide_text("openvpn").encode("utf-8"),
+        },
         "primary_text":str(config),
         "summary":{},
     }
@@ -284,6 +328,7 @@ def xray_payload(name,protocol,share_link,subscription_url=None,client_url=None)
         filename:text.encode("utf-8"),
         f"{safe_filename(name)}-profile.json":json.dumps(profile,ensure_ascii=False,indent=2).encode("utf-8"),
         f"{safe_filename(name)}-qr.svg":make_qr_svg(str(share_link)),
+        "connection-guide-fa.txt":client_guide_text("xray",protocol).encode("utf-8"),
     }
     if subscription_url:
         files[f"{safe_filename(name)}-subscription.txt"]=(str(subscription_url)+"\n").encode("utf-8")
