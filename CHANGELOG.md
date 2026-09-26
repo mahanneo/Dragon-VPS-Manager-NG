@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.2-rc1] - 2026-09-26
+
+### Backend startup hotfix
+- Restored the missing `protocol_client_by_subscription()` database helper required by `app.main`.
+- Added a CI application-import smoke test so missing runtime imports fail before merge.
+
+### Backup/update reliability
+- Replaced live tar copying of SQLite with the SQLite online-backup API.
+- Backup archives now exclude live DB/WAL/SHM files and include a consistent SQLite snapshot.
+- Prevents `tar: data: file changed as we read it` from aborting normal upgrades while metrics/policy workers are writing.
+
+### Release status
+Recovery/startup release candidate. Real-host upgrade validation remains required before Stable.
+
 ## [0.9.1-rc1] - 2026-09-26
 
 ### Recovery hotfix
