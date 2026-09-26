@@ -165,9 +165,8 @@ def create_backup(data_dir: str):
     os.makedirs(root,mode=0o700,exist_ok=True)
     stamp=datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     out=os.path.join(root,f"makia-data-{stamp}.tar.gz")
-    if not os.path.isdir(data_dir):
-        raise OperationError("data directory not found")
-    _run(["tar","-C",os.path.dirname(data_dir),"-czf",out,os.path.basename(data_dir)],timeout=60)
+    blob=_portable_data_tar(data_dir)
+    Path(out).write_bytes(blob)
     os.chmod(out,0o600)
     return {"name":os.path.basename(out),"path":out,"size":os.path.getsize(out)}
 
