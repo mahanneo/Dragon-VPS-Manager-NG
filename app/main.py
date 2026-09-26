@@ -854,8 +854,7 @@ def access_revoke(kind:str,key:str,request:Request):
         elif kind=="xray":
             row=get_protocol_client(int(key))
             if not row: raise HTTPException(404,"Xray client not found")
-            if row.get("enabled"):
-                protocol_ops.disable_xray_client(row["inbound_tag"],row["name"])
+            protocol_ops.remove_xray_inbound(row["inbound_tag"])
             delete_protocol_client(int(key)); delete_access_artifact_by_key("xray",key)
         elif kind=="wireguard":
             artifact=get_access_artifact_by_key("wireguard",key)
