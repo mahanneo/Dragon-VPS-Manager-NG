@@ -195,6 +195,16 @@ def root(request:Request):
         "theme":get_setting("theme","midnight"),"density":get_setting("density","comfortable")
     })
 
+@app.get("/help/connect",response_class=HTMLResponse)
+def connection_help(request:Request):
+    response=templates.TemplateResponse("client_guide.html",{
+        "request":request,"app_name":APP_NAME,"version":VERSION,
+        "panel_domain":get_setting("panel_domain",""),
+    })
+    response.headers["Cache-Control"]="public, max-age=300"
+    response.headers["X-Content-Type-Options"]="nosniff"
+    return response
+
 @app.get("/login",response_class=HTMLResponse)
 def login_page(request:Request):
     return templates.TemplateResponse("login.html",{"request":request,"app_name":APP_NAME,"version":VERSION,"error":None})
@@ -594,6 +604,7 @@ def subscription_page(subscription_id:str,request:Request):
         "app_name":APP_NAME,"version":VERSION,
         "profile_qr":profile_qr,"subscription_qr":subscription_qr,"subscription_url":sub_url,
         "subscription_enabled":subscription_settings["enabled"],
+        "guide_url":f"{origin}/help/connect#xray",
     })
     response.headers["Cache-Control"]="no-store, private"
     response.headers["X-Content-Type-Options"]="nosniff"
@@ -734,6 +745,22 @@ def protocol_install(payload:ProtocolInstall,request:Request):
     except protocol_ops.ProtocolError as e:
         raise HTTPException(400,str(e))
     audit(actor,"protocol_install",payload.component,ip=ip(request))
+    return result
+
+@app.get("/api/protocols/xray/diagnostics")
+def xray_diagnostics_get(request:Request):
+    require_user(request)
+    return protocol_ops.xray_diagnostics()
+
+@app.post("/api/protocols/xray/repair")
+def xray_repair(request:Request):
+    actor=require_mutation(request)
+    try:
+        result=protocol_ops.repair_xray_runtime()
+    except protocol_ops.ProtocolError as e:
+        audit(actor,"xray_repair_failed","xray",str(e)[:500],ip(request))
+        raise HTTPException(400,str(e))
+    audit(actor,"xray_repair","xray",f"backup={result.get('backup')}",ip(request))
     return result
 
 class WireGuardBootstrap(BaseModel):
@@ -963,6 +990,7 @@ def access_share(kind:str,key:str,request:Request):
             sid=xray_row["subscription_id"]
             summary["subscription_url"]=f"{public_origin(request)}/sub/{sid}?format={subscription_settings['default_format']}" if subscription_settings["enabled"] else ""
             summary["client_url"]=f"{public_origin(request)}/client/{sid}" if subscription_settings["client_page_enabled"] else ""
+    summary["guide_url"]=f"{public_origin(request)}/help/connect#{'xray' if kind=='xray' else 'wireguard' if kind=='wireguard' else 'ssh'}"
     subscription=str(summary.get("subscription_url") or "")
     subscription_qr=""
     if subscription:
@@ -1156,6 +1184,16 @@ def diagnostics_self_test(request:Request):
         add("protocol_catalog",True,f"{sum(1 for x in stack.get('capabilities',[]) if x.get('available'))} capabilities available")
     except Exception as exc:
         add("protocol_catalog",False,exc,"error")
+
+    try:
+        xdiag=protocol_ops.xray_diagnostics()
+        if xdiag.get("installed"):
+            add("xray_core_version",bool(xdiag.get("validated_version")),xdiag.get("version") or "unknown","warn")
+            add("xray_config_root",bool(xdiag.get("root_validation")),xdiag.get("root_error") or "Xray core validation PASS","error")
+            add("xray_config_service_user",bool(xdiag.get("service_validation")),xdiag.get("service_error") or f"readable by {xdiag.get('service_user')}","error")
+            add("xray_runtime",bool(xdiag.get("service_active")),"active" if xdiag.get("service_active") else (xdiag.get("journal") or "service inactive")[-420:],"error")
+    except Exception as exc:
+        add("xray_runtime_diagnostics",False,exc,"warn")
 
     critical=[x for x in checks if not x["ok"] and x["level"]=="error"]
     warnings=[x for x in checks if not x["ok"] and x["level"]=="warn"]
