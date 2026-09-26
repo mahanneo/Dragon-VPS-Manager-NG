@@ -251,6 +251,15 @@ def _uri_host(host):
     except ValueError:
         return host
 
+
+def _endpoint_is_private(host):
+    try:
+        ip=ipaddress.ip_address(host)
+        return bool(ip.is_private or ip.is_loopback or ip.is_link_local)
+    except ValueError:
+        lowered=str(host or "").lower()
+        return lowered=="localhost" or lowered.endswith(".local")
+
 def bootstrap_wireguard(port=51820, cidr="10.66.66.1/24", iface="wg0"):
     if not re.fullmatch(r"wg\d{1,2}",iface):
         raise ProtocolError("invalid WireGuard interface name")
@@ -749,7 +758,7 @@ def _build_xray_stream(binary,protocol,transport,security,path_value,server_name
         sid=secrets.token_hex(8)
         stream["realitySettings"]={
             "show":False,
-            "dest":target,
+            "target":target,
             "xver":0,
             "serverNames":[sni],
             "privateKey":private,
@@ -766,6 +775,9 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
         raise ProtocolError("invalid client name")
     endpoint=_validate_endpoint_host(endpoint)
+    security=(security or "none").lower()
+    if protocol in {"vless","trojan"} and security=="none" and not _endpoint_is_private(endpoint):
+        raise ProtocolError(f"{protocol.upper()} with security=none is not valid for a public endpoint in this guided mode; choose REALITY or TLS")
     binary=_binary()
     if not binary:
         raise ProtocolError("Xray core is not installed")
