@@ -2,10 +2,21 @@
 
 Modern web-first VPS and access-infrastructure control center for Ubuntu.
 
-> **Current release candidate:** `v0.10.0-rc1`  
+> **Current release candidate:** `v0.11.0-rc1`  
 > CI-validated, but **not yet production-certified**. A real-host UAT is required before a `1.0.0 Stable` label.
 
 ## What Makia manages today
+
+### v0.11 Control Center UX
+- Rebuilt application shell/sidebar with a dedicated Create Access action and safer event handling
+- New Operations Cockpit dashboard with live host, service, access and session data
+- New multi-step provisioning wizard: Protocol → Identity → Policy → Review/Delivery
+- Access Directory uses delegated `data-action` handlers instead of dynamic inline JavaScript
+- Protected ZIP and Native downloads surface backend errors instead of silently failing
+- Runtime Self-Test verifies SQLite, server-secret permissions, encrypted artifacts, AES delivery packages and protocol catalog
+- Browser CI actually logs in, opens Access Center, downloads/decrypts Protected ZIP, downloads Native config and opens the provisioning wizard
+- `makia-uat-smoke` provides a non-destructive real-host verification gate
+
 
 ### Unified Access Center
 - Single management surface for SSH, Xray, WireGuard and OpenVPN access profiles
@@ -168,6 +179,7 @@ The updater:
 
 ```bash
 sudo makia-doctor
+sudo makia-uat-smoke
 ```
 
 It checks the Makia backend, Nginx, Policy Enforcer, Metrics Sampler, Protocol Traffic Collector, Fail2ban and installed optional protocol tooling.
@@ -221,7 +233,7 @@ Important:
 - packaging contract
 - real Ubuntu 22.04/24.04 host UAT
 
-See `docs/UAT-0.10.0-RC1.md` and `docs/PARITY-3XUI.md`.
+See `docs/UAT-0.11.0-RC1.md` and `docs/PARITY-3XUI.md`.
 
 ## License
 
