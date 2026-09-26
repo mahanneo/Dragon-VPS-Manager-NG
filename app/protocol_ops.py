@@ -1261,6 +1261,35 @@ def validate_xray_config(data):
         except Exception:
             pass
 
+def _xray_firewall_rules(data):
+    rules=[]
+    for inbound in data.get("inbounds",[]) if isinstance(data,dict) else []:
+        if not isinstance(inbound,dict):
+            continue
+        listen=str(inbound.get("listen") or "0.0.0.0").strip().lower()
+        if listen in {"127.0.0.1","localhost","::1"}:
+            continue
+        try:
+            port=_validate_port(inbound.get("port"))
+        except Exception:
+            continue
+        protocol=str(inbound.get("protocol") or "xray").lower()
+        settings=inbound.get("settings") if isinstance(inbound.get("settings"),dict) else {}
+        stream=inbound.get("streamSettings") if isinstance(inbound.get("streamSettings"),dict) else {}
+        network=str(stream.get("network") or stream.get("method") or settings.get("network") or "").lower()
+        transports=set()
+        if protocol in {"hysteria","hysteria2"} or network in {"kcp","mkcp","quic","hysteria","hysteria2"}:
+            transports.add("udp")
+        elif network in {"tcp,udp","udp,tcp"}:
+            transports.update({"tcp","udp"})
+        elif protocol=="dokodemo-door" and "udp" in str(settings.get("network") or "").lower():
+            transports.update({"tcp","udp"} if "tcp" in str(settings.get("network") or "").lower() else {"udp"})
+        else:
+            transports.add("tcp")
+        for proto in sorted(transports):
+            rules.append((port,proto,f"Xray {protocol}"))
+    return sorted(set(rules))
+
 def apply_xray_config(data):
     binary=_binary()
     if not binary:
@@ -1285,6 +1314,8 @@ def apply_xray_config(data):
         _run(["systemctl","restart","xray"],timeout=30)
         if not _active("xray"):
             raise ProtocolError("Xray failed to become active")
+        for fw_port,fw_proto,fw_label in _xray_firewall_rules(data):
+            _ufw_allow_if_active(fw_port,fw_proto,fw_label)
     except Exception:
         try:
             if tmp.exists(): tmp.unlink()
