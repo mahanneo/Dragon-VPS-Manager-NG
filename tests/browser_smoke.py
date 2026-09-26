@@ -87,7 +87,7 @@ def main():
                 assert any(name.endswith("-profile.json") for name in names)
                 assert any(name.endswith("-qr.svg") for name in names)
 
-            page.locator('[data-action="modal-close"]').click()
+            page.locator('.close-btn[data-action="modal-close"]').click()
             row=page.locator(".access-profile",has_text="browser-client")
             with page.expect_download() as native:
                 row.locator('[data-action="native-export"]').click()
@@ -102,7 +102,10 @@ def main():
 
             page.locator('button[data-view="dashboard"]').click()
             page.locator(".command-hero").wait_for()
-            assert page.locator('[data-action="self-test"]').count()==1
+            page.locator('[data-action="self-test"]').click()
+            page.locator(".diagnostics-modal").wait_for()
+            assert page.locator(".diagnostic-score.pass").count()==1
+            page.locator('.close-btn[data-action="modal-close"]').click()
             browser.close()
         print(f"browser smoke PASS; client_id={client_id}")
     finally:
