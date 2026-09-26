@@ -468,6 +468,36 @@ def list_openvpn_clients():
         out.append({"name":cert.stem,"certificate":str(cert)})
     return out
 
+def render_openvpn_client(name,endpoint):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
+        raise ProtocolError("invalid client name")
+    if not re.fullmatch(r"[A-Za-z0-9.:[\\]-]{1,255}",endpoint or ""):
+        raise ProtocolError("invalid endpoint")
+    server_conf=OVPN_DIR/"server/server.conf"
+    pki=OVPN_EASYRSA/"pki"
+    cert=pki/f"issued/{name}.crt"
+    key=pki/f"private/{name}.key"
+    if not server_conf.exists() or not cert.exists() or not key.exists():
+        raise ProtocolError("OpenVPN client material is not available")
+    text=server_conf.read_text(encoding="utf-8",errors="ignore")
+    pm=re.search(r"(?m)^port\s+(\d+)\s*$",text)
+    proto_m=re.search(r"(?m)^proto\s+(\S+)\s*$",text)
+    port=int(pm.group(1)) if pm else 1194
+    server_proto=(proto_m.group(1) if proto_m else "udp").lower()
+    transport="tcp-client" if server_proto.startswith("tcp") else "udp"
+    ca=(pki/"ca.crt").read_text(encoding="utf-8")
+    cert_text=cert.read_text(encoding="utf-8")
+    key_text=key.read_text(encoding="utf-8")
+    ta=(OVPN_DIR/"server/ta.key").read_text(encoding="utf-8")
+    client=(
+        "client\ndev tun\n"
+        f"proto {transport}\nremote {endpoint} {port}\n"
+        "resolv-retry infinite\nnobind\npersist-key\npersist-tun\nremote-cert-tls server\n"
+        "data-ciphers AES-256-GCM:AES-128-GCM\nauth SHA256\nverb 3\n"
+        f"<ca>\n{ca}</ca>\n<cert>\n{cert_text}</cert>\n<key>\n{key_text}</key>\n<tls-crypt>\n{ta}</tls-crypt>\n"
+    )
+    return {"name":name,"config":client,"port":port,"proto":"tcp" if transport=="tcp-client" else "udp"}
+
 def revoke_openvpn_client(name):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
         raise ProtocolError("invalid client name")
