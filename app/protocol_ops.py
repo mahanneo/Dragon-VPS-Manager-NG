@@ -21,6 +21,7 @@ WG_DIR=Path("/etc/wireguard")
 OVPN_DIR=Path("/etc/openvpn")
 OVPN_EASYRSA=OVPN_DIR/"easy-rsa"
 BACKUP_DIR=Path("/var/backups/makia-vps-manager")
+WG_SYSCTL_PATH=Path("/etc/sysctl.d/99-makia-wireguard.conf")
 
 class ProtocolError(RuntimeError):
     pass
@@ -645,7 +646,7 @@ def bootstrap_wireguard(port=51820, cidr="10.66.66.1/24", iface="wg0", mtu=0):
         encoding="utf-8"
     )
     os.chmod(conf,0o600)
-    Path("/etc/sysctl.d/99-makia-wireguard.conf").write_text("net.ipv4.ip_forward=1\n",encoding="utf-8")
+    WG_SYSCTL_PATH.write_text("net.ipv4.ip_forward=1\n",encoding="utf-8")
     _run(["sysctl","-w","net.ipv4.ip_forward=1"],timeout=15)
     _run(["systemctl","enable","--now",f"wg-quick@{iface}"],timeout=30)
     firewall=_ufw_allow_if_active(port,"udp","WireGuard")
@@ -791,7 +792,7 @@ def repair_wireguard_runtime(iface="wg0"):
     try:
         conf.write_text("\n".join(rebuilt).rstrip()+"\n",encoding="utf-8")
         os.chmod(conf,0o600)
-        Path("/etc/sysctl.d/99-makia-wireguard.conf").write_text("net.ipv4.ip_forward=1\n",encoding="utf-8")
+        WG_SYSCTL_PATH.write_text("net.ipv4.ip_forward=1\n",encoding="utf-8")
         _run(["sysctl","-w","net.ipv4.ip_forward=1"],timeout=15)
         _ufw_allow_if_active(state["port"],"udp","WireGuard")
         _run(["systemctl","enable",f"wg-quick@{iface}"],timeout=20)
