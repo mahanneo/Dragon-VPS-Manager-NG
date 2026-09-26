@@ -56,7 +56,7 @@ with tarfile.open(fileobj=io.BytesIO(payload),mode="r:gz") as tf:
             target=Path(member.linkname)
             if member.linkname.startswith("/") or ".." in target.parts:
                 raise SystemExit("unsafe link in portable archive")
-    tf.extractall(out/"stage")
+    tf.extractall(out/"stage",filter="data")
 print("Portable bundle verification: PASS")
 PY
 
