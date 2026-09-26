@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.16.0-rc1] - 2026-09-26
+
+### Owner Control Center
+- Added a separate owner-only FastAPI control plane that is not installed on customer VPS instances.
+- Customer, Installation, License, Ticket and Owner Audit management now have a dedicated Glass-style console.
+- Commercial licenses are Ed25519-signed, bound to the customer's Installation ID and issued with a per-license synchronization secret.
+- Renewing a license increments its revision; customer panels obtain the replacement signed code automatically during lease synchronization.
+- Revocation is enforced through a signed online lease. Client panels retain a bounded offline grace period during temporary control-plane outages.
+- Offline signed licenses remain supported for Owner/self-hosted use where online revocation is not desired.
+- Owner Control Center requires both a strong password and TOTP, includes login throttling, keeps the private signing key outside the repository and binds only to 127.0.0.1 behind a hardened systemd service.
+
+### Consent-based Remote Support
+- Added customer-generated one-time support grants with 15–120 minute lifetime and Read-only or Operator scope.
+- No global master password or permanent support backdoor exists.
+- Support codes are stored only as hashes, are single-use for login and the resulting session is revalidated against the active grant on every request.
+- Local administrator can revoke the grant immediately; creating a new grant invalidates the previous active grant.
+- Remote support cannot change administrator identity controls, manage API tokens, remove licenses, create support grants, export credentials or download backups.
+- Remote support activity uses a distinct audited actor identity.
+- Valid support grants can temporarily bypass an admin CIDR allowlist without weakening that policy for normal logins.
+
+### Central Support Inbox
+- Customer ticket delivery can now authenticate to Owner Control Center using a root-only bearer token.
+- makia-owner-config supports --control-plane and --support-token.
+- Owner Console stores and manages incoming support tickets.
+
+### Verification
+- Added unit coverage for online active/revoked/grace license states, automatic renewal revisions and remote-support grant lifecycle.
+- Browser smoke now exercises one-time Remote Support login.
+- Added v0.16 Owner Control Center / Remote Support UAT contract.
+
+### Release status
+Release candidate only. Stable requires a real Owner Control Center deployment with HTTPS, customer license renewal/revocation rehearsal and a real remote-support session UAT.
+
 ## [0.14.0-rc1] - 2026-09-26
 
 ### Glass Aurora interface
