@@ -18,14 +18,35 @@ def _fernet():
     key=hashlib.sha256(ensure_secret()+b"makia-access-artifact-v1").digest()
     return Fernet(base64.urlsafe_b64encode(key))
 
+def _json_pack(value):
+    if isinstance(value,(bytes,bytearray)):
+        return {"__makia_bytes__":base64.b64encode(bytes(value)).decode("ascii")}
+    if isinstance(value,dict):
+        return {str(k):_json_pack(v) for k,v in value.items()}
+    if isinstance(value,list):
+        return [_json_pack(v) for v in value]
+    if isinstance(value,tuple):
+        return [_json_pack(v) for v in value]
+    return value
+
+def _json_unpack(value):
+    if isinstance(value,dict):
+        if set(value)=={"__makia_bytes__"}:
+            return base64.b64decode(value["__makia_bytes__"])
+        return {k:_json_unpack(v) for k,v in value.items()}
+    if isinstance(value,list):
+        return [_json_unpack(v) for v in value]
+    return value
+
 def seal_payload(payload:dict)->str:
-    raw=json.dumps(payload,ensure_ascii=False,separators=(",",":")).encode("utf-8")
+    raw=json.dumps(_json_pack(payload),ensure_ascii=False,separators=(",",":")).encode("utf-8")
     return _fernet().encrypt(raw).decode("ascii")
 
 def open_payload(token:str)->dict:
     try:
         raw=_fernet().decrypt(str(token).encode("ascii"))
         obj=json.loads(raw.decode("utf-8"))
+        obj=_json_unpack(obj)
         if not isinstance(obj,dict):
             raise AccessPackageError("invalid access payload")
         return obj
