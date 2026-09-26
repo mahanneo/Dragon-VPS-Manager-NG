@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.14.0-rc1] - 2026-09-26
+
+### Glass Aurora interface
+- Replaced the default panel shell with the Glass Aurora visual system selected for Makia: translucent blue/violet surfaces, cyan highlights, atmospheric background, glass sidebar/topbar, responsive cards and modal surfaces.
+- Rebuilt the dashboard structure around live service health, four operational summary cards, real CPU/RAM/Disk rings, live network history, access mix and current sessions.
+- Added a one-time UI generation migration so existing installations switch to Glass Aurora after upgrade while Midnight, AMOLED and Graphite remain selectable.
+- Extended the glass treatment to Login/2FA, Settings, Access, Protocol, Guide and modal surfaces without changing backend action ownership.
+- Bumped the service-worker shell cache generation so upgraded browsers do not retain the previous visual shell.
+
+### OpenVPN domain reliability
+- Clarified that panel HTTPS/Let's Encrypt and OpenVPN TLS are separate: OpenVPN uses its own EasyRSA CA/PKI and the domain is the transport endpoint.
+- New and re-rendered OpenVPN profiles now use explicit IPv4 transports (`udp4` / `tcp4-client`) to avoid a bad AAAA/IPv6 preference breaking a domain that otherwise works by IPv4.
+- Added `auth-nocache`, retry behavior and server certificate-name verification to generated OpenVPN profiles.
+- Existing OpenVPN artifacts are re-rendered at export time using the current panel domain, so users do not need new client certificates after a domain/IP migration.
+- Added OpenVPN Domain Diagnostics for A/AAAA resolution, VPS IPv4 matching, systemd state, socket listener, transport/port and PKI certificate metadata.
+- Added guarded OpenVPN IPv4 runtime normalization with backup and rollback.
+- Added explicit warnings for proxied/CDN DNS records and for OpenVPN TCP/443 colliding with Nginx HTTPS on the same IP; UDP/443 can coexist with HTTPS/TCP 443.
+- Added OpenVPN and WireGuard to the allowlisted Services control surface.
+
+### Verification
+- Added unit coverage for domain-based OpenVPN rendering, IPv4 transport selection, DNS mismatch detection, TCP/443 collision warning, runtime normalization and current-domain re-export.
+- Browser smoke now asserts the Glass Aurora dashboard structure and OpenVPN Domain Diagnostics modal.
+- Existing Xray 26.3.27 real-core matrix remains mandatory.
+
+### Release status
+Release candidate only. Stable requires real VPS visual/UAT validation and a real OpenVPN domain test with a DNS-only A record pointing directly to the VPS.
+
 ## [0.13.1-rc1] - 2026-09-26
 
 ### Xray runtime failure repair
