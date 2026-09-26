@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.10.0-rc1] - 2026-09-26
+
+### Unified Access Center
+- Promoted a single Access Center to the main sidebar for SSH, Xray, WireGuard and OpenVPN.
+- Added unified search/filter and management actions across access types.
+- Added central revoke flows for SSH users, Xray clients, WireGuard peers and OpenVPN clients.
+
+### Client delivery and exports
+- Added encrypted-at-rest access artifact storage derived from the Makia server secret.
+- Added native exports: SSH config fragment, WireGuard `.conf`, OpenVPN `.ovpn`, Xray share/profile files and QR.
+- Added AES-256 password-protected ZIP delivery packages using a separate operator-selected/package PIN.
+- Newly created SSH credentials can be re-exported securely; legacy SSH accounts require one password reset before secure export.
+- Existing OpenVPN profiles can be regenerated from PKI; legacy WireGuard peers without their original private key are explicitly marked for reissue.
+
+### Xray onboarding
+- Added an in-panel Xray Core install path using the official XTLS installer.
+- After installation, guided VLESS/VMess/Trojan/Shadowsocks/Hysteria2/HTTP/SOCKS workflows become available directly in Makia.
+
+### Reliability
+- Added binary-safe encrypted artifact serialization.
+- Added unit tests for encrypted payload round-trip, AES ZIP protection, SSH package behavior and Xray export content.
+- Existing application-import CI smoke gate remains required.
+
+### Release status
+Release candidate. Real-host import/export and client-connection UAT is required before Stable.
+
 ## [0.9.3-rc1] - 2026-09-26
 
 ### Bootstrap recovery

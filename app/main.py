@@ -1,17 +1,17 @@
 from pathlib import Path
 from datetime import date, datetime, timedelta
-import time, io, base64, secrets, string, urllib.request
+import time, io, base64, secrets, string, urllib.request, json
 import pyotp, qrcode
 import qrcode.image.svg
 from fastapi import FastAPI, Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from .config import APP_NAME, VERSION, COOKIE_NAME, ALLOWED_SERVICES, DATA_DIR
-from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client, reset_protocol_traffic, protocol_client_by_subscription, login_rate_state, record_login_failure, clear_login_failures
+from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client, reset_protocol_traffic, protocol_client_by_subscription, login_rate_state, record_login_failure, clear_login_failures, upsert_access_artifact, list_access_artifacts, get_access_artifact_by_key, delete_access_artifact_by_key
 from .security import verify_password, make_session, read_session, hash_password, make_preauth, read_preauth
-from . import system_ops, protocol_ops, panel_ops
+from . import system_ops, protocol_ops, panel_ops, access_ops
 
 BASE=Path(__file__).resolve().parent
 app=FastAPI(title=APP_NAME,version=VERSION,docs_url=None,redoc_url=None)
@@ -34,6 +34,23 @@ def require_mutation(request:Request):
     return user
 
 def ip(request:Request): return request.client.host if request.client else None
+
+def public_origin(request:Request):
+    domain=(get_setting("panel_domain","") or "").strip()
+    host=domain or request.url.hostname or "server"
+    forwarded=request.headers.get("x-forwarded-proto","").lower()
+    scheme="https" if forwarded=="https" or (domain and panel_ops.domain_status(domain).get("certificate")) else "http"
+    return f"{scheme}://{host}"
+
+def public_host(request:Request):
+    return (get_setting("panel_domain","") or request.url.hostname or "server").strip()
+
+def artifact_save(kind,external_key,display_name,protocol,payload,metadata=None):
+    return upsert_access_artifact(
+        kind,external_key,display_name,protocol,payload.get("native_filename",""),
+        access_ops.seal_payload(payload),
+        json.dumps(metadata or {},ensure_ascii=False,separators=(",",":"))
+    )
 
 def bearer(request:Request):
     auth=request.headers.get("authorization","")
@@ -239,9 +256,14 @@ def create_account(payload:AccountCreate,request:Request):
     try:
         system_ops.create_ssh_user(payload.username,password,payload.expire_date)
         upsert_profile(payload.username,payload.plan,payload.note,payload.expire_date,payload.connection_limit,payload.quota_mb,1,payload.device_limit,payload.renewal_days)
+        delivery=access_ops.ssh_payload(public_host(request),payload.username,password,22)
+        artifact_id=artifact_save("ssh",payload.username,payload.username,"ssh",delivery,{
+            "expire_date":payload.expire_date or "","plan":payload.plan or "",
+            "connection_limit":payload.connection_limit,"device_limit":payload.device_limit
+        })
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
     audit(actor,"account_create",payload.username,f"plan={payload.plan}; limit={payload.connection_limit}; quota_mb={payload.quota_mb}; password_mode={payload.password_mode}",ip(request))
-    return {"ok":True,"username":payload.username,"password":password if generated else None,"generated":generated}
+    return {"ok":True,"username":payload.username,"password":password if generated else None,"generated":generated,"artifact_id":artifact_id}
 
 class AccountUpdate(BaseModel):
     password:str|None=Field(default=None,min_length=4,max_length=128)
@@ -263,6 +285,12 @@ def update_account(username:str,payload:AccountUpdate,request:Request):
         system_ops.lock_user(username,not payload.enabled)
         upsert_profile(username,payload.plan,payload.note,None if payload.clear_expire else payload.expire_date,payload.connection_limit,payload.quota_mb,1 if payload.enabled else 0,payload.device_limit,payload.renewal_days)
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
+    if payload.password:
+        delivery=access_ops.ssh_payload(public_host(request),username,payload.password,22)
+        artifact_save("ssh",username,username,"ssh",delivery,{
+            "expire_date":None if payload.clear_expire else (payload.expire_date or ""),
+            "plan":payload.plan or "","connection_limit":payload.connection_limit,"device_limit":payload.device_limit
+        })
     audit(actor,"account_update",username,f"enabled={payload.enabled}; limit={payload.connection_limit}; quota_mb={payload.quota_mb}",ip(request))
     return {"ok":True}
 
@@ -285,7 +313,7 @@ def account_action(username:str,action:str,request:Request):
                 except system_ops.OperationError: pass
             result={"username":username,"disconnected":len(targets)}
         elif action=="delete":
-            result=system_ops.delete_user(username); delete_profile(username)
+            result=system_ops.delete_user(username); delete_profile(username); delete_access_artifact_by_key("ssh",username)
         else: raise HTTPException(404,"unknown action")
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
     audit(actor,f"account_{action}",username,ip=ip(request))
@@ -405,7 +433,22 @@ def xray_quick_inbound(payload:XrayQuickInbound,request:Request):
         payload.name,"xray",payload.protocol,result["tag"],result["credential"],result["share_link"],
         quota_bytes,expire_at,payload.ip_limit,payload.reset_days
     )
+    client_row=get_protocol_client(client_id)
+    sub_id=(client_row or {}).get("subscription_id") or ""
+    origin=public_origin(request)
+    delivery=access_ops.xray_payload(
+        payload.name,payload.protocol,result["share_link"],
+        f"{origin}/sub/{sub_id}?format=base64" if sub_id else "",
+        f"{origin}/client/{sub_id}" if sub_id else ""
+    )
+    artifact_id=artifact_save("xray",str(client_id),payload.name,payload.protocol,delivery,{
+        "client_id":client_id,"inbound_tag":result["tag"],"port":payload.port,
+        "transport":result.get("transport",""),"security":result.get("security",""),
+        "subscription_id":sub_id
+    })
     result["client_id"]=client_id
+    result["artifact_id"]=artifact_id
+    result["subscription_id"]=sub_id
     result["quota_bytes"]=quota_bytes
     result["expire_at"]=expire_at
     result["ip_limit"]=payload.ip_limit
@@ -629,8 +672,13 @@ def wireguard_peer_create(payload:WireGuardPeer,request:Request):
     actor=require_mutation(request)
     try:
         result=protocol_ops.create_wireguard_peer(payload.name,payload.endpoint,dns=payload.dns)
+        delivery=access_ops.wireguard_payload(payload.name,result["config"],result.get("address"))
+        artifact_id=artifact_save("wireguard",payload.name,payload.name,"wireguard",delivery,{
+            "public_key":result.get("public_key",""),"address":result.get("address",""),"interface":"wg0"
+        })
     except protocol_ops.ProtocolError as e:
         raise HTTPException(400,str(e))
+    result["artifact_id"]=artifact_id
     audit(actor,"wireguard_peer_create",payload.name,ip=ip(request))
     return result
 
@@ -659,10 +707,178 @@ def openvpn_client_create(payload:OpenVPNClient,request:Request):
     actor=require_mutation(request)
     try:
         result=protocol_ops.create_openvpn_client(payload.name,payload.endpoint,payload.port,payload.proto)
+        delivery=access_ops.openvpn_payload(payload.name,result["config"])
+        artifact_id=artifact_save("openvpn",payload.name,payload.name,"openvpn",delivery,{
+            "endpoint":payload.endpoint,"port":payload.port,"transport":payload.proto
+        })
     except protocol_ops.ProtocolError as e:
         raise HTTPException(400,str(e))
+    result["artifact_id"]=artifact_id
     audit(actor,"openvpn_client_create",payload.name,ip=ip(request))
     return result
+
+class AccessPackageRequest(BaseModel):
+    password:str=Field(min_length=4,max_length=128)
+
+def _resolve_access_payload(kind,key,request):
+    artifact=get_access_artifact_by_key(kind,key)
+    if artifact:
+        try:
+            return access_ops.open_payload(artifact["payload_enc"]),artifact
+        except access_ops.AccessPackageError as e:
+            raise HTTPException(500,str(e))
+    if kind=="xray":
+        try: row=get_protocol_client(int(key))
+        except Exception: row=None
+        if not row:
+            raise HTTPException(404,"Xray client not found")
+        sub_id=row.get("subscription_id") or ""
+        origin=public_origin(request)
+        payload=access_ops.xray_payload(
+            row["name"],row["protocol"],row.get("share_link") or "",
+            f"{origin}/sub/{sub_id}?format=base64" if sub_id else "",
+            f"{origin}/client/{sub_id}" if sub_id else ""
+        )
+        artifact_id=artifact_save("xray",str(row["id"]),row["name"],row["protocol"],payload,{
+            "client_id":row["id"],"inbound_tag":row.get("inbound_tag",""),"subscription_id":sub_id
+        })
+        artifact=get_access_artifact_by_key("xray",str(row["id"]))
+        return payload,artifact
+    if kind=="openvpn":
+        try:
+            rendered=protocol_ops.render_openvpn_client(key,public_host(request))
+        except protocol_ops.ProtocolError as e:
+            raise HTTPException(409,str(e))
+        payload=access_ops.openvpn_payload(key,rendered["config"])
+        artifact_save("openvpn",key,key,"openvpn",payload,{
+            "endpoint":public_host(request),"port":rendered.get("port",1194),"transport":rendered.get("proto","udp")
+        })
+        return payload,get_access_artifact_by_key("openvpn",key)
+    if kind=="wireguard":
+        raise HTTPException(409,"legacy WireGuard peer has no recoverable client private key; reissue this peer to create a new exportable config")
+    if kind=="ssh":
+        raise HTTPException(409,"SSH password was not retained for this legacy account; set a new password once to enable encrypted exports")
+    raise HTTPException(404,"access entry not found")
+
+@app.get("/api/access")
+def access_entries(request:Request):
+    require_user(request)
+    artifacts={(a["kind"],a["external_key"]):a for a in list_access_artifacts()}
+    rows=[]
+
+    for item in account_rows():
+        key=item["username"]
+        art=artifacts.get(("ssh",key))
+        rows.append({
+            "id":f"ssh:{key}","kind":"ssh","key":key,"name":key,"protocol":"ssh",
+            "status":"expired" if item.get("expired") else ("active" if item.get("enabled") else "disabled"),
+            "online":item.get("online",0),"device_limit":item.get("device_limit",1),
+            "connection_limit":item.get("connection_limit",1),"expire_date":item.get("expire_date"),
+            "plan":item.get("plan",""),"can_export":bool(art),"artifact_id":art["id"] if art else None,
+            "legacy":not bool(art)
+        })
+
+    protocol_rows=protocol_clients_get(request)
+    for item in protocol_rows:
+        key=str(item["id"])
+        art=artifacts.get(("xray",key))
+        rows.append({
+            "id":f"xray:{key}","kind":"xray","key":key,"name":item["name"],"protocol":item["protocol"],
+            "status":"expired" if item.get("expired") else ("active" if item.get("enabled") else "disabled"),
+            "online":item.get("online_ip_count",0),"device_limit":item.get("ip_limit",1),
+            "quota_bytes":item.get("quota_bytes",0),"used_bytes":item.get("usage",{}).get("total",0),
+            "expire_at":item.get("expire_at",0),"can_export":True,
+            "artifact_id":art["id"] if art else None,"subscription_id":item.get("subscription_id",""),
+            "legacy":not bool(art)
+        })
+
+    known_wg={a["external_key"] for a in artifacts.values() if a["kind"]=="wireguard"}
+    for peer in protocol_ops.list_wireguard_peers():
+        key=peer["name"]
+        art=artifacts.get(("wireguard",key))
+        rows.append({
+            "id":f"wireguard:{key}","kind":"wireguard","key":key,"name":key,"protocol":"wireguard",
+            "status":"active","online":None,"device_limit":1,"can_export":bool(art),
+            "artifact_id":art["id"] if art else None,"legacy":not bool(art),
+            "public_key":peer.get("public_key",""),"address":peer.get("allowed_ips","")
+        })
+
+    known_ovpn={a["external_key"] for a in artifacts.values() if a["kind"]=="openvpn"}
+    for client in protocol_ops.list_openvpn_clients():
+        key=client["name"]
+        art=artifacts.get(("openvpn",key))
+        rows.append({
+            "id":f"openvpn:{key}","kind":"openvpn","key":key,"name":key,"protocol":"openvpn",
+            "status":"active","online":None,"device_limit":1,"can_export":True,
+            "artifact_id":art["id"] if art else None,"legacy":not bool(art)
+        })
+
+    order={"ssh":0,"xray":1,"wireguard":2,"openvpn":3}
+    rows.sort(key=lambda x:(order.get(x["kind"],9),str(x["name"]).lower()))
+    return rows
+
+@app.get("/api/access/{kind}/{key}/native")
+def access_native(kind:str,key:str,request:Request):
+    require_user(request)
+    payload,_=_resolve_access_payload(kind,key,request)
+    filename=payload.get("native_filename") or "makia-access.txt"
+    files=payload.get("files") or {}
+    data=files.get(filename)
+    if data is None:
+        data=(payload.get("primary_text") or "").encode("utf-8")
+    if isinstance(data,str): data=data.encode("utf-8")
+    media="application/octet-stream"
+    if filename.endswith((".txt",".conf",".json")): media="text/plain; charset=utf-8"
+    elif filename.endswith(".ovpn"): media="application/x-openvpn-profile"
+    audit(current_user(request),"access_native_export",f"{kind}:{key}",filename,ip(request))
+    return Response(content=bytes(data),media_type=media,headers={"Content-Disposition":f'attachment; filename="{access_ops.safe_filename(filename)}"'})
+
+@app.post("/api/access/{kind}/{key}/package")
+def access_package(kind:str,key:str,payload:AccessPackageRequest,request:Request):
+    actor=require_mutation(request)
+    access,_=_resolve_access_payload(kind,key,request)
+    try:
+        content=access_ops.protected_zip(access.get("files") or {},payload.password)
+    except access_ops.AccessPackageError as e:
+        raise HTTPException(400,str(e))
+    filename=access_ops.safe_filename(f"makia-{kind}-{key}.zip")
+    audit(actor,"access_protected_export",f"{kind}:{key}",filename,ip(request))
+    return Response(content=content,media_type="application/zip",headers={"Content-Disposition":f'attachment; filename="{filename}"'})
+
+@app.delete("/api/access/{kind}/{key}")
+def access_revoke(kind:str,key:str,request:Request):
+    actor=require_mutation(request)
+    try:
+        if kind=="ssh":
+            system_ops.delete_user(key); delete_profile(key); delete_access_artifact_by_key("ssh",key)
+        elif kind=="xray":
+            row=get_protocol_client(int(key))
+            if not row: raise HTTPException(404,"Xray client not found")
+            protocol_ops.remove_xray_inbound(row["inbound_tag"])
+            delete_protocol_client(int(key)); delete_access_artifact_by_key("xray",key)
+        elif kind=="wireguard":
+            artifact=get_access_artifact_by_key("wireguard",key)
+            public_key=""
+            if artifact:
+                try:
+                    meta=json.loads(artifact.get("metadata_json") or "{}")
+                    public_key=meta.get("public_key","")
+                except Exception: pass
+            if not public_key:
+                match=next((p for p in protocol_ops.list_wireguard_peers() if p.get("name")==key),None)
+                public_key=(match or {}).get("public_key","")
+            if not public_key: raise HTTPException(404,"WireGuard peer not found")
+            protocol_ops.remove_wireguard_peer(public_key)
+            delete_access_artifact_by_key("wireguard",key)
+        elif kind=="openvpn":
+            protocol_ops.revoke_openvpn_client(key)
+            delete_access_artifact_by_key("openvpn",key)
+        else:
+            raise HTTPException(404,"unsupported access kind")
+    except (system_ops.OperationError,protocol_ops.ProtocolError) as e:
+        raise HTTPException(400,str(e))
+    audit(actor,"access_revoke",f"{kind}:{key}",ip=ip(request))
+    return {"ok":True}
 
 @app.get("/api/backups")
 def backups(request:Request):

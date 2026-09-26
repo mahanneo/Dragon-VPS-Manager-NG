@@ -124,6 +124,20 @@ def init_db():
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS access_artifacts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          kind TEXT NOT NULL,
+          external_key TEXT NOT NULL,
+          display_name TEXT NOT NULL,
+          protocol TEXT NOT NULL DEFAULT '',
+          native_filename TEXT NOT NULL DEFAULT '',
+          payload_enc TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(kind,external_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_access_artifacts_kind ON access_artifacts(kind);
         ''')
         # Migration-safe columns for future profile growth.
         _add_column(con, "account_profiles", "plan TEXT NOT NULL DEFAULT ''")
@@ -450,3 +464,48 @@ def record_login_failure(ip, now_ts, max_failures=6, window_seconds=900, block_s
 def clear_login_failures(ip):
     with connect() as con:
         con.execute("DELETE FROM login_rate_limits WHERE ip=?",(str(ip),))
+
+
+def upsert_access_artifact(kind,external_key,display_name,protocol,native_filename,payload_enc,metadata_json="{}"):
+    ts=now()
+    with connect() as con:
+        con.execute(
+            """INSERT INTO access_artifacts(kind,external_key,display_name,protocol,native_filename,payload_enc,metadata_json,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(kind,external_key) DO UPDATE SET
+                 display_name=excluded.display_name,
+                 protocol=excluded.protocol,
+                 native_filename=excluded.native_filename,
+                 payload_enc=excluded.payload_enc,
+                 metadata_json=excluded.metadata_json,
+                 updated_at=excluded.updated_at""",
+            (str(kind),str(external_key),str(display_name),str(protocol or ""),str(native_filename or ""),
+             str(payload_enc),str(metadata_json or "{}"),ts,ts)
+        )
+        row=con.execute("SELECT id FROM access_artifacts WHERE kind=? AND external_key=?",(str(kind),str(external_key))).fetchone()
+        return int(row["id"])
+
+def list_access_artifacts():
+    with connect() as con:
+        rows=con.execute(
+            "SELECT id,kind,external_key,display_name,protocol,native_filename,metadata_json,created_at,updated_at FROM access_artifacts ORDER BY id DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+def get_access_artifact(artifact_id):
+    with connect() as con:
+        row=con.execute("SELECT * FROM access_artifacts WHERE id=?",(int(artifact_id),)).fetchone()
+        return dict(row) if row else None
+
+def get_access_artifact_by_key(kind,external_key):
+    with connect() as con:
+        row=con.execute("SELECT * FROM access_artifacts WHERE kind=? AND external_key=?",(str(kind),str(external_key))).fetchone()
+        return dict(row) if row else None
+
+def delete_access_artifact(artifact_id):
+    with connect() as con:
+        con.execute("DELETE FROM access_artifacts WHERE id=?",(int(artifact_id),))
+
+def delete_access_artifact_by_key(kind,external_key):
+    with connect() as con:
+        con.execute("DELETE FROM access_artifacts WHERE kind=? AND external_key=?",(str(kind),str(external_key)))

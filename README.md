@@ -2,10 +2,21 @@
 
 Modern web-first VPS and access-infrastructure control center for Ubuntu.
 
-> **Current release candidate:** `v0.9.1-rc1`  
+> **Current release candidate:** `v0.10.0-rc1`  
 > CI-validated, but **not yet production-certified**. A real-host UAT is required before a `1.0.0 Stable` label.
 
 ## What Makia manages today
+
+### Unified Access Center
+- Single management surface for SSH, Xray, WireGuard and OpenVPN access profiles
+- Create SSH users, Xray clients, WireGuard peers and OpenVPN clients from one place
+- Xray Core can be installed from the panel using the official XTLS installer
+- Native export per protocol: SSH config fragment, WireGuard `.conf`, OpenVPN `.ovpn`, Xray share/profile files
+- AES-256 password-protected delivery ZIP for every newly created access profile
+- Encrypted-at-rest access artifacts use the server's Makia secret; raw credentials are not stored as plaintext
+- Existing Xray and OpenVPN profiles can be re-exported; legacy WireGuard peers without retained private keys are explicitly marked for reissue
+- Central revoke flow for SSH, Xray, WireGuard and OpenVPN
+
 
 ### SSH Account Center
 - Server-side PIN 4 / PIN 6 / Easy-8 / strong-password generation
@@ -201,7 +212,7 @@ Important:
 
 ## Release gate
 
-`v0.9.0-rc1` must pass:
+`v0.10.0-rc1` must pass:
 - Python compilation
 - unit tests
 - Bash syntax
@@ -210,7 +221,7 @@ Important:
 - packaging contract
 - real Ubuntu 22.04/24.04 host UAT
 
-See `docs/UAT-0.9.0-RC1.md` and `docs/PARITY-3XUI.md`.
+See `docs/UAT-0.10.0-RC1.md` and `docs/PARITY-3XUI.md`.
 
 ## License
 

@@ -182,6 +182,21 @@ def install_component(component):
         "openvpn":["openvpn","easy-rsa","iptables"],
         "stunnel":["stunnel4"],
     }
+    if component=="xray":
+        # Official XTLS installer. It installs the core + systemd service and
+        # verifies the release artifacts handled by the upstream installer.
+        _run(["bash","-lc",'bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install'],timeout=600)
+        config=Path("/usr/local/etc/xray/config.json")
+        config.parent.mkdir(parents=True,exist_ok=True)
+        if not config.exists():
+            config.write_text(json.dumps({
+                "log":{"loglevel":"warning"},
+                "inbounds":[],
+                "outbounds":[{"protocol":"freedom","tag":"direct"}]
+            },ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+            os.chmod(config,0o600)
+        _run(["systemctl","enable","--now","xray"],timeout=60)
+        return xray_status()
     if component not in packages:
         raise ProtocolError("automatic installation is not available for this component")
     _run(["apt-get","update"],timeout=180)
@@ -292,6 +307,63 @@ def create_wireguard_peer(name, endpoint, iface="wg0", dns="1.1.1.1"):
     )
     return {"name":name,"address":str(client_ip),"public_key":client_public,"config":client}
 
+def list_wireguard_peers(iface="wg0"):
+    conf=WG_DIR/f"{iface}.conf"
+    if not conf.exists():
+        return []
+    lines=conf.read_text(encoding="utf-8",errors="ignore").splitlines()
+    peers=[]; current=None; pending_name=None
+    for line in lines:
+        stripped=line.strip()
+        if stripped.startswith("# Makia peer:"):
+            pending_name=stripped.split(":",1)[1].strip()
+        elif stripped=="[Peer]":
+            if current: peers.append(current)
+            current={"name":pending_name or "wireguard-peer","public_key":"","allowed_ips":"","interface":iface}
+            pending_name=None
+        elif current and "=" in stripped:
+            key,value=[x.strip() for x in stripped.split("=",1)]
+            if key=="PublicKey": current["public_key"]=value
+            elif key=="AllowedIPs": current["allowed_ips"]=value
+    if current: peers.append(current)
+    return [p for p in peers if p.get("public_key")]
+
+def remove_wireguard_peer(public_key, iface="wg0"):
+    public_key=str(public_key or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9+/=_-]{20,100}",public_key):
+        raise ProtocolError("invalid WireGuard public key")
+    conf=WG_DIR/f"{iface}.conf"
+    if not conf.exists():
+        raise ProtocolError("WireGuard server config not found")
+    _run(["wg","set",iface,"peer",public_key,"remove"])
+    lines=conf.read_text(encoding="utf-8",errors="ignore").splitlines()
+    out=[]; block=[]; in_peer=False
+    for line in lines+["[__END__]"]:
+        if line.startswith("[") and line.endswith("]"):
+            if in_peer:
+                text="\n".join(block)
+                if f"PublicKey = {public_key}" not in text:
+                    out.extend(block)
+                block=[]
+            in_peer=(line=="[Peer]")
+            if line!="[__END__]":
+                block=[line] if in_peer else []
+                if not in_peer:
+                    out.append(line)
+        elif in_peer:
+            block.append(line)
+        else:
+            out.append(line)
+    # Remove a Makia comment immediately before a removed peer if it became orphaned.
+    cleaned=[]
+    for idx,line in enumerate(out):
+        if line.startswith("# Makia peer:") and idx+1<len(out) and out[idx+1]!="[Peer]":
+            continue
+        cleaned.append(line)
+    conf.write_text("\n".join(cleaned).rstrip()+"\n",encoding="utf-8")
+    os.chmod(conf,0o600)
+    return {"removed":True,"public_key":public_key,"interface":iface}
+
 def bootstrap_openvpn(port=1194, proto="udp"):
     port=_validate_port(port)
     if proto not in {"udp","tcp"}:
@@ -384,6 +456,70 @@ def create_openvpn_client(name, endpoint, port=1194, proto="udp"):
         f"<ca>\n{ca}</ca>\n<cert>\n{cert}</cert>\n<key>\n{key}</key>\n<tls-crypt>\n{ta}</tls-crypt>\n"
     )
     return {"name":name,"config":client}
+
+def list_openvpn_clients():
+    issued=OVPN_EASYRSA/"pki/issued"
+    if not issued.exists():
+        return []
+    out=[]
+    for cert in sorted(issued.glob("*.crt")):
+        if cert.stem=="server":
+            continue
+        out.append({"name":cert.stem,"certificate":str(cert)})
+    return out
+
+def render_openvpn_client(name,endpoint):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
+        raise ProtocolError("invalid client name")
+    if not re.fullmatch(r"[A-Za-z0-9.:[\\]-]{1,255}",endpoint or ""):
+        raise ProtocolError("invalid endpoint")
+    server_conf=OVPN_DIR/"server/server.conf"
+    pki=OVPN_EASYRSA/"pki"
+    cert=pki/f"issued/{name}.crt"
+    key=pki/f"private/{name}.key"
+    if not server_conf.exists() or not cert.exists() or not key.exists():
+        raise ProtocolError("OpenVPN client material is not available")
+    text=server_conf.read_text(encoding="utf-8",errors="ignore")
+    pm=re.search(r"(?m)^port\s+(\d+)\s*$",text)
+    proto_m=re.search(r"(?m)^proto\s+(\S+)\s*$",text)
+    port=int(pm.group(1)) if pm else 1194
+    server_proto=(proto_m.group(1) if proto_m else "udp").lower()
+    transport="tcp-client" if server_proto.startswith("tcp") else "udp"
+    ca=(pki/"ca.crt").read_text(encoding="utf-8")
+    cert_text=cert.read_text(encoding="utf-8")
+    key_text=key.read_text(encoding="utf-8")
+    ta=(OVPN_DIR/"server/ta.key").read_text(encoding="utf-8")
+    client=(
+        "client\ndev tun\n"
+        f"proto {transport}\nremote {endpoint} {port}\n"
+        "resolv-retry infinite\nnobind\npersist-key\npersist-tun\nremote-cert-tls server\n"
+        "data-ciphers AES-256-GCM:AES-128-GCM\nauth SHA256\nverb 3\n"
+        f"<ca>\n{ca}</ca>\n<cert>\n{cert_text}</cert>\n<key>\n{key_text}</key>\n<tls-crypt>\n{ta}</tls-crypt>\n"
+    )
+    return {"name":name,"config":client,"port":port,"proto":"tcp" if transport=="tcp-client" else "udp"}
+
+def revoke_openvpn_client(name):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
+        raise ProtocolError("invalid client name")
+    if not OVPN_EASYRSA.exists():
+        raise ProtocolError("OpenVPN PKI is not available")
+    env=os.environ.copy(); env["EASYRSA_BATCH"]="1"
+    p=subprocess.run([str(OVPN_EASYRSA/"easyrsa"),"revoke",name],cwd=str(OVPN_EASYRSA),env=env,text=True,capture_output=True,timeout=180,check=False)
+    if p.returncode!=0 and "already revoked" not in ((p.stderr or p.stdout or "").lower()):
+        raise ProtocolError((p.stderr or p.stdout or "OpenVPN revoke failed").strip()[:1200])
+    p=subprocess.run([str(OVPN_EASYRSA/"easyrsa"),"gen-crl"],cwd=str(OVPN_EASYRSA),env=env,text=True,capture_output=True,timeout=180,check=False)
+    if p.returncode!=0:
+        raise ProtocolError((p.stderr or p.stdout or "OpenVPN CRL generation failed").strip()[:1200])
+    crl=OVPN_EASYRSA/"pki/crl.pem"
+    if crl.exists():
+        shutil.copy2(crl,OVPN_DIR/"server/crl.pem")
+    archive=OVPN_DIR/"revoked"
+    archive.mkdir(parents=True,exist_ok=True)
+    os.chmod(archive,0o700)
+    for src in [OVPN_EASYRSA/f"pki/issued/{name}.crt",OVPN_EASYRSA/f"pki/private/{name}.key"]:
+        if src.exists():
+            shutil.move(str(src),str(archive/src.name))
+    return {"revoked":True,"name":name}
 
 def _port_in_use(port):
     port=int(port)
@@ -814,6 +950,46 @@ def create_xray_tunnel(listen_port, target_host, target_port, network="tcp,udp",
         raise
     return {"tag":tag,"listen_port":listen_port,"target_host":target_host,"target_port":target_port,"network":network,"backup":str(backup) if backup else None}
 
+
+def remove_xray_inbound(inbound_tag):
+    binary=_binary()
+    config_path=_config_path()
+    if not binary or not config_path:
+        raise ProtocolError("Xray core/config is not available")
+    path=Path(config_path)
+    try:
+        data=json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ProtocolError(f"cannot parse Xray config: {exc}") from exc
+    inbounds=data.get("inbounds")
+    if not isinstance(inbounds,list):
+        raise ProtocolError("invalid Xray inbounds collection")
+    before=len(inbounds)
+    data["inbounds"]=[x for x in inbounds if not (isinstance(x,dict) and x.get("tag")==inbound_tag)]
+    if len(data["inbounds"])==before:
+        raise ProtocolError("Xray inbound not found")
+    backup_dir=Path("/var/backups/makia-vps-manager")
+    backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
+    backup=backup_dir/f"xray-remove-{int(time.time())}.json"
+    shutil.copy2(path,backup)
+    tmp=path.with_suffix(path.suffix+".makia-remove")
+    tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    os.chmod(tmp,0o600)
+    try:
+        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        os.replace(tmp,path)
+        _run(["systemctl","restart","xray"],timeout=30)
+        if not _active("xray"):
+            raise ProtocolError("Xray did not become active after inbound removal")
+    except Exception:
+        try:
+            if tmp.exists(): tmp.unlink()
+            shutil.copy2(backup,path)
+            _run(["systemctl","restart","xray"],timeout=30)
+        except Exception:
+            pass
+        raise
+    return {"removed":True,"tag":inbound_tag,"backup":str(backup)}
 
 def disable_xray_client(inbound_tag,email):
     binary=_binary()
