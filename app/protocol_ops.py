@@ -717,6 +717,8 @@ def openvpn_endpoint_diagnostics(endpoint):
         warnings.append("سرویس OpenVPN فعال نیست.")
     if runtime.get("port") and not runtime.get("listener"):
         warnings.append("برای Port تنظیم‌شده Listener فعال OpenVPN دیده نشد.")
+    if int(runtime.get("port") or 0)==443 and str(runtime.get("proto") or "").startswith("tcp"):
+        warnings.append("OpenVPN روی TCP/443 با HTTPS/Nginx همان IP تداخل دارد مگر Port-sharing یا IP جدا داشته باشید. UDP/443 می‌تواند هم‌زمان با HTTPS/TCP 443 استفاده شود.")
     cert_info={}
     cert=OVPN_DIR/"server/server.crt"
     if cert.exists() and shutil.which("openssl"):
