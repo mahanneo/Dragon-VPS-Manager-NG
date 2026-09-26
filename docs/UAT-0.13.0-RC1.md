@@ -18,6 +18,7 @@
   - `nginx -t` PASS
   - Let’s Encrypt issue/renew PASS
   - پنل با `https://vpn.example.com` باز شود.
+- یک `makia-upgrade` بعد از فعال‌شدن Domain/TLS اجرا شود و Nginx/Certbot config فعال نباید با Template خام overwrite شود.
 - Login cookie روی HTTPS دارای Secure باشد.
 - Client/Subscription URLها Domain فعلی پنل را استفاده کنند.
 
@@ -35,6 +36,8 @@ Settings → WG / OpenVPN:
   - PersistentKeepalive = 15
   - AllowedIPs = `0.0.0.0/0`
 - Bootstrap جدید با Port/CIDR/MTU اعمال شود.
+- اگر UFW فعال است، Makia باید Rule همان UDP Port را اضافه کند و اتصال بیرونی PASS شود.
+- Firewall/Security Group پنل Provider VPS نیز جداگانه بررسی شود؛ Makia فقط Firewall داخل Host را مدیریت می‌کند.
 - Peer جدید شامل:
   - Endpoint دامنه
   - MTU انتخاب‌شده
@@ -57,6 +60,7 @@ Settings → WG / OpenVPN:
   - JSON نامعتبر یا config نامعتبر نباید جایگزین config فعال شود.
   - Rollback در Failure بررسی شود.
 - Advanced JSON مسیر Full Xray Core است؛ پنل نباید arbitrary Core capability را با whitelist نمایشی محدود کند.
+- پس از Apply معتبر، اگر UFW فعال است Portهای public inbound بر اساس TCP/UDP موردنیاز باز شوند؛ localhost inboundها نباید public rule بگیرند.
 
 ## 6. Portable Migration Bundle
 از پنل مبدا:
