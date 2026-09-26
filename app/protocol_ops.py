@@ -841,7 +841,23 @@ def create_wireguard_peer(name, endpoint, iface="wg0", dns="1.1.1.1", mtu=1280, 
         f"AllowedIPs = {allowed_ips}\n"
         f"PersistentKeepalive = {keepalive}\n"
     )
-    return {"name":name,"address":str(client_ip),"public_key":client_public,"config":client,"endpoint":endpoint,"port":int(p.group(1)),"dns":dns,"mtu":mtu,"keepalive":keepalive,"allowed_ips":allowed_ips}
+    fallback_ipv4=""
+    ip_config=""
+    if not endpoint_state.get("endpoint_is_ip"):
+        local4=set(endpoint_state.get("local_ipv4") or [])
+        fallback_ipv4=next((x for x in endpoint_state.get("resolved_ipv4") or [] if x in local4),"")
+        if fallback_ipv4:
+            ip_config=client.replace(
+                f"Endpoint = {_uri_host(endpoint)}:{p.group(1)}",
+                f"Endpoint = {fallback_ipv4}:{p.group(1)}",
+                1,
+            )
+    return {
+        "name":name,"address":str(client_ip),"public_key":client_public,
+        "config":client,"ip_config":ip_config,"fallback_ipv4":fallback_ipv4,
+        "endpoint":endpoint,"port":int(p.group(1)),"dns":dns,"mtu":mtu,
+        "keepalive":keepalive,"allowed_ips":allowed_ips,"diagnostics":runtime,
+    }
 
 def list_wireguard_peers(iface="wg0"):
     conf=WG_DIR/f"{iface}.conf"
