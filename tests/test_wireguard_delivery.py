@@ -23,3 +23,22 @@ def test_wireguard_ip_package_stays_single_profile():
     assert "phone.conf" in payload["files"]
     assert "phone-ip.conf" not in payload["files"]
     assert payload["summary"]["alternate_profile"] is False
+
+
+def test_existing_wireguard_domain_artifact_gets_ip_fallback_at_delivery(monkeypatch):
+    from app import main as main_app, protocol_ops
+    domain=(
+        "[Interface]\nPrivateKey = client-private\nAddress = 10.66.66.2/32\n\n"
+        "[Peer]\nPublicKey = server-public\nEndpoint = vpn.example.test:443\nAllowedIPs = 0.0.0.0/0\n"
+    )
+    payload=access_ops.wireguard_payload("phone",domain,"10.66.66.2")
+    monkeypatch.setattr(protocol_ops,"_resolve_endpoint",lambda endpoint,label="endpoint":{
+        "endpoint":endpoint,
+        "endpoint_is_ip":False,
+        "resolved_ipv4":["203.0.113.10"],
+        "local_ipv4":["203.0.113.10"],
+        "dns_matches_server":True,
+    })
+    current=main_app._current_delivery_payload("wireguard","phone",payload,None)
+    assert "phone-ip.conf" in current["files"]
+    assert b"Endpoint = 203.0.113.10:443" in current["files"]["phone-ip.conf"]
