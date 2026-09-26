@@ -1216,6 +1216,7 @@ def create_xray_tunnel(listen_port, target_host, target_port, network="tcp,udp",
             if tmp.exists(): tmp.unlink()
             if backup and backup.exists():
                 shutil.copy2(backup,path)
+                _xray_secure_runtime_file(path)
                 _run(["systemctl","restart","xray"],timeout=30)
         except Exception:
             pass
@@ -1250,6 +1251,8 @@ def remove_xray_inbound(inbound_tag):
     try:
         _xray_test_config(binary,tmp)
         os.replace(tmp,path)
+        _xray_secure_runtime_file(path)
+        _xray_test_config_as_service(binary,path)
         _run(["systemctl","restart","xray"],timeout=30)
         if not _active("xray"):
             raise ProtocolError("Xray did not become active after inbound removal")
@@ -1257,6 +1260,7 @@ def remove_xray_inbound(inbound_tag):
         try:
             if tmp.exists(): tmp.unlink()
             shutil.copy2(backup,path)
+            _xray_secure_runtime_file(path)
             _run(["systemctl","restart","xray"],timeout=30)
         except Exception:
             pass
@@ -1305,6 +1309,8 @@ def disable_xray_client(inbound_tag,email):
     try:
         _xray_test_config(binary,tmp)
         os.replace(tmp,path)
+        _xray_secure_runtime_file(path)
+        _xray_test_config_as_service(binary,path)
         _run(["systemctl","restart","xray"],timeout=30)
         if not _active("xray"):
             raise ProtocolError("Xray failed after client disable")
@@ -1312,6 +1318,7 @@ def disable_xray_client(inbound_tag,email):
         try:
             if tmp.exists(): tmp.unlink()
             shutil.copy2(backup,path)
+            _xray_secure_runtime_file(path)
             _run(["systemctl","restart","xray"],timeout=30)
         except Exception:
             pass
@@ -1385,6 +1392,8 @@ def enable_xray_client(inbound_tag,email,protocol,credential):
     try:
         _xray_test_config(binary,tmp)
         os.replace(tmp,path)
+        _xray_secure_runtime_file(path)
+        _xray_test_config_as_service(binary,path)
         _run(["systemctl","restart","xray"],timeout=30)
         if not _active("xray"):
             raise ProtocolError("Xray failed after client enable")
@@ -1392,6 +1401,7 @@ def enable_xray_client(inbound_tag,email,protocol,credential):
         try:
             if tmp.exists(): tmp.unlink()
             shutil.copy2(backup,path)
+            _xray_secure_runtime_file(path)
             _run(["systemctl","restart","xray"],timeout=30)
         except Exception:
             pass
@@ -1484,6 +1494,8 @@ def apply_xray_config(data):
     try:
         _xray_test_config(binary,tmp)
         os.replace(tmp,path)
+        _xray_secure_runtime_file(path)
+        _xray_test_config_as_service(binary,path)
         _run(["systemctl","restart","xray"],timeout=30)
         if not _active("xray"):
             raise ProtocolError("Xray failed to become active")
