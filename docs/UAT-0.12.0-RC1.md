@@ -21,11 +21,12 @@
 - Revoke باعث قطع/نامعتبرشدن دسترسی شود.
 
 ## 3. Xray subscription QR
-- QR Subscription در Share Center نمایش داده شود.
+- QR Subscription در Share Center نمایش داده و جداگانه دانلود شود.
 - URL از Domain/Origin فعلی پنل ساخته شود، نه Domain قدیمی Artifact.
 - QR در Client سازگار به‌عنوان Subscription اضافه شود.
-- `/sub/<id>?format=base64` پروفایل معتبر بدهد.
-- Expired/disabled/quota-exhausted client از Subscription پاسخ 403 بگیرد.
+- فرمت Default انتخاب‌شده در Settings (`base64` یا `raw`) در URL تولیدی اعمال شود.
+- با Subscription endpoint = Disabled، مسیر عمومی 404 و Share Center لینک Subscription تولید نکند.
+- Expired/disabled/quota-exhausted client از Subscription فعال پاسخ 403 بگیرد.
 
 ## 4. Public client portal QR
 - `/client/<subscription_id>` بدون دسترسی مدیریتی باز شود.
@@ -56,12 +57,16 @@
 
 ## 7. Settings Center V2
 تمام Tabها تست شوند:
-- Panel: Language, Theme, Density, Panel Domain.
-- Domain & TLS: DNS status, Nginx apply, Let's Encrypt issue/renew.
-- Delivery: Profile prefix, QR display, NPV enable, DNS mode, UDPGW port, transparent DNS.
-- Provisioning: SSH defaults, Xray defaults, WG DNS, OpenVPN port/protocol.
-- Security: Session lifetime, admin password, 2FA.
-- API: token create, one-time secret display, scoped access, revoke.
+- Panel General: Language, Theme, Density, Panel Domain.
+- Domain / Nginx / HTTPS: DNS status, Nginx apply, Let's Encrypt issue/renew.
+- SSH Defaults: password mode, expiry, sessions, device/IP.
+- Xray Defaults: protocol, port, transport, security, path/service, SNI/REALITY target, quota, expiry, IP, reset.
+- WG / OpenVPN: WireGuard DNS و OpenVPN port/protocol.
+- Delivery / NPV: Profile prefix, QR display, NPV enable, DNS mode, UDPGW port, transparent DNS.
+- Subscription: endpoint enable/disable, Client Page enable/disable, default format.
+- Admin Security: Session lifetime, admin password, 2FA.
+- API Tokens: token create, one-time secret display, scoped access, revoke.
+- Backup / Recovery: snapshot create/list و Self-Test؛ هیچ Restore نمایشی بدون Backend نباشد.
 
 ## 8. Provisioning defaults
 - SSH Password mode در Wizard جدید استفاده شود.
@@ -81,6 +86,7 @@
 - `/api/access/*/*/qr.svg` بدون Admin session پاسخ ندهد.
 - QR/Share حاوی Credential است؛ فقط Admin آن را ببیند.
 - Protected ZIP همچنان AES-256 و password-protected باشد.
+- Xray ZIP در حالت Subscription فعال شامل profile metadata، direct QR، subscription URL و subscription QR باشد.
 - DB artifact payload plaintext credential نباشد.
 - Audit برای protected export و عملیات مدیریتی باقی بماند.
 

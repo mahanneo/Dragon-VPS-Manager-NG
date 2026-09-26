@@ -87,11 +87,20 @@ def main():
             assert page.locator(".share-qr").count() >= 1
             assert page.locator("#shareText").input_value().startswith("vless://")
             assert page.locator("#shareSubscription").input_value().startswith(BASE_URL+"/sub/")
+            details=page.locator(".xray-share-details").inner_text()
+            assert "VLESS" in details.upper()
+            assert "example.test" in details
+            assert "443" in details
             with page.expect_download() as qr_download:
                 page.locator('[data-action="qr-download"]').click()
             qr_path=Path("/tmp/makia-browser-xray-qr.svg")
             qr_download.value.save_as(str(qr_path))
             assert "<svg" in qr_path.read_text(encoding="utf-8")
+            with page.expect_download() as sub_qr_download:
+                page.locator('[data-action="subscription-qr-download"]').click()
+            sub_qr_path=Path("/tmp/makia-browser-xray-subscription-qr.svg")
+            sub_qr_download.value.save_as(str(sub_qr_path))
+            assert "<svg" in sub_qr_path.read_text(encoding="utf-8")
             page.locator('.close-btn[data-action="modal-close"]').click()
 
             row=page.locator(".access-profile",has_text="browser-client")
@@ -108,6 +117,8 @@ def main():
                 names=zf.namelist()
                 assert any(name.endswith("-profile.json") for name in names)
                 assert any(name.endswith("-qr.svg") for name in names)
+                assert any(name.endswith("-subscription.txt") for name in names)
+                assert any(name.endswith("-subscription-qr.svg") for name in names)
 
             page.locator('.close-btn[data-action="modal-close"]').click()
             row=page.locator(".access-profile",has_text="browser-client")
@@ -143,7 +154,14 @@ def main():
             page.locator("#opProfilePrefix").wait_for()
             assert page.locator("#opProfilePrefix").input_value()=="BrowserMakia"
 
-            for tab in ["general","domain","delivery","defaults","security","api"]:
+            page.locator('[data-action="settings-tab"][data-tab="subscription"]').click()
+            page.locator("#opSubscriptionFormat").wait_for()
+            page.locator("#opSubscriptionFormat").select_option("raw")
+            page.locator('[data-action="settings-operator-save"]').click()
+            page.locator("#opSubscriptionFormat").wait_for()
+            assert page.locator("#opSubscriptionFormat").input_value()=="raw"
+
+            for tab in ["general","domain","ssh","xray","vpn","delivery","subscription","security","api","recovery"]:
                 page.locator(f'[data-action="settings-tab"][data-tab="{tab}"]').click()
                 page.wait_for_timeout(180)
                 assert page.locator(".settings-content-v2").inner_text().strip(), f"settings tab {tab} empty"

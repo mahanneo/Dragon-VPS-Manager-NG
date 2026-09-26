@@ -23,15 +23,21 @@
       <div class="usage-track large"><i id="usageBar"></i></div>
       {% if profile_qr %}
       <div class="client-qr-grid">
-        <div class="client-qr-card"><img src="{{profile_qr}}" alt="Profile QR"><b>QR اتصال مستقیم</b><span>برای v2rayNG / Hiddify / NPV و کلاینت سازگار</span></div>
-        <div class="client-qr-card"><img src="{{subscription_qr}}" alt="Subscription QR"><b>QR اشتراک</b><span>برای افزودن Subscription و دریافت همین پروفایل</span></div>
+        <div class="client-qr-card"><img src="{{profile_qr}}" alt="Profile QR"><b>QR اتصال مستقیم</b><span>برای v2rayNG / Hiddify / NPV و کلاینت سازگار</span><a class="ghost link-btn" download="{{client.name}}-profile-qr.svg" href="{{profile_qr}}">دانلود QR</a></div>
+        {% if subscription_qr %}<div class="client-qr-card"><img src="{{subscription_qr}}" alt="Subscription QR"><b>QR اشتراک</b><span>برای افزودن Subscription و دریافت همین پروفایل</span><a class="ghost link-btn" download="{{client.name}}-subscription-qr.svg" href="{{subscription_qr}}">دانلود QR اشتراک</a></div>{% endif %}
       </div>
       {% endif %}
+      <div class="client-share-box">
+        <label>لینک اتصال مستقیم<textarea id="clientShareLink" readonly>{{client.share_link}}</textarea></label>
+        <button class="ghost" type="button" onclick="navigator.clipboard.writeText(document.getElementById('clientShareLink').value)">Copy Link</button>
+      </div>
+      {% if subscription_enabled %}
       <div class="client-actions">
-        <a class="primary link-btn" href="/sub/{{subscription_id}}?format=base64">Subscription</a>
+        <a class="primary link-btn" href="{{subscription_url}}">Subscription</a>
         <a class="ghost link-btn" href="/sub/{{subscription_id}}?format=raw">Raw Link</a>
         <a class="ghost link-btn" href="/sub/{{subscription_id}}?format=json">JSON</a>
       </div>
+      {% endif %}
       <div class="notice">QR و لینک اتصال شامل Credential این پروفایل هستند. فقط برای صاحب همین دسترسی ارسال شوند؛ محدودیت حجم، انقضا و IP همچنان سمت سرور اعمال می‌شود.</div>
     </section>
     <footer>Makia VPS Manager · v{{version}}</footer>

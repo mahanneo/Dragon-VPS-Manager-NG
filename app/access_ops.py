@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import re
+import urllib.parse
 
 from cryptography.fernet import Fernet, InvalidToken
 import pyzipper
@@ -62,6 +63,78 @@ def make_qr_svg(text:str)->bytes:
     buf=io.BytesIO()
     img.save(buf)
     return buf.getvalue()
+
+def describe_xray_share(link:str,protocol:str|None=None)->dict:
+    link=str(link or "").strip()
+    proto=str(protocol or "").strip().lower()
+    if not link:
+        return {"protocol":proto or "unknown"}
+    try:
+        if link.startswith("vmess://"):
+            raw=link[len("vmess://"):]
+            obj=json.loads(base64.b64decode(raw+"="*(-len(raw)%4)).decode("utf-8"))
+            return {
+                "protocol":"vmess",
+                "label":str(obj.get("ps") or ""),
+                "host":str(obj.get("add") or ""),
+                "port":int(obj.get("port") or 0),
+                "transport":str(obj.get("net") or "tcp"),
+                "security":str(obj.get("tls") or "none"),
+                "path":str(obj.get("path") or ""),
+                "host_header":str(obj.get("host") or ""),
+            }
+        parsed=urllib.parse.urlsplit(link)
+        scheme=(parsed.scheme or proto or "").lower()
+        query={k:(v[-1] if isinstance(v,list) and v else v) for k,v in urllib.parse.parse_qs(parsed.query,keep_blank_values=True).items()}
+        label=urllib.parse.unquote(parsed.fragment or "")
+        host=parsed.hostname or ""
+        port=int(parsed.port or 0)
+        if scheme in {"vless","trojan"}:
+            return {
+                "protocol":scheme,
+                "label":label,
+                "host":host,
+                "port":port,
+                "transport":str(query.get("type") or "tcp"),
+                "security":str(query.get("security") or "none"),
+                "sni":str(query.get("sni") or ""),
+                "path":str(query.get("path") or query.get("serviceName") or ""),
+                "flow":str(query.get("flow") or ""),
+                "fingerprint":str(query.get("fp") or ""),
+                "reality_public_key":str(query.get("pbk") or ""),
+                "reality_short_id":str(query.get("sid") or ""),
+            }
+        if scheme in {"hysteria2","hy2"}:
+            return {
+                "protocol":"hysteria2",
+                "label":label,
+                "host":host,
+                "port":port,
+                "transport":"hysteria2",
+                "security":"tls",
+                "sni":str(query.get("sni") or ""),
+                "insecure":str(query.get("insecure") or "0"),
+            }
+        if scheme=="ss":
+            userinfo=parsed.username or ""
+            cipher=""
+            try:
+                decoded=base64.urlsafe_b64decode(userinfo+"="*(-len(userinfo)%4)).decode("utf-8")
+                cipher=decoded.split(":",1)[0]
+            except Exception:
+                pass
+            return {
+                "protocol":"shadowsocks",
+                "label":label,
+                "host":host,
+                "port":port,
+                "transport":"tcp/udp",
+                "security":"shadowsocks",
+                "cipher":cipher,
+            }
+        return {"protocol":scheme or proto or "unknown","label":label,"host":host,"port":port}
+    except Exception:
+        return {"protocol":proto or "unknown"}
 
 def npvt_ssh_link(host,username,password,port=22,remarks=None,dns_mode="UDP",udpgw_port=7300,transparent_dns=False):
     profile={
@@ -201,6 +274,9 @@ def xray_payload(name,protocol,share_link,subscription_url=None,client_url=None)
         f"{safe_filename(name)}-profile.json":json.dumps(profile,ensure_ascii=False,indent=2).encode("utf-8"),
         f"{safe_filename(name)}-qr.svg":make_qr_svg(str(share_link)),
     }
+    if subscription_url:
+        files[f"{safe_filename(name)}-subscription.txt"]=(str(subscription_url)+"\n").encode("utf-8")
+        files[f"{safe_filename(name)}-subscription-qr.svg"]=make_qr_svg(str(subscription_url))
     return {
         "native_filename":filename,
         "files":files,

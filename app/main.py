@@ -1,6 +1,6 @@
 from pathlib import Path
 from datetime import date, datetime, timedelta
-import time, io, base64, secrets, string, urllib.request, json, os, stat
+import time, io, base64, secrets, string, urllib.request, json, os, stat, re
 import pyotp, qrcode
 import qrcode.image.svg
 from fastapi import FastAPI, Request, Form, HTTPException
@@ -67,6 +67,11 @@ def operator_settings_snapshot():
             "npv_udpgw_port":_setting_int("delivery_npv_udpgw_port",7300,1,65535),
             "npv_transparent_dns":_setting_bool("delivery_npv_transparent_dns",False),
             "show_qr":_setting_bool("delivery_show_qr",True),
+        },
+        "subscription":{
+            "enabled":_setting_bool("subscription_enabled",True),
+            "client_page_enabled":_setting_bool("subscription_client_page_enabled",True),
+            "default_format":get_setting("subscription_default_format","base64"),
         },
         "defaults":{
             "ssh_password_mode":get_setting("default_ssh_password_mode","pin6"),
@@ -493,10 +498,12 @@ def xray_quick_inbound(payload:XrayQuickInbound,request:Request):
     client_row=get_protocol_client(client_id)
     sub_id=(client_row or {}).get("subscription_id") or ""
     origin=public_origin(request)
+    subscription_settings=operator_settings_snapshot()["subscription"]
+    sub_format=subscription_settings["default_format"]
     delivery=access_ops.xray_payload(
         payload.name,payload.protocol,result["share_link"],
-        f"{origin}/sub/{sub_id}?format=base64" if sub_id else "",
-        f"{origin}/client/{sub_id}" if sub_id else ""
+        f"{origin}/sub/{sub_id}?format={sub_format}" if sub_id and subscription_settings["enabled"] else "",
+        f"{origin}/client/{sub_id}" if sub_id and subscription_settings["client_page_enabled"] else ""
     )
     artifact_id=artifact_save("xray",str(client_id),payload.name,payload.protocol,delivery,{
         "client_id":client_id,"inbound_tag":result["tag"],"port":payload.port,
@@ -539,6 +546,8 @@ def _subscription_snapshot(row):
 
 @app.get("/sub/{subscription_id}")
 def subscription_get(subscription_id:str,format:str="base64"):
+    if not operator_settings_snapshot()["subscription"]["enabled"]:
+        raise HTTPException(404,"subscription delivery is disabled")
     row=protocol_client_by_subscription(subscription_id)
     if not row:
         raise HTTPException(404,"subscription not found")
@@ -559,22 +568,27 @@ def subscription_get(subscription_id:str,format:str="base64"):
 
 @app.get("/client/{subscription_id}",response_class=HTMLResponse)
 def subscription_page(subscription_id:str,request:Request):
+    subscription_settings=operator_settings_snapshot()["subscription"]
+    if not subscription_settings["client_page_enabled"]:
+        raise HTTPException(404,"client page is disabled")
     row=protocol_client_by_subscription(subscription_id)
     if not row:
         raise HTTPException(404,"subscription not found")
     snap=_subscription_snapshot(row)
     link=(row.get("share_link") or "").strip()
     origin=public_origin(request)
-    sub_url=f"{origin}/sub/{subscription_id}?format=base64"
+    sub_url=f"{origin}/sub/{subscription_id}?format={subscription_settings['default_format']}" if subscription_settings["enabled"] else ""
     profile_qr=""
     subscription_qr=""
     if link:
         profile_qr="data:image/svg+xml;base64,"+base64.b64encode(access_ops.make_qr_svg(link)).decode("ascii")
+    if sub_url:
         subscription_qr="data:image/svg+xml;base64,"+base64.b64encode(access_ops.make_qr_svg(sub_url)).decode("ascii")
     response=templates.TemplateResponse("subscription.html",{
         "request":request,"client":snap,"subscription_id":subscription_id,
         "app_name":APP_NAME,"version":VERSION,
         "profile_qr":profile_qr,"subscription_qr":subscription_qr,"subscription_url":sub_url,
+        "subscription_enabled":subscription_settings["enabled"],
     })
     response.headers["Cache-Control"]="no-store, private"
     response.headers["X-Content-Type-Options"]="nosniff"
@@ -803,10 +817,11 @@ def _resolve_access_payload(kind,key,request):
             raise HTTPException(404,"Xray client not found")
         sub_id=row.get("subscription_id") or ""
         origin=public_origin(request)
+        subscription_settings=operator_settings_snapshot()["subscription"]
         payload=access_ops.xray_payload(
             row["name"],row["protocol"],row.get("share_link") or "",
-            f"{origin}/sub/{sub_id}?format=base64" if sub_id else "",
-            f"{origin}/client/{sub_id}" if sub_id else ""
+            f"{origin}/sub/{sub_id}?format={subscription_settings['default_format']}" if sub_id and subscription_settings["enabled"] else "",
+            f"{origin}/client/{sub_id}" if sub_id and subscription_settings["client_page_enabled"] else ""
         )
         artifact_id=artifact_save("xray",str(row["id"]),row["name"],row["protocol"],payload,{
             "client_id":row["id"],"inbound_tag":row.get("inbound_tag",""),"subscription_id":sub_id
@@ -828,6 +843,34 @@ def _resolve_access_payload(kind,key,request):
     if kind=="ssh":
         raise HTTPException(409,"SSH password was not retained for this legacy account; set a new password once to enable encrypted exports")
     raise HTTPException(404,"access entry not found")
+
+def _current_delivery_payload(kind,key,payload,request):
+    """Rebuild delivery-facing files from current settings without mutating service credentials."""
+    if kind=="ssh":
+        summary=dict(payload.get("summary") or {})
+        credentials=(payload.get("files") or {}).get("credentials.txt",b"")
+        if isinstance(credentials,bytes):
+            credentials=credentials.decode("utf-8","replace")
+        match=re.search(r"(?m)^Password:\s*(.+)$",str(credentials))
+        password=match.group(1).strip() if match else ""
+        username=summary.get("username") or key
+        if password and summary.get("host") and username:
+            return access_ops.ssh_payload(
+                summary["host"],username,password,int(summary.get("port") or 22),ssh_npv_options(username)
+            )
+    elif kind=="xray":
+        try: row=get_protocol_client(int(key))
+        except Exception: row=None
+        if row and row.get("share_link"):
+            subscription_settings=operator_settings_snapshot()["subscription"]
+            sid=row.get("subscription_id") or ""
+            origin=public_origin(request)
+            return access_ops.xray_payload(
+                row["name"],row["protocol"],row.get("share_link") or "",
+                f"{origin}/sub/{sid}?format={subscription_settings['default_format']}" if sid and subscription_settings["enabled"] else "",
+                f"{origin}/client/{sid}" if sid and subscription_settings["client_page_enabled"] else ""
+            )
+    return payload
 
 @app.get("/api/access")
 def access_entries(request:Request):
@@ -894,26 +937,21 @@ def access_share(kind:str,key:str,request:Request):
     if kind=="ssh" and not operator_settings_snapshot()["delivery"]["npv_enabled"]:
         raise HTTPException(409,"NPV SSH delivery is disabled in Settings")
     payload,artifact=_resolve_access_payload(kind,key,request)
-    if kind=="ssh" and not payload.get("share_text"):
-        summary=payload.get("summary") or {}
-        credentials=(payload.get("files") or {}).get("credentials.txt",b"")
-        if isinstance(credentials,bytes): credentials=credentials.decode("utf-8","replace")
-        match=re.search(r"(?m)^Password:\s*(.+)$",str(credentials))
-        password=match.group(1).strip() if match else ""
-        if password and summary.get("host") and summary.get("username"):
-            payload=access_ops.ssh_payload(summary["host"],summary["username"],password,int(summary.get("port") or 22),ssh_npv_options(summary["username"]))
-            artifact_save("ssh",key,summary["username"],"ssh",payload,{"upgraded_delivery":"npvt-ssh"})
+    payload=_current_delivery_payload(kind,key,payload,request)
     share=str(payload.get("share_text") or payload.get("primary_text") or "")
     if not share: raise HTTPException(404,"share content is not available")
     qr=access_ops.make_qr_svg(share)
     summary=dict(payload.get("summary") or {})
+    connection={}
     if kind=="xray":
         try: xray_row=get_protocol_client(int(key))
         except Exception: xray_row=None
+        connection=access_ops.describe_xray_share(share,(xray_row or {}).get("protocol") or summary.get("protocol"))
+        subscription_settings=operator_settings_snapshot()["subscription"]
         if xray_row and xray_row.get("subscription_id"):
             sid=xray_row["subscription_id"]
-            summary["subscription_url"]=f"{public_origin(request)}/sub/{sid}?format=base64"
-            summary["client_url"]=f"{public_origin(request)}/client/{sid}"
+            summary["subscription_url"]=f"{public_origin(request)}/sub/{sid}?format={subscription_settings['default_format']}" if subscription_settings["enabled"] else ""
+            summary["client_url"]=f"{public_origin(request)}/client/{sid}" if subscription_settings["client_page_enabled"] else ""
     subscription=str(summary.get("subscription_url") or "")
     subscription_qr=""
     if subscription:
@@ -925,6 +963,7 @@ def access_share(kind:str,key:str,request:Request):
         "subscription_url":subscription,
         "subscription_qr":subscription_qr,
         "summary":summary,
+        "connection":connection,
         "artifact_id":artifact.get("id") if artifact else None,
     },headers={"Cache-Control":"no-store, private","X-Content-Type-Options":"nosniff"})
 
@@ -936,22 +975,29 @@ def access_qr(kind:str,key:str,request:Request):
     if kind=="ssh" and not operator_settings_snapshot()["delivery"]["npv_enabled"]:
         raise HTTPException(409,"NPV SSH delivery is disabled in Settings")
     payload,_=_resolve_access_payload(kind,key,request)
-    if kind=="ssh" and not payload.get("share_text"):
-        summary=payload.get("summary") or {}
-        credentials=(payload.get("files") or {}).get("credentials.txt",b"")
-        if isinstance(credentials,bytes): credentials=credentials.decode("utf-8","replace")
-        match=re.search(r"(?m)^Password:\s*(.+)$",str(credentials))
-        password=match.group(1).strip() if match else ""
-        if password and summary.get("host") and summary.get("username"):
-            payload=access_ops.ssh_payload(summary["host"],summary["username"],password,int(summary.get("port") or 22),ssh_npv_options(summary["username"]))
+    payload=_current_delivery_payload(kind,key,payload,request)
     share=str(payload.get("share_text") or payload.get("primary_text") or "")
     if not share: raise HTTPException(404,"QR content is not available")
     return Response(content=access_ops.make_qr_svg(share),media_type="image/svg+xml",headers={"Cache-Control":"no-store, private","X-Content-Type-Options":"nosniff"})
+
+@app.get("/api/access/xray/{key}/subscription-qr.svg")
+def access_subscription_qr(key:str,request:Request):
+    require_user(request)
+    subscription_settings=operator_settings_snapshot()["subscription"]
+    if not subscription_settings["enabled"]:
+        raise HTTPException(409,"subscription delivery is disabled in Settings")
+    try: row=get_protocol_client(int(key))
+    except Exception: row=None
+    if not row or not row.get("subscription_id"):
+        raise HTTPException(404,"Xray subscription not found")
+    url=f"{public_origin(request)}/sub/{row['subscription_id']}?format={subscription_settings['default_format']}"
+    return Response(content=access_ops.make_qr_svg(url),media_type="image/svg+xml",headers={"Cache-Control":"no-store, private","X-Content-Type-Options":"nosniff"})
 
 @app.get("/api/access/{kind}/{key}/manifest")
 def access_manifest(kind:str,key:str,request:Request):
     require_user(request)
     payload,artifact=_resolve_access_payload(kind,key,request)
+    payload=_current_delivery_payload(kind,key,payload,request)
     files=payload.get("files") or {}
     return {
         "kind":kind,
@@ -966,6 +1012,7 @@ def access_manifest(kind:str,key:str,request:Request):
 def access_native(kind:str,key:str,request:Request):
     require_user(request)
     payload,_=_resolve_access_payload(kind,key,request)
+    payload=_current_delivery_payload(kind,key,payload,request)
     filename=payload.get("native_filename") or "makia-access.txt"
     files=payload.get("files") or {}
     data=files.get(filename)
@@ -987,6 +1034,7 @@ def access_native(kind:str,key:str,request:Request):
 def access_package(kind:str,key:str,payload:AccessPackageRequest,request:Request):
     actor=require_mutation(request)
     access,_=_resolve_access_payload(kind,key,request)
+    access=_current_delivery_payload(kind,key,access,request)
     try:
         content=access_ops.protected_zip(access.get("files") or {},payload.password)
     except access_ops.AccessPackageError as e:
@@ -1295,6 +1343,9 @@ class OperatorSettings(BaseModel):
     wireguard_dns:str=Field(default="1.1.1.1",max_length=64)
     openvpn_port:int=Field(default=1194,ge=1,le=65535)
     openvpn_proto:str="udp"
+    subscription_enabled:bool=True
+    subscription_client_page_enabled:bool=True
+    subscription_default_format:str="base64"
 
 @app.get("/api/settings/operator")
 def operator_settings_get(request:Request):
@@ -1315,6 +1366,7 @@ def operator_settings_put(payload:OperatorSettings,request:Request):
     if payload.xray_transport not in allowed_transports: raise HTTPException(400,"invalid Xray transport")
     if payload.xray_security not in allowed_security: raise HTTPException(400,"invalid Xray security")
     if payload.openvpn_proto not in {"udp","tcp"}: raise HTTPException(400,"OpenVPN proto must be udp or tcp")
+    if payload.subscription_default_format not in {"base64","raw"}: raise HTTPException(400,"subscription format must be base64 or raw")
     values={
         "session_max_age_minutes":payload.session_max_age_minutes,
         "delivery_profile_prefix":payload.profile_prefix.strip() or "Makia",
@@ -1341,6 +1393,9 @@ def operator_settings_put(payload:OperatorSettings,request:Request):
         "default_wireguard_dns":payload.wireguard_dns.strip() or "1.1.1.1",
         "default_openvpn_port":payload.openvpn_port,
         "default_openvpn_proto":payload.openvpn_proto,
+        "subscription_enabled":1 if payload.subscription_enabled else 0,
+        "subscription_client_page_enabled":1 if payload.subscription_client_page_enabled else 0,
+        "subscription_default_format":payload.subscription_default_format,
     }
     for key,value in values.items(): set_setting(key,value)
     audit(actor,"operator_settings_update","settings",f"session={payload.session_max_age_minutes}; npv={payload.npv_enabled}; xray={payload.xray_protocol}/{payload.xray_transport}/{payload.xray_security}",ip(request))

@@ -470,18 +470,29 @@ async function openAccessShare(kind,key,name){
   try{
     const r=await api('/api/access/'+encodeURIComponent(kind)+'/'+encodeURIComponent(key)+'/share');
     const isSsh=kind==='ssh',isXray=kind==='xray';
-    const directTitle=isSsh?'NPV Tunnel / NapsternetV Import':isXray?'Xray Direct Profile':'WireGuard QR';
+    const directTitle=isSsh?'NPV Tunnel / NapsternetV Import':isXray?'Xray Share Center':'WireGuard QR';
     const directHelp=isSsh
       ?'در NPV Tunnel از Scan QR یا Import from Clipboard استفاده کن. لینک npvt-ssh شامل Host/User/Password همین اکانت است.'
       :isXray?'QR را در v2rayNG / Hiddify / NPV یا کلاینت سازگار اسکن کن؛ Copy Link نیز همان Share URI را می‌دهد.'
       :'این QR همان WireGuard config است و در کلاینت رسمی WireGuard قابل اسکن است.';
     const qrVisible=window.__operatorSettings?.delivery?.show_qr!==false;
+    const c=r.connection||{};
+    const detailPairs=isXray?[
+      ['Protocol',c.protocol],['Server',c.host],['Port',c.port],['Transport',c.transport],
+      ['Security',c.security],['SNI',c.sni],['Path / Service',c.path],['Flow',c.flow],
+      ['Fingerprint',c.fingerprint],['Cipher',c.cipher]
+    ].filter(x=>x[1]!==undefined&&x[1]!==null&&String(x[1]).length):[];
+    const details=detailPairs.length?'<div class="xray-share-details">'+detailPairs.map(x=>'<div><span>'+htmlEsc(String(x[0]))+'</span><b>'+htmlEsc(String(x[1]))+'</b></div>').join('')+'</div>':'';
+    const reality=(c.reality_public_key||c.reality_short_id)?'<div class="share-advanced"><b>REALITY</b><span>Public Key</span><code>'+htmlEsc(c.reality_public_key||'-')+'</code><span>Short ID</span><code>'+htmlEsc(c.reality_short_id||'-')+'</code></div>':'';
     const subBlock=r.subscription_url?[
       '<div class="share-subscription">',
         '<div><b>Subscription URL</b><span>برای کلاینت‌هایی که Subscription را پشتیبانی می‌کنند.</span></div>',
         (qrVisible&&r.subscription_qr?'<img class="share-qr small" src="'+htmlEsc(r.subscription_qr)+'" alt="Subscription QR">':''),
         '<textarea id="shareSubscription" readonly></textarea>',
-        '<div class="toolbar"><button class="ghost" data-action="copy-target" data-target="shareSubscription">Copy subscription</button></div>',
+        '<div class="toolbar"><button class="ghost" data-action="copy-target" data-target="shareSubscription">Copy subscription</button>',
+        (qrVisible&&r.subscription_qr?'<button class="ghost" data-action="subscription-qr-download" data-key="'+dataEnc(key)+'" data-name="'+dataEnc(name)+'">Download subscription QR</button>':''),
+        (r.summary?.client_url?'<a class="ghost link-btn" target="_blank" rel="noopener" href="'+htmlEsc(r.summary.client_url)+'">Open client page</a>':''),
+        '</div>',
       '</div>'
     ].join(''):'';
     modalRoot.innerHTML=[
@@ -492,9 +503,9 @@ async function openAccessShare(kind,key,name){
           '<div class="share-copy"><p>'+htmlEsc(directHelp)+'</p><label>Share / Import link<textarea id="shareText" readonly></textarea></label>',
           '<div class="toolbar"><button class="primary" data-action="copy-target" data-target="shareText">Copy Import Link</button><button class="ghost" data-action="qr-download" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'" data-name="'+dataEnc(name)+'">Download QR</button></div></div>',
         '</div>',
-        subBlock,
-        '<div class="wizard-note"><b>Security</b><span>QR و Share Link حاوی Credential اتصال هستند؛ فقط برای همان کاربر ارسال شوند. محدودیت IP/Device و Expiry همچنان روی سرور اعمال می‌شود.</span></div>',
-        '<div class="wizard-footer"><button class="ghost" data-action="modal-close">Done</button><button class="primary" data-action="protected-export" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'" data-name="'+dataEnc(name)+'">Protected ZIP</button></div>',
+        details,reality,subBlock,
+        '<div class="wizard-note"><b>Security</b><span>QR و Share Link حاوی Credential اتصال هستند؛ فقط برای همان کاربر ارسال شوند. محدودیت IP/Device، حجم و Expiry همچنان روی سرور اعمال می‌شود.</span></div>',
+        '<div class="wizard-footer"><button class="ghost" data-action="modal-close">Done</button><button class="ghost" data-action="native-export" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'">Native config</button><button class="primary" data-action="protected-export" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'" data-name="'+dataEnc(name)+'">Protected ZIP</button></div>',
       '</div></div>'
     ].join('');
     document.getElementById('shareText').value=r.share_text||'';
@@ -505,6 +516,11 @@ async function openAccessShare(kind,key,name){
 async function downloadAccessQr(kind,key,name){
   try{await fetchDownload('/api/access/'+encodeURIComponent(kind)+'/'+encodeURIComponent(key)+'/qr.svg',{},'makia-'+kind+'-'+name+'-qr.svg');toast('QR دانلود شد')}
   catch(e){alert('QR export: '+e.message)}
+}
+
+async function downloadSubscriptionQr(key,name){
+  try{await fetchDownload('/api/access/xray/'+encodeURIComponent(key)+'/subscription-qr.svg',{},'makia-xray-'+name+'-subscription-qr.svg');toast('Subscription QR دانلود شد')}
+  catch(e){alert('Subscription QR: '+e.message)}
 }
 
 function manageAccess(id){
@@ -865,7 +881,7 @@ async function backups(renderToken=window.__viewRenderToken){
   content.innerHTML=viewIntro('RECOVERY POINTS','مرکز بکاپ','Snapshotهای دیتای Makia را بساز و وضعیت آرشیوها را مشاهده کن.','<div class="view-intro-actions"><div class="view-intro-stat"><b>'+rows.length+'</b><span>BACKUPS</span></div><button class="primary" data-action="backup-create">＋ Create Backup</button></div>')+
   '<div class="panel modern-list"><div class="panel-head"><div><h3>Archive</h3><span>'+fmtBytes(total)+' TOTAL</span></div></div><div class="table">'+(rows.length?rows.map(b=>'<div class="row backup-row"><div><b>'+htmlEsc(b.name)+'</b><div class="muted">Makia data snapshot</div></div><div><b>'+fmtBytes(b.size)+'</b><div class="muted">archive size</div></div><div class="muted">'+new Date(b.created_at*1000).toLocaleString()+'</div><div><span class="status-chip ok">Protected</span></div></div>').join(''):'<div class="empty">هنوز بکاپی ساخته نشده.</div>')+'</div></div>';
 }
-async function makeBackup(){try{await api('/api/backups',{method:'POST'});await backups()}catch(e){alert(e.message)}}
+async function makeBackup(){try{await api('/api/backups',{method:'POST'});toast('Backup created');if(activeView==='settings')await currentView();else await backups()}catch(e){alert(e.message)}}
 async function auditView(renderToken=window.__viewRenderToken){
   title.textContent='Audit Logs';setPageContext('ACCOUNTING & TRACE');
   const rows=await api('/api/audit');if(renderToken!==window.__viewRenderToken||activeView!=='audit')return;
@@ -875,43 +891,70 @@ async function auditView(renderToken=window.__viewRenderToken){
 async function updates(renderToken=window.__viewRenderToken){title.textContent='Update Center';setPageContext('RELEASE MANAGEMENT');content.innerHTML='<div class="empty">در حال بررسی نسخه…</div>';let s;try{s=await api('/api/update/status')}catch(e){s={current:window.MAKIA_VERSION,latest:null,error:e.message}}if(renderToken!==window.__viewRenderToken||activeView!=='updates')return;const available=s.update_available;content.innerHTML=`<div class="panel update-hero"><div><div class="eyebrow">RELEASE CHANNEL · MAIN</div><h2>${available?'نسخه جدید آماده است':'Makia به‌روز است'}</h2><p class="muted">${s.error?'بررسی آنلاین نسخه ناموفق بود: '+s.error:'نسخه نصب‌شده با VERSION مخزن اصلی مقایسه شد.'}</p></div><div class="version-stack"><span>Installed</span><b>v${s.current||window.MAKIA_VERSION}</b><span>Latest</span><b class="${available?'accent':''}">${s.latest?'v'+s.latest:'Unavailable'}</b></div></div><div class="two-col"><div class="panel"><div class="panel-head"><h3>Safe update workflow</h3><span>CLI VERIFIED PATH</span></div><div class="timeline"><div><b>1</b><span>Pre-update backup</span></div><div><b>2</b><span>Download main</span></div><div><b>3</b><span>Dependencies + service files</span></div><div><b>4</b><span>Restart + health check</span></div></div><div class="command-box">sudo makia-upgrade <button class="soft" onclick="copyText('sudo makia-upgrade')">Copy</button></div></div><div class="panel"><div class="panel-head"><h3>Release status</h3><span>${available?'ACTION AVAILABLE':'NO ACTION'}</span></div><div class="quick-grid"><div class="quick-card"><b>${s.current||'-'}</b><span>Current</span></div><div class="quick-card"><b>${s.latest||'-'}</b><span>Latest on GitHub</span></div></div><div class="notice">آپدیت Web-triggered هنوز عمداً فعال نشده تا rollback اتمیک و امضای Release کامل شود؛ فعلاً CLI مسیر قابل بازیابی‌تری است.</div></div></div>`}
 async function settings(renderToken=window.__viewRenderToken){
   title.textContent='Settings';setPageContext('PANEL CONFIGURATION');
-  const [general,two,tokens,operator]=await Promise.all([
-    api('/api/settings/general'),api('/api/admin/2fa/status'),api('/api/admin/tokens'),api('/api/settings/operator')
+  const [general,two,tokens,operator,backupRows]=await Promise.all([
+    api('/api/settings/general'),api('/api/admin/2fa/status'),api('/api/admin/tokens'),api('/api/settings/operator'),api('/api/backups').catch(()=>[])
   ]);
   if(renderToken!==window.__viewRenderToken||activeView!=='settings')return;
   window.PANEL_DOMAIN=general.panel_domain||'';window.__operatorSettings=operator;
   window.__settingsTab=window.__settingsTab||'general';
-  const tab=window.__settingsTab,ds=general.domain_status||{},delivery=operator.delivery||{},defs=operator.defaults||{};
+  const tab=window.__settingsTab,ds=general.domain_status||{},delivery=operator.delivery||{},defs=operator.defaults||{},sub=operator.subscription||{};
   const tabs=[
-    ['general','◫','Panel'],['domain','⌁','Domain & TLS'],['delivery','◇','Delivery'],
-    ['defaults','⚡','Provisioning'],['security','◆','Security'],['api','⌘','API']
+    ['general','◫','Panel General'],['domain','⌁','Domain / Nginx / HTTPS'],['ssh','⌘','SSH Defaults'],
+    ['xray','✦','Xray Defaults'],['vpn','◈','WG / OpenVPN'],['delivery','◇','Delivery / NPV'],
+    ['subscription','◎','Subscription'],['security','◆','Admin Security'],['api','↔','API Tokens'],['recovery','⟳','Backup / Recovery']
   ];
   const nav=tabs.map(x=>'<button class="'+(tab===x[0]?'active':'')+'" data-action="settings-tab" data-tab="'+x[0]+'"><i>'+x[1]+'</i><span>'+x[2]+'</span></button>').join('');
   let body='';
 
   if(tab==='general'){
     body=[
-      '<section class="settings-section-head"><div><div class="eyebrow">PANEL EXPERIENCE</div><h2>Panel & Interface</h2><p>ظاهر، زبان و هویت عمومی پنل را بدون دست‌کاری سرویس‌های VPN تنظیم کن.</p></div><span class="settings-version">v'+htmlEsc(window.MAKIA_VERSION)+'</span></section>',
+      '<section class="settings-section-head"><div><div class="eyebrow">PANEL EXPERIENCE</div><h2>Panel General</h2><p>زبان، Theme، Density و هویت عمومی پنل؛ فارسی RTL و English LTR از Shell مشترک اعمال می‌شوند.</p></div><span class="settings-version">v'+htmlEsc(window.MAKIA_VERSION)+'</span></section>',
       '<div class="settings-card-v2"><div class="settings-card-title"><div><b>Interface</b><span>Language, theme and layout density</span></div></div>',
       '<div class="settings-form-grid"><label>Language<select id="generalLang"><option value="fa" '+(general.language==='fa'?'selected':'')+'>فارسی</option><option value="en" '+(general.language==='en'?'selected':'')+'>English</option></select></label>',
       '<label>Theme<select id="generalTheme"><option value="midnight" '+(general.theme==='midnight'?'selected':'')+'>Midnight</option><option value="amoled" '+(general.theme==='amoled'?'selected':'')+'>AMOLED</option><option value="graphite" '+(general.theme==='graphite'?'selected':'')+'>Graphite</option></select></label>',
       '<label>Density<select id="generalDensity"><option value="comfortable" '+(general.density==='comfortable'?'selected':'')+'>Comfortable</option><option value="compact" '+(general.density==='compact'?'selected':'')+'>Compact</option></select></label>',
       '<label>Panel Domain<input id="generalDomain" value="'+htmlEsc(general.panel_domain||'')+'" placeholder="panel.example.com"></label></div>',
       '<div class="settings-actions"><button class="primary" data-action="settings-general-save">Save panel settings</button></div></div>',
-      '<div class="settings-card-v2"><div class="settings-card-title"><div><b>Operational tools</b><span>Quick links to real configuration owners</span></div></div>',
-      '<div class="settings-shortcuts"><button data-action="nav" data-view="protocols"><b>Protocol Hub</b><span>Xray/WG/OpenVPN engines & advanced config</span></button><button data-action="nav" data-view="backups"><b>Backups</b><span>Recovery points and restore preparation</span></button><button data-action="nav" data-view="updates"><b>Updates</b><span>Release status and safe updater</span></button><button data-action="self-test"><b>Self-Test</b><span>DB, encryption, services and protocol health</span></button></div></div>'
+      '<div class="settings-card-v2"><div class="settings-card-title"><div><b>Operational owners</b><span>فقط مسیرهایی که Backend واقعی دارند</span></div></div>',
+      '<div class="settings-shortcuts"><button data-action="nav" data-view="protocols"><b>Protocol Hub</b><span>Xray/WG/OpenVPN engines</span></button><button data-action="nav" data-view="access"><b>Access Center</b><span>Client provisioning & delivery</span></button><button data-action="nav" data-view="updates"><b>Update Center</b><span>Release status</span></button><button data-action="self-test"><b>Self-Test</b><span>DB, crypto and services</span></button></div></div>'
     ].join('');
   }else if(tab==='domain'){
     body=[
-      '<section class="settings-section-head"><div><div class="eyebrow">PUBLIC PANEL EDGE</div><h2>Domain & TLS</h2><p>Domain، Nginx و Let\'s Encrypt از همین صفحه با validation و rollback مدیریت می‌شوند.</p></div></section>',
+      '<section class="settings-section-head"><div><div class="eyebrow">PUBLIC PANEL EDGE</div><h2>Panel Domain / Nginx / HTTPS</h2><p>Domain، Nginx و Let\'s Encrypt با validation و rollback واقعی مدیریت می‌شوند.</p></div></section>',
       '<div class="settings-card-v2"><div class="domain-health-v2"><div><span>Configured domain</span><b>'+htmlEsc(general.panel_domain||'IP Mode')+'</b></div><div><span>DNS IPv4</span><b>'+htmlEsc(ds.resolved_ipv4?.length?ds.resolved_ipv4.join(', '):'Not resolved')+'</b></div><div><span>Certificate</span><b class="'+(ds.certificate?'ok-text':'warn-text')+'">'+(ds.certificate?'Installed':'Not installed')+'</b></div><div><span>Certbot</span><b>'+(ds.certbot_installed?'Ready':'Will install on demand')+'</b></div></div>',
       '<div class="settings-form-grid two"><label>Panel Domain<input id="domainName" value="'+htmlEsc(general.panel_domain||'')+'" placeholder="panel.example.com"></label><label>Let\'s Encrypt email<input id="tlsEmail" type="email" placeholder="admin@example.com"></label></div>',
       '<div class="wizard-note"><b>DNS gate</b><span>قبل از صدور HTTPS، رکورد A دامنه باید به همین VPS اشاره کند. Apply Nginx قبل از reload با nginx -t بررسی و در خطا rollback می‌شود.</span></div>',
       '<div class="settings-actions"><button class="ghost" data-action="settings-domain-apply">Apply domain to Nginx</button><button class="primary" data-action="settings-cert-issue">Issue / Renew HTTPS</button></div></div>'
     ].join('');
+  }else if(tab==='ssh'){
+    body=[
+      '<section class="settings-section-head"><div><div class="eyebrow">PROVISIONING DEFAULTS</div><h2>SSH Defaults</h2><p>سیاست پیش‌فرض کاربر جدید SSH؛ Wizard عمومی و مستقیم هر دو از همین مقادیر استفاده می‌کنند.</p></div></section>',
+      '<div class="settings-card-v2"><div class="settings-form-grid">',
+      '<label>Password mode<select id="opSshPassword"><option value="pin4" '+(defs.ssh_password_mode==='pin4'?'selected':'')+'>PIN 4</option><option value="pin6" '+(defs.ssh_password_mode==='pin6'?'selected':'')+'>PIN 6</option><option value="easy8" '+(defs.ssh_password_mode==='easy8'?'selected':'')+'>Easy 8</option><option value="strong" '+(defs.ssh_password_mode==='strong'?'selected':'')+'>Strong</option></select></label>',
+      '<label>Expiry days<input id="opSshDays" type="number" min="0" max="3650" value="'+Number(defs.ssh_expire_days??30)+'"><small>0 = no expiry</small></label><label>Concurrent sessions<input id="opSshSessions" type="number" min="1" max="50" value="'+Number(defs.ssh_sessions||1)+'"></label><label>Device / IP limit<input id="opSshDevices" type="number" min="1" max="50" value="'+Number(defs.ssh_devices||1)+'"></label></div>',
+      '<div class="settings-actions"><button class="primary" data-action="settings-operator-save">Save SSH defaults</button></div></div>'
+    ].join('');
+  }else if(tab==='xray'){
+    body=[
+      '<section class="settings-section-head"><div><div class="eyebrow">PROVISIONING DEFAULTS</div><h2>Xray Defaults</h2><p>Defaultهای واقعی ساخت Client برای VLESS / VMess / Trojan / Shadowsocks / Hysteria2.</p></div></section>',
+      '<div class="settings-card-v2"><div class="settings-form-grid">',
+      '<label>Protocol<select id="opXrayProtocol">'+['vless','vmess','trojan','shadowsocks','hysteria2','http','socks'].map(x=>'<option value="'+x+'" '+(defs.xray_protocol===x?'selected':'')+'>'+x.toUpperCase()+'</option>').join('')+'</select></label>',
+      '<label>Port<input id="opXrayPort" type="number" min="1" max="65535" value="'+Number(defs.xray_port||2087)+'"></label>',
+      '<label>Transport<select id="opXrayTransport">'+['tcp','ws','grpc','httpupgrade','xhttp','kcp'].map(x=>'<option value="'+x+'" '+(defs.xray_transport===x?'selected':'')+'>'+x.toUpperCase()+'</option>').join('')+'</select></label>',
+      '<label>Security<select id="opXraySecurity"><option value="reality" '+(defs.xray_security==='reality'?'selected':'')+'>REALITY</option><option value="tls" '+(defs.xray_security==='tls'?'selected':'')+'>TLS</option><option value="none" '+(defs.xray_security==='none'?'selected':'')+'>None</option></select></label>',
+      '<label>Path / Service<input id="opXrayPath" value="'+htmlEsc(defs.xray_path||'/makia')+'"></label><label>SNI<input id="opXraySni" value="'+htmlEsc(defs.xray_sni||'www.microsoft.com')+'"></label><label>REALITY target<input id="opXrayTarget" value="'+htmlEsc(defs.xray_reality_target||'www.microsoft.com:443')+'"></label>',
+      '<label>Quota GB<input id="opXrayQuota" type="number" min="0" value="'+Number(defs.xray_quota_gb??50)+'"></label><label>Expiry days<input id="opXrayDays" type="number" min="0" max="3650" value="'+Number(defs.xray_expire_days??30)+'"></label><label>IP limit<input id="opXrayIp" type="number" min="1" max="50" value="'+Number(defs.xray_ip_limit||1)+'"></label><label>Traffic reset days<input id="opXrayReset" type="number" min="0" max="3650" value="'+Number(defs.xray_reset_days??30)+'"></label></div>',
+      '<div class="settings-actions"><button class="primary" data-action="settings-operator-save">Save Xray defaults</button></div></div>'
+    ].join('');
+  }else if(tab==='vpn'){
+    body=[
+      '<section class="settings-section-head"><div><div class="eyebrow">PROVISIONING DEFAULTS</div><h2>WireGuard / OpenVPN Defaults</h2><p>تنظیمات پیش‌فرض Client برای Engineهای واقعی نصب‌شده روی Host.</p></div></section>',
+      '<div class="settings-card-v2"><div class="settings-form-grid"><label>WireGuard DNS<input id="opWgDns" value="'+htmlEsc(defs.wireguard_dns||'1.1.1.1')+'"></label><label>OpenVPN port<input id="opOvpnPort" type="number" min="1" max="65535" value="'+Number(defs.openvpn_port||1194)+'"></label><label>OpenVPN transport<select id="opOvpnProto"><option value="udp" '+(defs.openvpn_proto==='udp'?'selected':'')+'>UDP</option><option value="tcp" '+(defs.openvpn_proto==='tcp'?'selected':'')+'>TCP</option></select></label></div>',
+      '<div class="settings-actions"><button class="primary" data-action="settings-operator-save">Save VPN defaults</button></div></div>'
+    ].join('');
   }else if(tab==='delivery'){
     body=[
-      '<section class="settings-section-head"><div><div class="eyebrow">CLIENT DELIVERY</div><h2>QR & App Delivery</h2><p>فرمت تحویل کاربر، QR و خروجی مستقیم NPV Tunnel را مدیریت کن.</p></div></section>',
+      '<section class="settings-section-head"><div><div class="eyebrow">CLIENT DELIVERY</div><h2>Delivery / NPV Tunnel Defaults</h2><p>QR، Profile remarks و خروجی مستقیم SSH برای NPV Tunnel / NapsternetV.</p></div></section>',
       '<div class="settings-card-v2"><div class="settings-card-title"><div><b>Share Center</b><span>Xray QR, WireGuard QR and SSH → NPV quick import</span></div></div>',
       '<div class="settings-form-grid"><label>Profile prefix<input id="opProfilePrefix" value="'+htmlEsc(delivery.profile_prefix||'Makia')+'" maxlength="40"></label>',
       '<label>Show QR in panel<select id="opShowQr"><option value="1" '+(delivery.show_qr!==false?'selected':'')+'>Enabled</option><option value="0" '+(delivery.show_qr===false?'selected':'')+'>Hidden</option></select></label>',
@@ -919,39 +962,42 @@ async function settings(renderToken=window.__viewRenderToken){
       '<label>NPV DNS tunnel mode<select id="opNpvDns"><option value="UDP" '+(delivery.npv_dns_mode==='UDP'?'selected':'')+'>UDP</option><option value="TCP" '+(delivery.npv_dns_mode==='TCP'?'selected':'')+'>TCP</option></select></label>',
       '<label>UDPGW Port<input id="opNpvUdpPort" type="number" min="1" max="65535" value="'+Number(delivery.npv_udpgw_port||7300)+'"></label>',
       '<label>Transparent DNS<select id="opNpvTransparent"><option value="0" '+(!delivery.npv_transparent_dns?'selected':'')+'>Off</option><option value="1" '+(delivery.npv_transparent_dns?'selected':'')+'>On</option></select></label></div>',
-      '<div class="wizard-note"><b>NPV import</b><span>Makia برای SSH لینک npvt-ssh و QR تولید می‌کند. فایل proprietary/locked .npv4 جعل نمی‌شود. Transparent DNS را فقط وقتی فعال کن که UDPGW واقعی روی Port انتخابی آماده باشد.</span></div>',
+      '<div class="wizard-note"><b>NPV import contract</b><span>Makia لینک npvt-ssh و QR می‌سازد. فایل proprietary رمزگذاری‌شده .npv4 بدون فرمت رسمی تولید یا جعل نمی‌شود. Transparent DNS فقط با UDPGW واقعی فعال شود.</span></div>',
       '<div class="settings-actions"><button class="primary" data-action="settings-operator-save">Save delivery settings</button></div></div>'
     ].join('');
-  }else if(tab==='defaults'){
+  }else if(tab==='subscription'){
     body=[
-      '<section class="settings-section-head"><div><div class="eyebrow">SMART PROVISIONING DEFAULTS</div><h2>Provisioning Defaults</h2><p>Wizard ساخت کاربر از این مقادیر واقعی استفاده می‌کند؛ دیگر Defaultها داخل JavaScript هاردکد نیستند.</p></div></section>',
-      '<div class="settings-card-v2"><div class="settings-card-title"><div><b>SSH defaults</b><span>New SSH user policy</span></div></div><div class="settings-form-grid">',
-      '<label>Password mode<select id="opSshPassword"><option value="pin4" '+(defs.ssh_password_mode==='pin4'?'selected':'')+'>PIN 4</option><option value="pin6" '+(defs.ssh_password_mode==='pin6'?'selected':'')+'>PIN 6</option><option value="easy8" '+(defs.ssh_password_mode==='easy8'?'selected':'')+'>Easy 8</option><option value="strong" '+(defs.ssh_password_mode==='strong'?'selected':'')+'>Strong</option></select></label>',
-      '<label>Expiry days<input id="opSshDays" type="number" min="0" max="3650" value="'+Number(defs.ssh_expire_days??30)+'"><small>0 = no expiry</small></label><label>Concurrent sessions<input id="opSshSessions" type="number" min="1" max="50" value="'+Number(defs.ssh_sessions||1)+'"></label><label>Device / IP limit<input id="opSshDevices" type="number" min="1" max="50" value="'+Number(defs.ssh_devices||1)+'"></label></div></div>',
-      '<div class="settings-card-v2"><div class="settings-card-title"><div><b>Xray defaults</b><span>Guided client creation</span></div></div><div class="settings-form-grid">',
-      '<label>Protocol<select id="opXrayProtocol">'+['vless','vmess','trojan','shadowsocks','hysteria2','http','socks'].map(x=>'<option value="'+x+'" '+(defs.xray_protocol===x?'selected':'')+'>'+x.toUpperCase()+'</option>').join('')+'</select></label>',
-      '<label>Port<input id="opXrayPort" type="number" min="1" max="65535" value="'+Number(defs.xray_port||2087)+'"></label>',
-      '<label>Transport<select id="opXrayTransport">'+['tcp','ws','grpc','httpupgrade','xhttp','kcp'].map(x=>'<option value="'+x+'" '+(defs.xray_transport===x?'selected':'')+'>'+x.toUpperCase()+'</option>').join('')+'</select></label>',
-      '<label>Security<select id="opXraySecurity"><option value="reality" '+(defs.xray_security==='reality'?'selected':'')+'>REALITY</option><option value="tls" '+(defs.xray_security==='tls'?'selected':'')+'>TLS</option><option value="none" '+(defs.xray_security==='none'?'selected':'')+'>None</option></select></label>',
-      '<label>Path / Service<input id="opXrayPath" value="'+htmlEsc(defs.xray_path||'/makia')+'"></label><label>SNI<input id="opXraySni" value="'+htmlEsc(defs.xray_sni||'www.microsoft.com')+'"></label><label>REALITY target<input id="opXrayTarget" value="'+htmlEsc(defs.xray_reality_target||'www.microsoft.com:443')+'"></label>',
-      '<label>Quota GB<input id="opXrayQuota" type="number" min="0" value="'+Number(defs.xray_quota_gb??50)+'"></label><label>Expiry days<input id="opXrayDays" type="number" min="0" max="3650" value="'+Number(defs.xray_expire_days??30)+'"></label><label>IP limit<input id="opXrayIp" type="number" min="1" max="50" value="'+Number(defs.xray_ip_limit||1)+'"></label><label>Traffic reset days<input id="opXrayReset" type="number" min="0" max="3650" value="'+Number(defs.xray_reset_days??30)+'"></label></div></div>',
-      '<div class="settings-card-v2"><div class="settings-card-title"><div><b>WireGuard & OpenVPN</b><span>Client defaults</span></div></div><div class="settings-form-grid"><label>WireGuard DNS<input id="opWgDns" value="'+htmlEsc(defs.wireguard_dns||'1.1.1.1')+'"></label><label>OpenVPN port<input id="opOvpnPort" type="number" min="1" max="65535" value="'+Number(defs.openvpn_port||1194)+'"></label><label>OpenVPN transport<select id="opOvpnProto"><option value="udp" '+(defs.openvpn_proto==='udp'?'selected':'')+'>UDP</option><option value="tcp" '+(defs.openvpn_proto==='tcp'?'selected':'')+'>TCP</option></select></label></div><div class="settings-actions"><button class="primary" data-action="settings-operator-save">Save provisioning defaults</button></div></div>'
+      '<section class="settings-section-head"><div><div class="eyebrow">XRAY DELIVERY</div><h2>Subscription Settings</h2><p>دسترسی Subscription و Client Page عمومیِ مبتنی بر Secret ID را کنترل کن.</p></div></section>',
+      '<div class="settings-card-v2"><div class="settings-form-grid">',
+      '<label>Subscription endpoint<select id="opSubscriptionEnabled"><option value="1" '+(sub.enabled!==false?'selected':'')+'>Enabled</option><option value="0" '+(sub.enabled===false?'selected':'')+'>Disabled</option></select></label>',
+      '<label>Public client page<select id="opClientPageEnabled"><option value="1" '+(sub.client_page_enabled!==false?'selected':'')+'>Enabled</option><option value="0" '+(sub.client_page_enabled===false?'selected':'')+'>Disabled</option></select></label>',
+      '<label>Default subscription format<select id="opSubscriptionFormat"><option value="base64" '+(sub.default_format!=='raw'?'selected':'')+'>Base64</option><option value="raw" '+(sub.default_format==='raw'?'selected':'')+'>Raw URI</option></select></label></div>',
+      '<div class="wizard-note"><b>Credential surface</b><span>Subscription ID مانند Secret URL در نظر گرفته می‌شود. Share Center مدیریتی همچنان Authentication می‌خواهد؛ Client Page فقط داده همان Client را نمایش می‌دهد.</span></div>',
+      '<div class="settings-actions"><button class="primary" data-action="settings-operator-save">Save subscription settings</button></div></div>'
     ].join('');
   }else if(tab==='security'){
     body=[
-      '<section class="settings-section-head"><div><div class="eyebrow">ADMIN SECURITY</div><h2>Security & Session</h2><p>مدت نشست مدیر، رمز عبور و TOTP را از یک محل کنترل کن.</p></div></section>',
+      '<section class="settings-section-head"><div><div class="eyebrow">ADMIN SECURITY</div><h2>Admin Security</h2><p>Session lifetime، رمز عبور مدیر و TOTP واقعی.</p></div></section>',
       '<div class="settings-card-v2"><div class="settings-card-title"><div><b>Admin session</b><span>Signed cookie lifetime</span></div></div><div class="settings-form-grid two"><label>Session max age (minutes)<input id="opSessionMinutes" type="number" min="5" max="43200" value="'+Number(operator.session_max_age_minutes||720)+'"></label><div class="settings-inline-note"><b>'+Math.round(Number(operator.session_max_age_minutes||720)/60*10)/10+' hours</b><span>روی login بعدی اعمال می‌شود.</span></div></div><div class="settings-actions"><button class="primary" data-action="settings-operator-save">Save session policy</button></div></div>',
       '<div class="settings-card-v2"><div class="settings-card-title"><div><b>Administrator password</b><span>Minimum 12 characters</span></div></div><div class="settings-form-grid two"><label>Current password<input id="oldP" type="password"></label><label>New password<input id="newP" type="password" minlength="12"></label></div><div class="settings-actions"><button class="primary" data-action="settings-password-change">Change password</button></div></div>',
       '<div class="settings-card-v2"><div class="settings-card-title"><div><b>Two-Factor Authentication</b><span>TOTP authenticator</span></div><span class="status-chip '+(two.enabled?'ok':'warn')+'">'+(two.enabled?'Enabled':'Optional')+'</span></div><div class="security-feature-row"><div><b>'+(two.enabled?'2FA is active':'Add a second factor')+'</b><span>'+(two.enabled?'Password + 6-digit TOTP is required at login.':'Google Authenticator, Microsoft Authenticator or compatible TOTP app.')+'</span></div><button class="'+(two.enabled?'danger':'primary')+'" data-action="'+(two.enabled?'settings-2fa-disable':'settings-2fa-setup')+'">'+(two.enabled?'Disable 2FA':'Enable 2FA')+'</button></div></div>'
     ].join('');
-  }else{
+  }else if(tab==='api'){
     body=[
       '<section class="settings-section-head"><div><div class="eyebrow">AUTOMATION API</div><h2>Scoped API Tokens</h2><p>Tokenهای Read-only با Scope مشخص؛ مقدار کامل فقط هنگام ساخت نمایش داده می‌شود.</p></div><button class="primary" data-action="settings-api-new">＋ New Token</button></section>',
       '<div class="settings-card-v2"><div class="wizard-note"><b>HTTPS only</b><span>برای API مدیریتی از HTTPS استفاده کن. در دیتابیس فقط Hash Token ذخیره می‌شود.</span></div><div class="table">'+(tokens.length?tokens.map(t=>'<div class="row"><div><b>'+htmlEsc(t.name)+'</b><div class="muted">…'+htmlEsc(t.token_last4)+'</div></div><div class="muted">'+htmlEsc(t.scopes||'-')+'</div><div><span class="status-chip '+(t.active?'ok':'bad')+'">'+(t.active?'Active':'Revoked')+'</span></div><div class="toolbar">'+(t.active?'<button class="danger" data-action="settings-api-revoke" data-id="'+Number(t.id)+'">Revoke</button>':'')+'</div></div>').join(''):'<div class="empty">API Tokenای ساخته نشده است.</div>')+'</div></div>'
     ].join('');
+  }else{
+    const recent=backupRows.slice(0,5);
+    body=[
+      '<section class="settings-section-head"><div><div class="eyebrow">RECOVERY</div><h2>Backup / Recovery Settings</h2><p>فقط عملیات Backend موجود: ساخت Snapshot و مشاهده Archive. Restore نمایشی اضافه نشده است.</p></div><button class="primary" data-action="backup-create">＋ Create Backup</button></section>',
+      '<div class="settings-card-v2"><div class="domain-health-v2"><div><span>Backups</span><b>'+backupRows.length+'</b></div><div><span>Latest</span><b>'+(recent[0]?htmlEsc(recent[0].name):'None')+'</b></div><div><span>Storage</span><b>'+fmtBytes(backupRows.reduce((n,x)=>n+Number(x.size||0),0))+'</b></div><div><span>Restore</span><b class="warn-text">CLI / validated workflow only</b></div></div>',
+      '<div class="settings-shortcuts"><button data-action="nav" data-view="backups"><b>Open Backup Center</b><span>View all real archives</span></button><button data-action="self-test"><b>Run Self-Test</b><span>Validate crypto, DB and services</span></button></div>',
+      (recent.length?'<div class="recovery-list">'+recent.map(x=>'<div><b>'+htmlEsc(x.name)+'</b><span>'+fmtBytes(x.size||0)+'</span></div>').join('')+'</div>':'<div class="empty">هنوز Backup ساخته نشده است.</div>')+'</div>'
+    ].join('');
   }
 
-  content.innerHTML='<div class="settings-shell-v2"><aside class="settings-nav-v2"><div class="settings-nav-title"><b>Settings</b><span>Control Center</span></div>'+nav+'</aside><div class="settings-content-v2">'+body+'</div></div>';
+  content.innerHTML='<div class="settings-shell-v2"><aside class="settings-nav-v2"><div class="settings-nav-title"><b>Settings V2</b><span>REAL BACKEND ONLY</span></div>'+nav+'</aside><div class="settings-content-v2">'+body+'</div></div>';
 }
 
 async function saveGeneral(){try{const r=await api('/api/settings/general',{method:'PUT',body:JSON.stringify({language:generalLang.value,panel_domain:generalDomain.value.trim(),theme:generalTheme.value,density:generalDensity.value})});window.PANEL_DOMAIN=r.panel_domain||'';toast('Settings saved');if(r.language!==window.MAKIA_LANG||r.theme!==window.MAKIA_THEME||r.density!==window.MAKIA_DENSITY){setTimeout(()=>location.reload(),450);return}await settings()}catch(e){alert(e.message)}}
@@ -961,7 +1007,7 @@ function readSettingValue(id,fallback){
   return el.value;
 }
 function operatorPayloadFromUi(){
-  const o=window.__operatorSettings||{},d=o.delivery||{},x=o.defaults||{};
+  const o=window.__operatorSettings||{},d=o.delivery||{},x=o.defaults||{},sub=o.subscription||{};
   return {
     session_max_age_minutes:readSettingValue('opSessionMinutes',Number(o.session_max_age_minutes||720)),
     profile_prefix:readSettingValue('opProfilePrefix',d.profile_prefix||'Makia'),
@@ -987,7 +1033,10 @@ function operatorPayloadFromUi(){
     xray_reset_days:readSettingValue('opXrayReset',Number(x.xray_reset_days??30)),
     wireguard_dns:readSettingValue('opWgDns',x.wireguard_dns||'1.1.1.1'),
     openvpn_port:readSettingValue('opOvpnPort',Number(x.openvpn_port||1194)),
-    openvpn_proto:readSettingValue('opOvpnProto',x.openvpn_proto||'udp')
+    openvpn_proto:readSettingValue('opOvpnProto',x.openvpn_proto||'udp'),
+    subscription_enabled:readSettingValue('opSubscriptionEnabled',sub.enabled!==false?'1':'0')==='1',
+    subscription_client_page_enabled:readSettingValue('opClientPageEnabled',sub.client_page_enabled!==false?'1':'0')==='1',
+    subscription_default_format:readSettingValue('opSubscriptionFormat',sub.default_format||'base64')
   };
 }
 async function saveOperatorSettings(){
@@ -1041,8 +1090,10 @@ async function selectWizardProtocol(kind){
   if(!wizardProtocolReady(kind)){await openProtocolSetup(kind);return}
   provisionState.protocol=kind;provisionState.step=2;
   if(kind==='ssh'){
-    const sec=await api('/api/accounts/generate-secret?mode=pin6').catch(()=>({secret:''}));
-    provisionState.password=sec.secret||'';provisionState.expireDate=dateAfterDays(30);
+    const d=window.__operatorSettings?.defaults||{},mode=d.ssh_password_mode||'pin6';
+    const sec=await api('/api/accounts/generate-secret?mode='+encodeURIComponent(mode)).catch(()=>({secret:''}));
+    provisionState.password=sec.secret||'';
+    const days=Number(d.ssh_expire_days??30);provisionState.expireDate=days?dateAfterDays(days):'';
   }
   renderProvisionWizard();
 }
@@ -1078,6 +1129,7 @@ async function handleMakiaAction(btn){
   if(action==='native-export'){await downloadAccessNative(btn.dataset.kind,dataDec(btn.dataset.key));return}
   if(action==='access-share'){await openAccessShare(btn.dataset.kind,dataDec(btn.dataset.key),dataDec(btn.dataset.name));return}
   if(action==='qr-download'){await downloadAccessQr(btn.dataset.kind,dataDec(btn.dataset.key),dataDec(btn.dataset.name));return}
+  if(action==='subscription-qr-download'){await downloadSubscriptionQr(dataDec(btn.dataset.key),dataDec(btn.dataset.name));return}
   if(action==='manage-access'){manageAccess(dataDec(btn.dataset.id));return}
   if(action==='revoke-access'){await revokeAccess(btn.dataset.kind,dataDec(btn.dataset.key),dataDec(btn.dataset.name));return}
   if(action==='wg-reissue'){await reissueWireGuard(dataDec(btn.dataset.key));return}
