@@ -58,6 +58,12 @@ https://YOUR-PANEL-DOMAIN/help/connect
 
 فایل OVPN اختصاصی است و نباید برای کاربر دیگری ارسال شود.
 
+اگر Profile با دامنه ساخته شده است:
+- رکورد A دامنه باید مستقیم به IP همان VPS اشاره کند.
+- برای OpenVPN خام از رکورد Proxy/CDN معمولی مانند Cloudflare Proxied استفاده نکنید؛ رکورد VPN باید DNS-only باشد.
+- Makia Profile را روی `udp4` یا `tcp4-client` می‌سازد تا رکورد AAAA اشتباه باعث انتخاب IPv6 نشود.
+- SSL/HTTPS پنل با Certificate داخلی OpenVPN یکی نیست؛ OpenVPN از CA/PKI خودش استفاده می‌کند.
+
 ## SSH / NPV Tunnel / NapsternetV
 
 ### NPV
