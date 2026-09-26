@@ -881,7 +881,7 @@ async function backups(renderToken=window.__viewRenderToken){
   content.innerHTML=viewIntro('RECOVERY POINTS','مرکز بکاپ','Snapshotهای دیتای Makia را بساز و وضعیت آرشیوها را مشاهده کن.','<div class="view-intro-actions"><div class="view-intro-stat"><b>'+rows.length+'</b><span>BACKUPS</span></div><button class="primary" data-action="backup-create">＋ Create Backup</button></div>')+
   '<div class="panel modern-list"><div class="panel-head"><div><h3>Archive</h3><span>'+fmtBytes(total)+' TOTAL</span></div></div><div class="table">'+(rows.length?rows.map(b=>'<div class="row backup-row"><div><b>'+htmlEsc(b.name)+'</b><div class="muted">Makia data snapshot</div></div><div><b>'+fmtBytes(b.size)+'</b><div class="muted">archive size</div></div><div class="muted">'+new Date(b.created_at*1000).toLocaleString()+'</div><div><span class="status-chip ok">Protected</span></div></div>').join(''):'<div class="empty">هنوز بکاپی ساخته نشده.</div>')+'</div></div>';
 }
-async function makeBackup(){try{await api('/api/backups',{method:'POST'});await backups()}catch(e){alert(e.message)}}
+async function makeBackup(){try{await api('/api/backups',{method:'POST'});toast('Backup created');if(activeView==='settings')await currentView();else await backups()}catch(e){alert(e.message)}}
 async function auditView(renderToken=window.__viewRenderToken){
   title.textContent='Audit Logs';setPageContext('ACCOUNTING & TRACE');
   const rows=await api('/api/audit');if(renderToken!==window.__viewRenderToken||activeView!=='audit')return;
@@ -892,7 +892,7 @@ async function updates(renderToken=window.__viewRenderToken){title.textContent='
 async function settings(renderToken=window.__viewRenderToken){
   title.textContent='Settings';setPageContext('PANEL CONFIGURATION');
   const [general,two,tokens,operator,backupRows]=await Promise.all([
-    api('/api/settings/general'),api('/api/admin/2fa/status'),api('/api/admin/tokens'),api('/api/settings/operator'),api('/api/backups')
+    api('/api/settings/general'),api('/api/admin/2fa/status'),api('/api/admin/tokens'),api('/api/settings/operator'),api('/api/backups').catch(()=>[])
   ]);
   if(renderToken!==window.__viewRenderToken||activeView!=='settings')return;
   window.PANEL_DOMAIN=general.panel_domain||'';window.__operatorSettings=operator;
