@@ -7,7 +7,7 @@ if [[ -r "$ENV_FILE" ]]; then
   while IFS='=' read -r key value; do
     [[ -z "$key" || "$key" == \#* ]] && continue
     case "$key" in
-      MAKIA_SUPPORT_TELEGRAM|MAKIA_SUPPORT_WEBHOOK_URL|MAKIA_RELEASE_ARCHIVE_URL|MAKIA_RELEASE_BEARER_TOKEN)
+      MAKIA_SUPPORT_TELEGRAM|MAKIA_SUPPORT_WEBHOOK_URL|MAKIA_RELEASE_ARCHIVE_URL|MAKIA_RELEASE_BEARER_TOKEN|MAKIA_ADMIN_ALLOWED_CIDRS)
         printf -v "$key" '%s' "$value"
         export "$key"
         ;;
