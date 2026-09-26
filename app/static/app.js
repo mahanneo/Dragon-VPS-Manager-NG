@@ -31,85 +31,42 @@ function openClientGuide(kind){window.open(clientGuideUrl(kind),'_blank','noopen
 function copyClientGuide(kind){copyText(clientGuideUrl(kind));toast('لینک راهنما کپی شد')}
 
 async function dashboard(renderToken=window.__viewRenderToken){
-  title.textContent='Overview';setPageContext('OPERATIONS COCKPIT');
+  title.textContent='Overview';setPageContext('SYSTEMD CONTROL');
   content.innerHTML='<div class="loading-state"><span class="spinner"></span><b>در حال همگام‌سازی وضعیت سرور…</b></div>';
   const [d,hist,accessRows,stack]=await Promise.all([
     api('/api/overview'),api('/api/metrics/history?hours=24'),api('/api/access'),api('/api/protocols')
   ]);
   if(renderToken!==window.__viewRenderToken||activeView!=='dashboard')return;
   const m=d.metrics,score=healthScore(d);
+  const healthy=(d.services||[]).filter(x=>x.active).length,total=(d.services||[]).length;
   const activeAccess=accessRows.filter(x=>x.status==='active').length;
-  const expiringAccess=accessRows.filter(x=>x.status==='expired'||(x.expire_at&&x.expire_at<Date.now()/1000)).length;
-  const byKind={ssh:0,xray:0,wireguard:0,openvpn:0};accessRows.forEach(x=>{if(byKind[x.kind]!==undefined)byKind[x.kind]++});
-  const readyCaps=(stack.capabilities||[]).filter(x=>x.available).length,totalCaps=(stack.capabilities||[]).length;
-  const healthyServices=(d.services||[]).filter(x=>x.active).length;
-  const servicePct=Math.round(healthyServices/Math.max(1,(d.services||[]).length)*100);
+  const networkTotal=Number(m.network?.sent||0)+Number(m.network?.recv||0);
   const recent=(d.sessions||[]).slice(0,6);
-  content.innerHTML=`
-  <section class="command-hero">
-    <div class="command-hero-copy">
-      <div class="eyebrow">REAL-TIME INFRASTRUCTURE</div>
-      <h2>${htmlEsc(m.hostname)}</h2>
-      <p>کنترل دسترسی‌ها، سلامت سرویس‌ها، مصرف منابع و وضعیت پروتکل‌ها در یک نمای عملیاتی.</p>
-      <div class="hero-actions">
-        <button class="primary action-lg" data-action="wizard-open">＋ ساخت دسترسی</button>
-        <button class="ghost action-lg" data-action="nav" data-view="access">مدیریت کاربران</button>
-        <button class="ghost action-lg" data-action="self-test">Run Self-Test</button>
-      </div>
-      <div class="host-meta">
-        <span class="chip">Kernel ${htmlEsc(m.kernel)}</span>
-        <span class="chip">${m.cpu_cores} CPU Threads</span>
-        <span class="chip">Uptime ${fmtUp(m.uptime_seconds)}</span>
-        <span class="chip">v${htmlEsc(d.version)}</span>
-      </div>
-    </div>
-    <div class="hero-status-stack">
-      <div class="health-orbit" style="--pct:${score}%"><div><b>${score}</b><span>HEALTH</span></div></div>
-      <div class="hero-mini-grid">
-        <div><span>Services</span><b>${healthyServices}/${(d.services||[]).length}</b></div>
-        <div><span>Access</span><b>${activeAccess}</b></div>
-        <div><span>Protocols</span><b>${readyCaps}/${totalCaps}</b></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="dashboard-metrics">
-    ${kpi('CPU',m.cpu+'%',m.cpu,'',''+m.cpu_cores+' threads')}
-    ${kpi('Memory',m.memory+'%',m.memory,'green',fmtBytes(m.memory_used)+' / '+fmtBytes(m.memory_total))}
-    ${kpi('Disk',m.disk+'%',m.disk,'violet',fmtBytes(m.disk_used)+' / '+fmtBytes(m.disk_total))}
-    ${kpi('Online Sessions',d.online_sessions,Math.min(100,d.online_sessions*10),'amber',d.online_users+' users')}
-    ${kpi('Managed Access',accessRows.length,Math.min(100,accessRows.length*4),'',''+activeAccess+' active')}
-    ${kpi('Services Healthy',servicePct+'%',servicePct,'green',healthyServices+' running')}
-  </section>
-
-  <section class="dashboard-grid">
-    <div class="panel dashboard-chart">
-      <div class="panel-head"><div><h3>Resource Timeline</h3><span>24 HOURS · REAL SAMPLES</span></div><button class="icon-btn" data-action="refresh">↻</button></div>
-      ${svgHistory(hist)}
-    </div>
-    <div class="panel access-mix-panel">
-      <div class="panel-head"><div><h3>Access Portfolio</h3><span>${accessRows.length} MANAGED</span></div><button class="ghost" data-action="nav" data-view="access">Open Center</button></div>
-      <div class="access-mix">
-        <button data-action="nav" data-view="access"><i class="mix-dot ssh"></i><span>SSH</span><b>${byKind.ssh}</b></button>
-        <button data-action="nav" data-view="access"><i class="mix-dot xray"></i><span>Xray</span><b>${byKind.xray}</b></button>
-        <button data-action="nav" data-view="access"><i class="mix-dot wg"></i><span>WireGuard</span><b>${byKind.wireguard}</b></button>
-        <button data-action="nav" data-view="access"><i class="mix-dot ovpn"></i><span>OpenVPN</span><b>${byKind.openvpn}</b></button>
-      </div>
-      <div class="dashboard-alert ${expiringAccess?'warn':'ok'}"><b>${expiringAccess}</b><span>expired / attention profiles</span></div>
-    </div>
-  </section>
-
-  <section class="dashboard-grid lower">
-    <div class="panel">
-      <div class="panel-head"><div><h3>Core Services</h3><span>LIVE SERVICE STATE</span></div><button class="ghost" data-action="nav" data-view="services">Manage</button></div>
-      <div class="service-cards">${(d.services||[]).map(s=>`<div class="service-card"><i class="status-dot ${s.active?'ok':'bad'}"></i><div><b>${htmlEsc(s.label)}</b><span>${htmlEsc(s.name)}</span></div><strong class="${s.active?'ok-text':'bad-text'}">${s.active?'Running':'Attention'}</strong></div>`).join('')}</div>
-    </div>
-    <div class="panel">
-      <div class="panel-head"><div><h3>Live Sessions</h3><span>${d.online_sessions} ACTIVE</span></div><button class="ghost" data-action="nav" data-view="sessions">View all</button></div>
-      <div class="session-cards">${recent.length?recent.map(s=>`<div><span class="avatar-mini">${htmlEsc((s.username||'?').slice(0,1).toUpperCase())}</span><div><b>${htmlEsc(s.username)}</b><small>${htmlEsc(s.remote||'local')}</small></div><time>${htmlEsc(s.since||'')}</time></div>`).join(''):'<div class="empty compact">نشست فعالی وجود ندارد.</div>'}</div>
-    </div>
-  </section>`;
+  const ring=(label,value,cls='')=>'<div class="glass-ring '+cls+'" style="--ring:'+pct(value)+'"><div><b>'+Math.round(Number(value)||0)+'%</b><span>'+label+'</span></div></div>';
+  const serviceCard=s=>'<button class="glass-service-card" data-action="nav" data-view="services"><span class="service-glyph">'+htmlEsc((s.label||s.name||'?').slice(0,1))+'</span><div><b>'+htmlEsc(s.label)+'</b><small>'+htmlEsc(s.name)+'</small></div><em class="'+(s.active?'running':'attention')+'">'+(s.active?'Running':'Attention')+'</em></button>';
+  content.innerHTML=[
+    '<section class="glass-status-hero">',
+      '<div class="glass-status-score"><b>'+healthy+'/'+total+'</b><span>RUNNING</span></div>',
+      '<div class="glass-status-copy"><div class="eyebrow">ALLOWLISTED SERVICES</div><h2>کنترل و سلامت سرور</h2><p>وضعیت زنده سرویس‌ها، منابع، ترافیک و دسترسی‌ها در یک نمای شیشه‌ای عملیاتی.</p></div>',
+      '<div class="glass-status-actions"><button class="primary action-lg" data-action="wizard-open">＋ ساخت دسترسی</button><button class="ghost action-lg" data-action="self-test">Self-Test</button></div>',
+    '</section>',
+    '<section class="glass-summary-grid">',
+      '<article><span class="glass-summary-icon">U</span><div><small>کاربران فعال</small><b>'+activeAccess+'</b><em>از '+accessRows.length+' دسترسی</em></div></article>',
+      '<article><span class="glass-summary-icon green">↗</span><div><small>ترافیک ثبت‌شده</small><b>'+fmtBytes(networkTotal)+'</b><em>Sent + Received</em></div></article>',
+      '<article><span class="glass-summary-icon violet">S</span><div><small>سرویس‌های فعال</small><b>'+healthy+' / '+total+'</b><em>Running</em></div></article>',
+      '<article><span class="glass-summary-icon amber">◇</span><div><small>وضعیت سرور</small><b>'+score+'%</b><em>Uptime '+fmtUp(m.uptime_seconds)+'</em></div></article>',
+    '</section>',
+    '<section class="glass-main-grid">',
+      '<div class="panel glass-services-panel"><div class="panel-head"><div><h3>وضعیت سرویس‌ها</h3><span>LIVE SYSTEMD STATE</span></div><button class="ghost" data-action="nav" data-view="services">مدیریت</button></div><div class="glass-service-grid">'+(d.services||[]).map(serviceCard).join('')+'</div></div>',
+      '<div class="panel glass-resource-panel"><div class="panel-head"><div><h3>مصرف منابع سرور</h3><span>REAL-TIME</span></div></div><div class="glass-rings">'+ring('CPU',m.cpu,'cyan')+ring('RAM',m.memory,'violet')+ring('Disk',m.disk,'green')+'</div><div class="glass-network-head"><span>ترافیک شبکه</span><b>'+fmtBytes(networkTotal)+'</b></div>'+svgHistory(hist)+'</div>',
+    '</section>',
+    '<section class="glass-secondary-grid">',
+      '<div class="panel"><div class="panel-head"><div><h3>Access Center</h3><span>'+accessRows.length+' MANAGED</span></div><button class="ghost" data-action="nav" data-view="access">Open</button></div><div class="glass-access-strip"><div><b>'+accessRows.filter(x=>x.kind==='ssh').length+'</b><span>SSH</span></div><div><b>'+accessRows.filter(x=>x.kind==='xray').length+'</b><span>Xray</span></div><div><b>'+accessRows.filter(x=>x.kind==='wireguard').length+'</b><span>WireGuard</span></div><div><b>'+accessRows.filter(x=>x.kind==='openvpn').length+'</b><span>OpenVPN</span></div></div></div>',
+      '<div class="panel"><div class="panel-head"><div><h3>Live Sessions</h3><span>'+d.online_sessions+' ACTIVE</span></div><button class="ghost" data-action="nav" data-view="sessions">View all</button></div><div class="session-cards">'+(recent.length?recent.map(x=>'<div><span class="avatar-mini">'+htmlEsc((x.username||'?').slice(0,1).toUpperCase())+'</span><div><b>'+htmlEsc(x.username)+'</b><small>'+htmlEsc(x.remote||'local')+'</small></div><time>'+htmlEsc(x.since||'')+'</time></div>').join(''):'<div class="empty compact">نشست فعالی وجود ندارد.</div>')+'</div></div>',
+    '</section>'
+  ].join('');
 }
+
 let accountCache=[];
 function setExpiryPreset(id,days){const el=document.getElementById(id);if(!el)return;if(Number(days)===0){el.value='';return}const base=new Date();base.setHours(12,0,0,0);base.setDate(base.getDate()+Number(days));el.value=base.toISOString().slice(0,10)}
 function shiftExpiry(id,days){const el=document.getElementById(id);if(!el)return;const today=new Date();today.setHours(12,0,0,0);let base=today;if(el.value){const current=new Date(el.value+'T12:00:00');if(!Number.isNaN(current.getTime())&&current>today)base=current}base.setDate(base.getDate()+Number(days));el.value=base.toISOString().slice(0,10)}
@@ -899,7 +856,7 @@ async function repairXrayRuntime(){
 async function bootstrapWireGuard(){const port=Number(prompt('WireGuard UDP port','51820'));if(!port)return;const cidr=prompt('Server tunnel CIDR','10.66.66.1/24');if(!cidr)return;try{const r=await api('/api/protocols/wireguard/bootstrap',{method:'POST',body:JSON.stringify({port,cidr})});toast('WireGuard '+r.interface+' started');await protocols()}catch(e){alert(e.message)}}
 async function createWireGuardPeer(){const d=window.__operatorSettings?.defaults||{};const name=prompt('Peer name','client01');if(!name)return;const endpoint=prompt('Public domain or server IP',window.PANEL_DOMAIN||location.hostname);if(!endpoint)return;const dns=prompt('Client DNS',d.wireguard_dns||'1.1.1.1')||'1.1.1.1';try{const r=await api('/api/protocols/wireguard/peers',{method:'POST',body:JSON.stringify({name,endpoint,dns,mtu:Number(d.wireguard_mtu||1280),keepalive:Number(d.wireguard_keepalive??15),allowed_ips:d.wireguard_allowed_ips||'0.0.0.0/0'})});configModal('WireGuard · '+name,r.config,name+'.conf','wireguard',name)}catch(e){alert(e.message)}}
 async function bootstrapOpenVPN(){const port=Number(prompt('OpenVPN port','1194'));if(!port)return;const proto=(prompt('Protocol: udp or tcp','udp')||'udp').toLowerCase();try{await api('/api/protocols/openvpn/bootstrap',{method:'POST',body:JSON.stringify({port,proto})});toast('OpenVPN server started');await protocols()}catch(e){alert(e.message)}}
-async function createOpenVPNClient(){const name=prompt('Client name','client01');if(!name)return;const endpoint=prompt('Public domain or server IP',window.PANEL_DOMAIN||location.hostname);if(!endpoint)return;const port=Number(prompt('OpenVPN port','1194'))||1194;const proto=(prompt('Protocol: udp or tcp','udp')||'udp').toLowerCase();try{const r=await api('/api/protocols/openvpn/clients',{method:'POST',body:JSON.stringify({name,endpoint,port,proto})});configModal('OpenVPN · '+name,r.config,name+'.ovpn','openvpn',name)}catch(e){alert(e.message)}}
+async function createOpenVPNClient(){const name=prompt('Client name','client01');if(!name)return;const endpoint=prompt('Public domain or server IP',window.PANEL_DOMAIN||location.hostname);if(!endpoint)return;const port=Number(prompt('OpenVPN port',String(window.__operatorSettings?.defaults?.openvpn_port||1194)))||1194;const proto=(prompt('Protocol: udp or tcp',window.__operatorSettings?.defaults?.openvpn_proto||'udp')||'udp').toLowerCase();try{const r=await api('/api/protocols/openvpn/clients',{method:'POST',body:JSON.stringify({name,endpoint,port,proto})});configModal('OpenVPN · '+name,r.config,name+'.ovpn','openvpn',name);if(r.diagnostics?.warnings?.length)toast('OpenVPN ساخته شد؛ Domain Diagnostics هشدار دارد')}catch(e){alert(e.message)}}
 function configModal(titleText,textData,fileName,kind=null,key=null){
   window.__lastConfigFilename=fileName||'config.txt';
   const secure=kind&&key?'<button class="primary" data-action="protected-export" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'" data-name="'+dataEnc(key)+'">Protected ZIP</button><button class="ghost" data-action="native-export" data-kind="'+htmlEsc(kind)+'" data-key="'+dataEnc(key)+'">Native file</button>':'';
@@ -907,21 +864,63 @@ function configModal(titleText,textData,fileName,kind=null,key=null){
   document.getElementById('configOutput').value=textData;
 }
 function downloadText(name,text){const blob=new Blob([text],{type:'text/plain;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),500)}
+async function openOpenVPNDiagnostics(){
+  try{
+    const endpoint=window.PANEL_DOMAIN||location.hostname;
+    const d=await api('/api/protocols/openvpn/diagnostics?endpoint='+encodeURIComponent(endpoint));
+    const warnings=(d.warnings||[]).map(x=>'<div class="diagnostic-hint">• '+htmlEsc(x)+'</div>').join('');
+    modalRoot.innerHTML=[
+      '<div class="modal-backdrop"><div class="modal diagnostics-modal openvpn-diagnostics-modal">',
+      '<div class="wizard-head"><div><div class="eyebrow">OPENVPN DOMAIN DIAGNOSTICS</div><h3>'+htmlEsc(endpoint)+'</h3></div><button class="close-btn" data-action="modal-close">×</button></div>',
+      '<div class="xray-diagnostic-grid"><div><span>Service</span><b class="'+(d.service_active?'ok-text':'bad-text')+'">'+(d.service_active?'ACTIVE':'DOWN')+'</b></div><div><span>Listener</span><b class="'+(d.listener?'ok-text':'bad-text')+'">'+(d.listener?'READY':'MISSING')+'</b></div><div><span>Transport</span><b>'+htmlEsc(String(d.proto||'-'))+' : '+htmlEsc(String(d.port||'-'))+'</b></div><div><span>DNS → VPS</span><b class="'+(d.dns_matches_server===false?'bad-text':'ok-text')+'">'+(d.endpoint_is_ip?'DIRECT IP':d.dns_matches_server===false?'MISMATCH':'OK / UNKNOWN')+'</b></div></div>',
+      '<div class="domain-resolution-grid"><div><span>A / IPv4</span><code>'+htmlEsc((d.resolved_ipv4||[]).join(', ')||'none')+'</code></div><div><span>AAAA / IPv6</span><code>'+htmlEsc((d.resolved_ipv6||[]).join(', ')||'none')+'</code></div><div><span>VPS IPv4</span><code>'+htmlEsc((d.local_ipv4||[]).join(', ')||'unknown')+'</code></div></div>',
+      warnings?'<div class="diagnostic-hints">'+warnings+'</div>':'<div class="wizard-note"><b>Domain endpoint ready</b><span>دامنه به IPv4 این VPS می‌رسد و Listener OpenVPN فعال است.</span></div>',
+      '<div class="wizard-note"><b>SSL clarification</b><span>گواهی HTTPS پنل برای Nginx است. OpenVPN از CA/Certificate داخلی خودش استفاده می‌کند؛ Cloudflare/HTTP proxy معمولی نمی‌تواند UDP/TCP خام OpenVPN را Forward کند.</span></div>',
+      '<div class="wizard-footer"><button class="ghost" data-action="modal-close">Close</button><button class="ghost" data-action="openvpn-repair">Normalize IPv4</button><button class="primary" data-action="client-guide" data-kind="openvpn">راهنمای کاربر</button></div>',
+      '</div></div>'
+    ].join('');
+  }catch(e){alert('OpenVPN diagnostics: '+e.message)}
+}
+async function repairOpenVPNRuntime(){
+  if(!confirm('OpenVPN server.conf به udp4/tcp4 و IPv4 listener نرمال شود؟ قبل از تغییر Backup گرفته می‌شود و در Failure rollback خواهد شد.'))return;
+  try{await api('/api/protocols/openvpn/repair',{method:'POST'});toast('OpenVPN IPv4 runtime normalized');await openOpenVPNDiagnostics()}catch(e){alert('OpenVPN repair: '+e.message)}
+}
+
 async function services(renderToken=window.__viewRenderToken){
   title.textContent='Services';setPageContext('SYSTEMD CONTROL');
   const [d,pstack]=await Promise.all([api('/api/overview'),api('/api/protocols').catch(()=>({}))]);
   if(renderToken!==window.__viewRenderToken||activeView!=='services')return;
-  const running=(d.services||[]).filter(x=>x.active).length,xrayInstalled=Boolean(pstack?.xray?.installed);
+  const running=(d.services||[]).filter(x=>x.active).length;
+  const installed={
+    xray:Boolean(pstack?.xray?.installed),
+    'openvpn-server@server':Boolean(pstack?.openvpn?.installed),
+    'wg-quick@wg0':Boolean(pstack?.wireguard?.installed)
+  };
   const row=s=>{
+    const protocolKind=s.name==='xray'?'xray':s.name==='openvpn-server@server'?'openvpn':s.name==='wg-quick@wg0'?'wireguard':'';
+    const missing=protocolKind&&installed[s.name]===false;
     let extra='';
     if(s.name==='xray'){
-      extra=xrayInstalled
-        ? '<button class="ghost" data-action="xray-diagnostics">Diagnose</button>'+(!s.active?'<button class="soft warnish" data-action="xray-repair">Repair</button>':'')
-        : '<button class="soft" data-action="protocol-setup" data-kind="xray">Install</button>';
+      extra=missing
+        ? '<button class="soft" data-action="protocol-setup" data-kind="xray">Install Xray</button>'
+        : '<button class="ghost" data-action="xray-diagnostics">Diagnose</button>'+(!s.active?'<button class="soft warnish" data-action="xray-repair">Repair</button>':'');
+    }else if(s.name==='openvpn-server@server'){
+      extra=missing
+        ? '<button class="soft" data-action="protocol-setup" data-kind="openvpn">Setup OpenVPN</button>'
+        : '<button class="ghost" data-action="openvpn-diagnostics">Domain</button>'+(!s.active?'<button class="soft warnish" data-action="openvpn-repair">Repair</button>':'');
+    }else if(s.name==='wg-quick@wg0'&&missing){
+      extra='<button class="soft" data-action="protocol-setup" data-kind="wireguard">Setup WireGuard</button>';
     }
-    return '<div class="row"><div><i class="status-dot '+(s.active?'ok':'bad')+'"></i><b>'+htmlEsc(s.label)+'</b><div class="muted">'+htmlEsc(s.name)+'</div></div><div class="muted">'+htmlEsc(s.state)+'</div><div><span class="status-chip '+(s.active?'ok':'bad')+'">'+(s.active?'Running':xrayInstalled&&s.name==='xray'?'Attention':'Stopped')+'</span></div><div class="toolbar">'+extra+'<button class="ghost" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="start">Start</button><button class="primary" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="restart">Restart</button><button class="danger" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="stop">Stop</button></div></div>';
+    const controls=missing?'':[
+      '<button class="ghost" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="start">Start</button>',
+      '<button class="primary" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="restart">Restart</button>',
+      '<button class="danger" data-action="service-action" data-service="'+dataEnc(s.name)+'" data-service-action="stop">Stop</button>'
+    ].join('');
+    const stateLabel=missing?'Not installed':s.active?'Running':'Attention';
+    const stateClass=missing?'warn':s.active?'ok':'bad';
+    return '<div class="row"><div><i class="status-dot '+(s.active?'ok':'bad')+'"></i><b>'+htmlEsc(s.label)+'</b><div class="muted">'+htmlEsc(s.name)+'</div></div><div class="muted">'+htmlEsc(s.state)+'</div><div><span class="status-chip '+stateClass+'">'+stateLabel+'</span></div><div class="toolbar">'+extra+controls+'</div></div>';
   };
-  content.innerHTML=viewIntro('ALLOWLISTED SERVICES','کنترل سرویس‌ها','Start/Stop/Restart فقط برای سرویس‌های Allowlist شده است. برای Xray، Diagnose علت واقعی Failure را از Core و journal نشان می‌دهد.','<div class="view-intro-stat"><b>'+running+'/'+d.services.length+'</b><span>RUNNING</span></div>')+
+  content.innerHTML=viewIntro('ALLOWLISTED SERVICES','کنترل سرویس‌ها','Start/Stop/Restart فقط برای سرویس‌های نصب‌شده و Allowlist شده نمایش داده می‌شود؛ Xray و OpenVPN Diagnostics علت Failure را از Runtime واقعی بررسی می‌کنند.','<div class="view-intro-stat"><b>'+running+'/'+d.services.length+'</b><span>RUNNING</span></div>')+
   '<div class="panel modern-list"><div class="table">'+d.services.map(row).join('')+'</div></div>';
 }
 
@@ -997,7 +996,7 @@ async function settings(renderToken=window.__viewRenderToken){
       '<section class="settings-section-head"><div><div class="eyebrow">PANEL EXPERIENCE</div><h2>Panel General</h2><p>زبان، Theme، Density و هویت عمومی پنل؛ فارسی RTL و English LTR از Shell مشترک اعمال می‌شوند.</p></div><span class="settings-version">v'+htmlEsc(window.MAKIA_VERSION)+'</span></section>',
       '<div class="settings-card-v2"><div class="settings-card-title"><div><b>Interface</b><span>Language, theme and layout density</span></div></div>',
       '<div class="settings-form-grid"><label>Language<select id="generalLang"><option value="fa" '+(general.language==='fa'?'selected':'')+'>فارسی</option><option value="en" '+(general.language==='en'?'selected':'')+'>English</option></select></label>',
-      '<label>Theme<select id="generalTheme"><option value="midnight" '+(general.theme==='midnight'?'selected':'')+'>Midnight</option><option value="amoled" '+(general.theme==='amoled'?'selected':'')+'>AMOLED</option><option value="graphite" '+(general.theme==='graphite'?'selected':'')+'>Graphite</option></select></label>',
+      '<label>Theme<select id="generalTheme"><option value="glass" '+(general.theme==='glass'?'selected':'')+'>Glass Aurora</option><option value="midnight" '+(general.theme==='midnight'?'selected':'')+'>Midnight</option><option value="amoled" '+(general.theme==='amoled'?'selected':'')+'>AMOLED</option><option value="graphite" '+(general.theme==='graphite'?'selected':'')+'>Graphite</option></select></label>',
       '<label>Density<select id="generalDensity"><option value="comfortable" '+(general.density==='comfortable'?'selected':'')+'>Comfortable</option><option value="compact" '+(general.density==='compact'?'selected':'')+'>Compact</option></select></label>',
       '<label>Panel Domain<input id="generalDomain" value="'+htmlEsc(general.panel_domain||'')+'" placeholder="panel.example.com"></label></div>',
       '<div class="settings-actions"><button class="primary" data-action="settings-general-save">Save panel settings</button></div></div>',
@@ -1038,7 +1037,7 @@ async function settings(renderToken=window.__viewRenderToken){
       '<section class="settings-section-head"><div><div class="eyebrow">PROVISIONING DEFAULTS</div><h2>WireGuard / OpenVPN Defaults</h2><p>تنظیمات پیش‌فرض Client برای Engineهای واقعی نصب‌شده روی Host.</p></div></section>',
       '<div class="settings-card-v2"><div class="settings-card-title"><div><b>WireGuard compatibility</b><span>Real client/server defaults</span></div><button class="soft" data-action="wg-compat-preset">Compatibility preset</button></div><div class="settings-form-grid"><label>DNS<input id="opWgDns" value="'+htmlEsc(defs.wireguard_dns||'1.1.1.1')+'"></label><label>UDP Listen Port<input id="opWgPort" type="number" min="1" max="65535" value="'+Number(defs.wireguard_port||443)+'"></label><label>MTU<input id="opWgMtu" type="number" min="576" max="1500" value="'+Number(defs.wireguard_mtu||1280)+'"></label><label>Keepalive seconds<input id="opWgKeepalive" type="number" min="0" max="3600" value="'+Number(defs.wireguard_keepalive??15)+'"></label><label>Allowed IPs<input id="opWgAllowedIps" value="'+htmlEsc(defs.wireguard_allowed_ips||'0.0.0.0/0')+'"></label><label>Tunnel CIDR<input id="opWgCidr" value="'+htmlEsc(defs.wireguard_cidr||'10.66.66.1/24')+'"></label></div><div class="wizard-note"><b>Important</b><span>Port 443/UDP و MTU پایین‌تر فقط سازگاری NAT/MTU را بهتر می‌کنند. اگر WireGuard protocol-level blocking وجود داشته باشد، از Xray/REALITY استفاده کن. برای مهاجرت بدون تعویض config کاربران، Endpoint را دامنه ثابت پنل قرار بده.</span></div></div>',
       '<div class="settings-card-v2"><div class="settings-card-title"><div><b>OpenVPN</b><span>Client defaults</span></div></div><div class="settings-form-grid"><label>OpenVPN port<input id="opOvpnPort" type="number" min="1" max="65535" value="'+Number(defs.openvpn_port||1194)+'"></label><label>OpenVPN transport<select id="opOvpnProto"><option value="udp" '+(defs.openvpn_proto==='udp'?'selected':'')+'>UDP</option><option value="tcp" '+(defs.openvpn_proto==='tcp'?'selected':'')+'>TCP</option></select></label></div>',
-      '<div class="settings-actions"><button class="primary" data-action="settings-operator-save">Save VPN defaults</button></div></div>'
+      '<div class="wizard-note"><b>Domain mode</b><span>OpenVPN از TLS/PKI داخلی خودش استفاده می‌کند؛ HTTPS پنل تونل OpenVPN نیست. برای Domain، رکورد A باید مستقیم و DNS-only به VPS اشاره کند. پروفایل‌های جدید روی udp4/tcp4 ساخته می‌شوند تا AAAA اشتباه باعث شکست اتصال نشود.</span></div><div class="settings-actions"><button class="ghost" data-action="openvpn-diagnostics">Domain Diagnostics</button><button class="ghost" data-action="openvpn-repair">Normalize IPv4 runtime</button><button class="primary" data-action="settings-operator-save">Save VPN defaults</button></div></div>'
     ].join('');
   }else if(tab==='delivery'){
     body=[
@@ -1230,6 +1229,8 @@ async function handleMakiaAction(btn){
   if(action==='protocol-install'){await performProtocolInstall(btn.dataset.kind);return}
   if(action==='protocol-bootstrap'){await performProtocolBootstrap(btn.dataset.kind,btn.dataset.installed==='1');return}
   if(action==='protocol-refresh'){await currentView();return}
+  if(action==='openvpn-diagnostics'){await openOpenVPNDiagnostics();return}
+  if(action==='openvpn-repair'){await repairOpenVPNRuntime();return}
   if(action==='xray-diagnostics'){await openXrayDiagnostics();return}
   if(action==='xray-repair'){await repairXrayRuntime();return}
   if(action==='xray-advanced'){await openXrayAdvanced();return}

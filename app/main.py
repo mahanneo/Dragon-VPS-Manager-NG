@@ -19,7 +19,11 @@ app.mount("/static",StaticFiles(directory=BASE/"static"),name="static")
 templates=Jinja2Templates(directory=BASE/"templates")
 
 @app.on_event("startup")
-def startup(): init_db()
+def startup():
+    init_db()
+    if get_setting("ui_generation","")!="glass-v1":
+        set_setting("theme","glass")
+        set_setting("ui_generation","glass-v1")
 
 def current_user(request:Request): return read_session(request.cookies.get(COOKIE_NAME))
 def require_user(request:Request):
@@ -192,7 +196,7 @@ def root(request:Request):
     return templates.TemplateResponse("dashboard.html",{
         "request":request,"app_name":APP_NAME,"version":VERSION,
         "language":get_setting("language","fa"),"panel_domain":get_setting("panel_domain",""),
-        "theme":get_setting("theme","midnight"),"density":get_setting("density","comfortable")
+        "theme":get_setting("theme","glass"),"density":get_setting("density","comfortable")
     })
 
 @app.get("/help/connect",response_class=HTMLResponse)
@@ -817,6 +821,26 @@ def openvpn_bootstrap(payload:OpenVPNBootstrap,request:Request):
     audit(actor,"openvpn_bootstrap","server",f"port={payload.port}; proto={payload.proto}",ip(request))
     return result
 
+@app.get("/api/protocols/openvpn/diagnostics")
+def openvpn_diagnostics_get(request:Request,endpoint:str=""):
+    require_user(request)
+    target=(endpoint or public_host(request)).strip()
+    try:
+        return protocol_ops.openvpn_endpoint_diagnostics(target)
+    except protocol_ops.ProtocolError as e:
+        raise HTTPException(400,str(e))
+
+@app.post("/api/protocols/openvpn/repair")
+def openvpn_repair(request:Request):
+    actor=require_mutation(request)
+    try:
+        result=protocol_ops.repair_openvpn_ipv4_runtime()
+    except protocol_ops.ProtocolError as e:
+        audit(actor,"openvpn_repair_failed","openvpn",str(e)[:500],ip(request))
+        raise HTTPException(400,str(e))
+    audit(actor,"openvpn_repair","openvpn",f"backup={result.get('backup')}",ip(request))
+    return result
+
 class OpenVPNClient(BaseModel):
     name:str=Field(min_length=1,max_length=48)
     endpoint:str=Field(min_length=1,max_length=255)
@@ -828,6 +852,7 @@ def openvpn_client_create(payload:OpenVPNClient,request:Request):
     actor=require_mutation(request)
     try:
         result=protocol_ops.create_openvpn_client(payload.name,payload.endpoint,payload.port,payload.proto)
+        result["diagnostics"]=protocol_ops.openvpn_endpoint_diagnostics(payload.endpoint)
         delivery=access_ops.openvpn_payload(payload.name,result["config"])
         artifact_id=artifact_save("openvpn",payload.name,payload.name,"openvpn",delivery,{
             "endpoint":payload.endpoint,"port":payload.port,"transport":payload.proto
@@ -897,6 +922,12 @@ def _current_delivery_payload(kind,key,payload,request):
             result=access_ops.ssh_payload(
                 summary["host"],username,password,int(summary.get("port") or 22),ssh_npv_options(username)
             )
+    elif kind=="openvpn":
+        try:
+            rendered=protocol_ops.render_openvpn_client(key,public_host(request))
+            result=access_ops.openvpn_payload(key,rendered["config"])
+        except protocol_ops.ProtocolError:
+            result=payload
     elif kind=="xray":
         try: row=get_protocol_client(int(key))
         except Exception: row=None
@@ -1220,6 +1251,16 @@ def diagnostics_self_test(request:Request):
     except Exception as exc:
         add("panel_tls_expiry",False,exc,"warn")
 
+    try:
+        ovpn=protocol_ops.openvpn_status()
+        if ovpn.get("installed") and ovpn.get("config"):
+            diag=protocol_ops.openvpn_endpoint_diagnostics(public_host(request))
+            add("openvpn_runtime",bool(diag.get("service_active") and diag.get("listener")),f"{diag.get('proto')}:{diag.get('port')} · listener={diag.get('listener')}","error")
+            if not diag.get("endpoint_is_ip"):
+                add("openvpn_domain",bool(diag.get("resolved_ipv4")) and diag.get("dns_matches_server") is not False,"; ".join(diag.get("warnings") or []) or "Domain A record points to this VPS","warn")
+    except Exception as exc:
+        add("openvpn_runtime",False,exc,"warn")
+
     critical=[x for x in checks if not x["ok"] and x["level"]=="error"]
     warnings=[x for x in checks if not x["ok"] and x["level"]=="warn"]
     return {
@@ -1382,7 +1423,7 @@ def node_heartbeat(payload:NodeHeartbeat,request:Request):
 class GeneralSettings(BaseModel):
     language:str="fa"
     panel_domain:str=""
-    theme:str="midnight"
+    theme:str="glass"
     density:str="comfortable"
 
 @app.get("/api/settings/general")
@@ -1393,7 +1434,7 @@ def general_settings_get(request:Request):
     return {
         "language":data.get("language","fa"),
         "panel_domain":domain,
-        "theme":data.get("theme","midnight"),
+        "theme":data.get("theme","glass"),
         "density":data.get("density","comfortable"),
         "domain_status":panel_ops.domain_status(domain or None),
     }
@@ -1402,7 +1443,7 @@ def general_settings_get(request:Request):
 def general_settings_put(payload:GeneralSettings,request:Request):
     actor=require_mutation(request)
     language=payload.language if payload.language in {"fa","en"} else "fa"
-    theme=payload.theme if payload.theme in {"midnight","amoled","graphite"} else "midnight"
+    theme=payload.theme if payload.theme in {"glass","midnight","amoled","graphite"} else "glass"
     density=payload.density if payload.density in {"comfortable","compact"} else "comfortable"
     domain=(payload.panel_domain or "").strip().lower()
     if domain:

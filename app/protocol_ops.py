@@ -636,10 +636,121 @@ def remove_wireguard_peer(public_key, iface="wg0"):
     os.chmod(conf,0o600)
     return {"removed":True,"public_key":public_key,"interface":iface}
 
+def _openvpn_proto(proto,server=False):
+    proto=str(proto or "udp").strip().lower()
+    if proto in {"udp","udp4"}:
+        return "udp4"
+    if proto in {"tcp","tcp4","tcp-client","tcp4-client","tcp-server","tcp4-server"}:
+        return "tcp4-server" if server else "tcp4-client"
+    raise ProtocolError("invalid OpenVPN protocol")
+
+def _local_ipv4_candidates():
+    found=set()
+    try:
+        out=_run(["ip","-4","addr","show","scope","global"],timeout=8)
+        for item in re.findall(r"\binet\s+(\d+\.\d+\.\d+\.\d+)/",out):
+            try: found.add(str(ipaddress.ip_address(item)))
+            except ValueError: pass
+    except Exception:
+        pass
+    try:
+        out=_run(["ip","-4","route","get","1.1.1.1"],timeout=8)
+        m=re.search(r"\bsrc\s+(\d+\.\d+\.\d+\.\d+)",out)
+        if m: found.add(str(ipaddress.ip_address(m.group(1))))
+    except Exception:
+        pass
+    return sorted(found)
+
+def _openvpn_server_runtime():
+    server_conf=OVPN_DIR/"server/server.conf"
+    result={"config":str(server_conf),"port":None,"proto":None,"service_active":_active("openvpn-server@server"),"listener":False}
+    if server_conf.exists():
+        text=server_conf.read_text(encoding="utf-8",errors="ignore")
+        pm=re.search(r"(?m)^port\s+(\d+)\s*$",text)
+        proto_m=re.search(r"(?m)^proto\s+(\S+)\s*$",text)
+        result["port"]=int(pm.group(1)) if pm else 1194
+        result["proto"]=(proto_m.group(1) if proto_m else "udp4").lower()
+    if result["port"] and shutil.which("ss"):
+        p=subprocess.run(["ss","-H","-lntu"],text=True,capture_output=True,timeout=8,check=False)
+        if p.returncode==0:
+            wanted=str(result["port"])
+            for line in (p.stdout or "").splitlines():
+                if re.search(rf":{re.escape(wanted)}\b",line):
+                    kind=line.split(None,1)[0].lower() if line.split() else ""
+                    if (str(result["proto"]).startswith("udp") and kind=="udp") or (str(result["proto"]).startswith("tcp") and kind=="tcp"):
+                        result["listener"]=True
+                        break
+    return result
+
+def openvpn_endpoint_diagnostics(endpoint):
+    endpoint=_validate_endpoint_host(endpoint,"OpenVPN endpoint")
+    runtime=_openvpn_server_runtime()
+    resolved4=[]
+    resolved6=[]
+    is_ip=False
+    ip_version=None
+    try:
+        parsed=ipaddress.ip_address(endpoint)
+        is_ip=True
+        ip_version=parsed.version
+        if parsed.version==4: resolved4=[parsed.compressed]
+        else: resolved6=[parsed.compressed]
+    except ValueError:
+        try:
+            resolved4=sorted({x[4][0] for x in socket.getaddrinfo(endpoint,None,socket.AF_INET)})
+        except Exception:
+            resolved4=[]
+        try:
+            resolved6=sorted({x[4][0] for x in socket.getaddrinfo(endpoint,None,socket.AF_INET6)})
+        except Exception:
+            resolved6=[]
+    local4=_local_ipv4_candidates()
+    matches=bool(set(resolved4)&set(local4)) if resolved4 and local4 else None
+    warnings=[]
+    if not is_ip and not resolved4:
+        warnings.append("دامنه هیچ رکورد IPv4/A قابل استفاده‌ای ندارد؛ OpenVPN این پنل روی IPv4 ساخته می‌شود.")
+    if not is_ip and resolved6:
+        warnings.append("دامنه رکورد IPv6/AAAA هم دارد؛ Makia برای جلوگیری از انتخاب اشتباه IPv6، پروفایل OpenVPN را روی udp4/tcp4 قفل می‌کند.")
+    if not is_ip and matches is False:
+        warnings.append("رکورد A دامنه با IPv4های Global این VPS تطابق ندارد. اگر DNS پشت Proxy/CDN مثل Cloudflare باشد، OpenVPN خام از آن عبور نمی‌کند؛ رکورد VPN باید DNS-only و مستقیم به VPS باشد.")
+    if not runtime.get("service_active"):
+        warnings.append("سرویس OpenVPN فعال نیست.")
+    if runtime.get("port") and not runtime.get("listener"):
+        warnings.append("برای Port تنظیم‌شده Listener فعال OpenVPN دیده نشد.")
+    if int(runtime.get("port") or 0)==443 and str(runtime.get("proto") or "").startswith("tcp"):
+        warnings.append("OpenVPN روی TCP/443 با HTTPS/Nginx همان IP تداخل دارد مگر Port-sharing یا IP جدا داشته باشید. UDP/443 می‌تواند هم‌زمان با HTTPS/TCP 443 استفاده شود.")
+    cert_info={}
+    cert=OVPN_DIR/"server/server.crt"
+    if cert.exists() and shutil.which("openssl"):
+        p=subprocess.run(["openssl","x509","-in",str(cert),"-noout","-subject","-issuer","-enddate"],text=True,capture_output=True,timeout=8,check=False)
+        if p.returncode==0:
+            for line in (p.stdout or "").splitlines():
+                if "=" in line:
+                    k,v=line.split("=",1)
+                    cert_info[k.strip()]=v.strip()
+    return {
+        "endpoint":endpoint,
+        "endpoint_is_ip":is_ip,
+        "endpoint_ip_version":ip_version,
+        "resolved_ipv4":resolved4,
+        "resolved_ipv6":resolved6,
+        "local_ipv4":local4,
+        "dns_matches_server":matches,
+        "service_active":runtime.get("service_active",False),
+        "listener":runtime.get("listener",False),
+        "port":runtime.get("port"),
+        "proto":runtime.get("proto"),
+        "certificate":cert_info,
+        "warnings":warnings,
+        "ok":bool(runtime.get("service_active") and runtime.get("listener") and (is_ip or (resolved4 and matches is not False))),
+    }
+
 def bootstrap_openvpn(port=1194, proto="udp"):
     port=_validate_port(port)
-    if proto not in {"udp","tcp"}:
+    requested_proto=str(proto or "udp").lower()
+    if requested_proto not in {"udp","tcp","udp4","tcp4"}:
         raise ProtocolError("invalid OpenVPN protocol")
+    server_proto=_openvpn_proto(requested_proto,server=True)
     if not _installed("openvpn"):
         install_component("openvpn")
     if not OVPN_EASYRSA.exists():
@@ -684,7 +795,7 @@ def bootstrap_openvpn(port=1194, proto="udp"):
     os.chmod(up,0o700); os.chmod(down,0o700)
     server_conf=server_dir/"server.conf"
     server_conf.write_text(
-        f"port {port}\nproto {'udp' if proto=='udp' else 'tcp-server'}\ndev tun\n"
+        f"port {port}\nproto {server_proto}\nlocal 0.0.0.0\ndev tun\n"
         "topology subnet\nserver 10.8.0.0 255.255.255.0\n"
         "ca ca.crt\ncert server.crt\nkey server.key\ndh dh.pem\ncrl-verify crl.pem\n"
         "tls-crypt ta.key\n"
@@ -698,15 +809,46 @@ def bootstrap_openvpn(port=1194, proto="udp"):
     Path("/etc/sysctl.d/99-makia-openvpn.conf").write_text("net.ipv4.ip_forward=1\n",encoding="utf-8")
     _run(["sysctl","--system"],timeout=30)
     _run(["systemctl","enable","--now","openvpn-server@server"],timeout=30)
-    firewall=_ufw_allow_if_active(port,"udp" if proto=="udp" else "tcp","OpenVPN")
-    return {"server":"server","port":port,"proto":proto,"firewall":firewall}
+    firewall=_ufw_allow_if_active(port,"udp" if server_proto.startswith("udp") else "tcp","OpenVPN")
+    return {"server":"server","port":port,"proto":"udp" if server_proto.startswith("udp") else "tcp","server_proto":server_proto,"firewall":firewall}
+
+def repair_openvpn_ipv4_runtime():
+    server_conf=OVPN_DIR/"server/server.conf"
+    if not server_conf.exists():
+        raise ProtocolError("OpenVPN server config is not available")
+    original=server_conf.read_text(encoding="utf-8",errors="ignore")
+    updated=original
+    proto_m=re.search(r"(?m)^proto\s+(\S+)\s*$",updated)
+    current=(proto_m.group(1) if proto_m else "udp").lower()
+    target="tcp4-server" if current.startswith("tcp") else "udp4"
+    if proto_m:
+        updated=re.sub(r"(?m)^proto\s+\S+\s*$",f"proto {target}",updated,count=1)
+    else:
+        updated=f"proto {target}\n"+updated
+    if not re.search(r"(?m)^local\s+",updated):
+        updated=re.sub(r"(?m)^(proto\s+\S+\s*)$",r"\1\nlocal 0.0.0.0",updated,count=1)
+    backup=server_conf.with_name(f"server.conf.makia-{int(time.time())}.bak")
+    shutil.copy2(server_conf,backup)
+    if updated!=original:
+        server_conf.write_text(updated,encoding="utf-8")
+    try:
+        _run(["systemctl","restart","openvpn-server@server"],timeout=30)
+        if not _active("openvpn-server@server"):
+            raise ProtocolError("OpenVPN did not become active after IPv4 normalization")
+    except Exception:
+        shutil.copy2(backup,server_conf)
+        try: _run(["systemctl","restart","openvpn-server@server"],timeout=30)
+        except Exception: pass
+        raise
+    runtime=_openvpn_server_runtime()
+    return {"ok":True,"backup":str(backup),"runtime":runtime}
 
 def create_openvpn_client(name, endpoint, port=1194, proto="udp"):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
         raise ProtocolError("invalid client name")
     endpoint=_validate_endpoint_host(endpoint)
     port=_validate_port(port)
-    if proto not in {"udp","tcp"}:
+    if proto not in {"udp","tcp","udp4","tcp4"}:
         raise ProtocolError("invalid OpenVPN protocol")
     if not (OVPN_EASYRSA/"pki/ca.crt").exists():
         raise ProtocolError("OpenVPN server is not bootstrapped")
@@ -719,15 +861,16 @@ def create_openvpn_client(name, endpoint, port=1194, proto="udp"):
     cert=(pki/f"issued/{name}.crt").read_text(encoding="utf-8")
     key=(pki/f"private/{name}.key").read_text(encoding="utf-8")
     ta=(OVPN_DIR/"server/ta.key").read_text(encoding="utf-8")
-    transport="udp" if proto=="udp" else "tcp-client"
+    transport=_openvpn_proto(proto,server=False)
     client=(
         "client\ndev tun\n"
         f"proto {transport}\nremote {endpoint} {port}\n"
-        "resolv-retry infinite\nnobind\npersist-key\npersist-tun\nremote-cert-tls server\n"
+        "resolv-retry infinite\nconnect-retry 2 300\nnobind\npersist-key\npersist-tun\nauth-nocache\n"
+        "remote-cert-tls server\nverify-x509-name server name\n"
         "data-ciphers AES-256-GCM:AES-128-GCM\nauth SHA256\nverb 3\n"
         f"<ca>\n{ca}</ca>\n<cert>\n{cert}</cert>\n<key>\n{key}</key>\n<tls-crypt>\n{ta}</tls-crypt>\n"
     )
-    return {"name":name,"config":client}
+    return {"name":name,"config":client,"endpoint":endpoint,"port":port,"proto":"udp" if transport.startswith("udp") else "tcp","client_proto":transport}
 
 def list_openvpn_clients():
     issued=OVPN_EASYRSA/"pki/issued"
@@ -755,7 +898,7 @@ def render_openvpn_client(name,endpoint):
     proto_m=re.search(r"(?m)^proto\s+(\S+)\s*$",text)
     port=int(pm.group(1)) if pm else 1194
     server_proto=(proto_m.group(1) if proto_m else "udp").lower()
-    transport="tcp-client" if server_proto.startswith("tcp") else "udp"
+    transport="tcp4-client" if server_proto.startswith("tcp") else "udp4"
     ca=(pki/"ca.crt").read_text(encoding="utf-8")
     cert_text=cert.read_text(encoding="utf-8")
     key_text=key.read_text(encoding="utf-8")
@@ -763,11 +906,12 @@ def render_openvpn_client(name,endpoint):
     client=(
         "client\ndev tun\n"
         f"proto {transport}\nremote {endpoint} {port}\n"
-        "resolv-retry infinite\nnobind\npersist-key\npersist-tun\nremote-cert-tls server\n"
+        "resolv-retry infinite\nconnect-retry 2 300\nnobind\npersist-key\npersist-tun\nauth-nocache\n"
+        "remote-cert-tls server\nverify-x509-name server name\n"
         "data-ciphers AES-256-GCM:AES-128-GCM\nauth SHA256\nverb 3\n"
         f"<ca>\n{ca}</ca>\n<cert>\n{cert_text}</cert>\n<key>\n{key_text}</key>\n<tls-crypt>\n{ta}</tls-crypt>\n"
     )
-    return {"name":name,"config":client,"port":port,"proto":"tcp" if transport=="tcp-client" else "udp"}
+    return {"name":name,"config":client,"endpoint":endpoint,"port":port,"proto":"tcp" if transport.startswith("tcp") else "udp","client_proto":transport}
 
 def revoke_openvpn_client(name):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):

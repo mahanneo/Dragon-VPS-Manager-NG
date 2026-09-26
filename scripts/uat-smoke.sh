@@ -13,6 +13,13 @@ xray_bad(){
     bad "$1"
   fi
 }
+ovpn_bad(){
+  if [[ "${MAKIA_ALLOW_PREEXISTING_OPENVPN_FAILURE:-0}" == "1" ]]; then
+    printf '! %s (pre-existing OpenVPN failure; panel diagnostics update allowed)\n' "$1"
+  else
+    bad "$1"
+  fi
+}
 
 [[ -d "$APP" ]] || { bad "Makia runtime missing at $APP"; exit 1; }
 
@@ -105,6 +112,27 @@ if [[ -x /etc/letsencrypt/renewal-hooks/deploy/makia-xray-sync ]]; then
   ok "Xray Certbot deploy hook"
 else
   bad "Xray Certbot deploy hook missing"
+fi
+
+if [[ -f /etc/openvpn/server/server.conf ]]; then
+  OVPN_PROTO="$(awk '$1=="proto"{print $2; exit}' /etc/openvpn/server/server.conf 2>/dev/null || true)"
+  OVPN_PORT="$(awk '$1=="port"{print $2; exit}' /etc/openvpn/server/server.conf 2>/dev/null || true)"
+  if [[ "$OVPN_PROTO" == "udp4" || "$OVPN_PROTO" == "tcp4-server" ]]; then
+    ok "OpenVPN IPv4 transport ($OVPN_PROTO)"
+  else
+    ovpn_bad "OpenVPN transport is not normalized to udp4/tcp4-server ($OVPN_PROTO)"
+  fi
+  if systemctl is-active --quiet openvpn-server@server; then
+    ok "OpenVPN runtime active"
+  else
+    ovpn_bad "OpenVPN runtime inactive"
+    journalctl -u openvpn-server@server -n 12 --no-pager || true
+  fi
+  if [[ -n "$OVPN_PORT" ]] && ss -H -lntu 2>/dev/null | grep -Eq ":${OVPN_PORT}([[:space:]]|$)"; then
+    ok "OpenVPN listener on port $OVPN_PORT"
+  else
+    ovpn_bad "OpenVPN listener missing"
+  fi
 fi
 
 if [[ -f /etc/wireguard/wg0.conf ]]; then

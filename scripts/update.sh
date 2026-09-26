@@ -64,6 +64,13 @@ if command -v xray >/dev/null 2>&1 && { [[ -f /usr/local/etc/xray/config.json ]]
   systemctl is-active --quiet xray 2>/dev/null && XRAY_WAS_ACTIVE=1 || true
 fi
 
+OVPN_WAS_PRESENT=0
+OVPN_WAS_ACTIVE=0
+if [[ -f /etc/openvpn/server/server.conf ]]; then
+  OVPN_WAS_PRESENT=1
+  systemctl is-active --quiet openvpn-server@server 2>/dev/null && OVPN_WAS_ACTIVE=1 || true
+fi
+
 STAMP_DATA="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP="/var/backups/makia-vps-manager/makia-data-${STAMP_DATA}.tar.gz"
 BACKUP_TMP="$(mktemp -d)"
@@ -190,6 +197,33 @@ PY
   fi
 fi
 
+# Normalize legacy OpenVPN server transports to an explicit IPv4 runtime.
+# This fixes domain profiles that may otherwise be diverted by AAAA/IPv6,
+# while preserving the EasyRSA PKI and all existing client certificates.
+if [[ "$OVPN_WAS_PRESENT" -eq 1 ]]; then
+  echo "Checking OpenVPN IPv4 runtime..."
+  if ! ( cd "$APP" && MAKIA_DATA_DIR="$APP/data" "$APP/.venv/bin/python" - <<'PY'
+from app import protocol_ops
+d=protocol_ops._openvpn_server_runtime()
+proto=str(d.get("proto") or "")
+needs=proto not in {"udp4","tcp4-server"} or not d.get("service_active") or not d.get("listener")
+if needs:
+    result=protocol_ops.repair_openvpn_ipv4_runtime()
+    d=result["runtime"]
+if str(d.get("proto") or "") not in {"udp4","tcp4-server"} or not d.get("service_active") or not d.get("listener"):
+    raise SystemExit("OpenVPN runtime remains unhealthy after IPv4 normalization")
+print("OpenVPN runtime validation PASS:", d.get("proto"), d.get("port"))
+PY
+  ); then
+    if [[ "$OVPN_WAS_ACTIVE" -eq 1 ]]; then
+      echo "OpenVPN was healthy before this update but is unhealthy now; updater will roll back."
+      exit 6
+    fi
+    echo "WARNING: OpenVPN was already unhealthy before the update and automatic normalization could not fix it."
+    echo "The panel update will continue so Domain Diagnostics and Repair are available."
+  fi
+fi
+
 nginx -t
 systemctl restart makia-vps-manager
 systemctl enable --now makia-policy-enforcer
@@ -217,9 +251,12 @@ fi
 
 echo
 echo "Running post-update Makia host smoke gate..."
-UAT_ENV=()
+UAT_ENV=(env)
 if [[ "$XRAY_WAS_PRESENT" -eq 1 && "$XRAY_WAS_ACTIVE" -eq 0 ]] && ! systemctl is-active --quiet xray 2>/dev/null; then
-  UAT_ENV=(env MAKIA_ALLOW_PREEXISTING_XRAY_FAILURE=1)
+  UAT_ENV+=(MAKIA_ALLOW_PREEXISTING_XRAY_FAILURE=1)
+fi
+if [[ "$OVPN_WAS_PRESENT" -eq 1 && "$OVPN_WAS_ACTIVE" -eq 0 ]] && ! systemctl is-active --quiet openvpn-server@server 2>/dev/null; then
+  UAT_ENV+=(MAKIA_ALLOW_PREEXISTING_OPENVPN_FAILURE=1)
 fi
 if ! "${UAT_ENV[@]}" /usr/local/sbin/makia-uat-smoke; then
   echo "Post-update host smoke failed."
