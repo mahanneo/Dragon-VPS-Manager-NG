@@ -223,6 +223,13 @@ def main():
             enabled.unlink()
         enabled.symlink_to(site)
 
+    # Normalize restored Xray ownership/TLS paths for the destination
+    # systemd user before the final stack restart.
+    if shutil.which("xray") and (Path("/usr/local/etc/xray/config.json").exists() or Path("/etc/xray/config.json").exists()):
+        sys.path.insert(0,str(APP))
+        from app import protocol_ops
+        protocol_ops.repair_xray_runtime()
+
     restart_stack()
     checks=validate_restored()
     failed=[name for name,ok in checks if not ok]
