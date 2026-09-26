@@ -1,0 +1,143 @@
+import base64
+import hashlib
+import io
+import json
+import re
+
+from cryptography.fernet import Fernet, InvalidToken
+import pyzipper
+import qrcode
+import qrcode.image.svg
+
+from .security import ensure_secret
+
+class AccessPackageError(RuntimeError):
+    pass
+
+def _fernet():
+    key=hashlib.sha256(ensure_secret()+b"makia-access-artifact-v1").digest()
+    return Fernet(base64.urlsafe_b64encode(key))
+
+def seal_payload(payload:dict)->str:
+    raw=json.dumps(payload,ensure_ascii=False,separators=(",",":")).encode("utf-8")
+    return _fernet().encrypt(raw).decode("ascii")
+
+def open_payload(token:str)->dict:
+    try:
+        raw=_fernet().decrypt(str(token).encode("ascii"))
+        obj=json.loads(raw.decode("utf-8"))
+        if not isinstance(obj,dict):
+            raise AccessPackageError("invalid access payload")
+        return obj
+    except (InvalidToken,ValueError,TypeError,json.JSONDecodeError) as exc:
+        raise AccessPackageError("unable to decrypt access payload") from exc
+
+def safe_filename(value:str, fallback="access"):
+    value=re.sub(r"[^A-Za-z0-9_.-]+","-",str(value or "")).strip(".-")
+    return (value or fallback)[:96]
+
+def make_qr_svg(text:str)->bytes:
+    img=qrcode.make(text,image_factory=qrcode.image.svg.SvgPathImage)
+    buf=io.BytesIO()
+    img.save(buf)
+    return buf.getvalue()
+
+def ssh_payload(host,username,password,port=22):
+    host=str(host or "").strip()
+    username=str(username or "").strip()
+    port=int(port or 22)
+    config=(
+        f"Host makia-{safe_filename(username)}\n"
+        f"    HostName {host}\n"
+        f"    User {username}\n"
+        f"    Port {port}\n"
+        "    ServerAliveInterval 30\n"
+        "    ServerAliveCountMax 3\n"
+    )
+    credentials=(
+        "Makia SSH Access\n"
+        f"Server: {host}\n"
+        f"Port: {port}\n"
+        f"Username: {username}\n"
+        f"Password: {password}\n"
+        "\nOpenSSH does not support embedding passwords in config files.\n"
+        "Use the included ssh_config fragment for host/user settings and enter the password when your SSH client asks for it.\n"
+    )
+    return {
+        "native_filename":f"{safe_filename(username)}-ssh-config.txt",
+        "files":{
+            f"{safe_filename(username)}-ssh-config.txt":config.encode("utf-8"),
+            "credentials.txt":credentials.encode("utf-8"),
+        },
+        "primary_text":credentials,
+        "summary":{"host":host,"port":port,"username":username},
+    }
+
+def wireguard_payload(name,config,address=None):
+    filename=f"{safe_filename(name)}.conf"
+    return {
+        "native_filename":filename,
+        "files":{
+            filename:str(config).encode("utf-8"),
+            f"{safe_filename(name)}-qr.svg":make_qr_svg(str(config)),
+        },
+        "primary_text":str(config),
+        "summary":{"address":address or ""},
+    }
+
+def openvpn_payload(name,config):
+    filename=f"{safe_filename(name)}.ovpn"
+    return {
+        "native_filename":filename,
+        "files":{filename:str(config).encode("utf-8")},
+        "primary_text":str(config),
+        "summary":{},
+    }
+
+def xray_payload(name,protocol,share_link,subscription_url=None,client_url=None):
+    profile={
+        "name":name,
+        "protocol":protocol,
+        "share_link":share_link,
+        "subscription_url":subscription_url or "",
+        "client_page":client_url or "",
+    }
+    filename=f"{safe_filename(name)}-{safe_filename(protocol)}.txt"
+    lines=[
+        "Makia Xray Access",
+        f"Name: {name}",
+        f"Protocol: {protocol}",
+        "",
+        "Share link:",
+        str(share_link),
+    ]
+    if subscription_url:
+        lines += ["","Subscription:",str(subscription_url)]
+    if client_url:
+        lines += ["","Client page:",str(client_url)]
+    text="\n".join(lines)+"\n"
+    files={
+        filename:text.encode("utf-8"),
+        f"{safe_filename(name)}-profile.json":json.dumps(profile,ensure_ascii=False,indent=2).encode("utf-8"),
+        f"{safe_filename(name)}-qr.svg":make_qr_svg(str(share_link)),
+    }
+    return {
+        "native_filename":filename,
+        "files":files,
+        "primary_text":str(share_link),
+        "summary":{"protocol":protocol,"subscription_url":subscription_url or "","client_url":client_url or ""},
+    }
+
+def protected_zip(files:dict[str,bytes|str],password:str)->bytes:
+    password=str(password or "")
+    if len(password)<4:
+        raise AccessPackageError("package password must be at least 4 characters")
+    buf=io.BytesIO()
+    with pyzipper.AESZipFile(buf,"w",compression=pyzipper.ZIP_DEFLATED,encryption=pyzipper.WZ_AES) as zf:
+        zf.setpassword(password.encode("utf-8"))
+        zf.setencryption(pyzipper.WZ_AES,nbits=256)
+        for name,data in files.items():
+            filename=safe_filename(name,"file")
+            raw=data.encode("utf-8") if isinstance(data,str) else bytes(data)
+            zf.writestr(filename,raw)
+    return buf.getvalue()
