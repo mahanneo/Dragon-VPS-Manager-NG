@@ -71,11 +71,41 @@ def test_ssh_package_does_not_embed_password_in_openssh_config():
     assert "Password: 123456" in credentials
 
 
-def test_xray_package_contains_qr_and_profile():
+def test_xray_package_contains_qr_profile_and_subscription_artifacts():
     payload=access_ops.xray_payload("u1","vless","vless://abc@example.com:443","https://example.com/sub/a","https://example.com/client/a")
     assert "u1-vless.txt" in payload["files"]
     assert "u1-profile.json" in payload["files"]
     assert "u1-qr.svg" in payload["files"]
+    assert "u1-subscription.txt" in payload["files"]
+    assert "u1-subscription-qr.svg" in payload["files"]
+    assert payload["files"]["u1-subscription.txt"].decode().strip()=="https://example.com/sub/a"
+
+
+@pytest.mark.parametrize(
+    ("protocol","link","expected"),
+    [
+        ("vless","vless://uuid@example.com:443?type=xhttp&security=reality&sni=www.microsoft.com&fp=chrome&pbk=pubkey&sid=abcd&path=%2Fmakia#User",{"protocol":"vless","host":"example.com","port":443,"transport":"xhttp","security":"reality"}),
+        ("trojan","trojan://secret@example.com:8443?type=grpc&security=tls&sni=example.com&serviceName=makia#User",{"protocol":"trojan","host":"example.com","port":8443,"transport":"grpc","security":"tls"}),
+        ("hysteria2","hysteria2://secret@example.com:443/?sni=example.com&insecure=0#User",{"protocol":"hysteria2","host":"example.com","port":443,"transport":"hysteria2","security":"tls"}),
+        ("shadowsocks","ss://YWVzLTEyOC1nY206c2VjcmV0@example.com:8388#User",{"protocol":"shadowsocks","host":"example.com","port":8388,"cipher":"aes-128-gcm"}),
+    ],
+)
+def test_xray_share_description(protocol,link,expected):
+    info=access_ops.describe_xray_share(link,protocol)
+    for key,value in expected.items():
+        assert info[key]==value
+
+
+def test_vmess_share_description():
+    import base64, json
+    profile={"v":"2","ps":"VMess User","add":"vm.example.com","port":"443","id":"uuid","aid":"0","scy":"auto","net":"ws","type":"none","host":"","path":"/ws","tls":"tls"}
+    link="vmess://"+base64.b64encode(json.dumps(profile,separators=(",",":")).encode()).decode()
+    info=access_ops.describe_xray_share(link,"vmess")
+    assert info["protocol"]=="vmess"
+    assert info["host"]=="vm.example.com"
+    assert info["port"]==443
+    assert info["transport"]=="ws"
+    assert info["security"]=="tls"
 
 
 def test_npvt_ssh_link_roundtrip():
