@@ -76,3 +76,45 @@ def test_xray_package_contains_qr_and_profile():
     assert "u1-vless.txt" in payload["files"]
     assert "u1-profile.json" in payload["files"]
     assert "u1-qr.svg" in payload["files"]
+
+
+def test_npvt_ssh_link_roundtrip():
+    import base64, json
+    link=access_ops.npvt_ssh_link(
+        "178.83.45.215","mahan","123456",22,
+        remarks="Makia mahan",dns_mode="UDP",udpgw_port=7300,transparent_dns=False,
+    )
+    assert link.startswith("npvt-ssh://")
+    raw=base64.b64decode(link.split("://",1)[1])
+    profile=json.loads(raw.decode("utf-8"))
+    assert profile["sshConfigType"]=="SSH-Direct"
+    assert profile["sshHost"]=="178.83.45.215"
+    assert profile["sshPort"]==22
+    assert profile["sshUsername"]=="mahan"
+    assert profile["sshPassword"]=="123456"
+    assert profile["dnsTTMode"]=="UDP"
+    assert profile["udpgwPort"]==7300
+
+
+def test_ssh_payload_includes_npv_share_and_qr_when_enabled():
+    payload=access_ops.ssh_payload(
+        "vpn.example.com","user001","123456",22,
+        {"enabled":True,"remarks":"Makia user001","dns_mode":"UDP","udpgw_port":7300,"transparent_dns":False}
+    )
+    assert payload["share_type"]=="npvt-ssh"
+    assert payload["share_text"].startswith("npvt-ssh://")
+    assert "user001-npvt-ssh.txt" in payload["files"]
+    assert "user001-npvt-qr.svg" in payload["files"]
+
+
+def test_ssh_payload_respects_npv_disabled_setting():
+    payload=access_ops.ssh_payload("vpn.example.com","user001","123456",22,{"enabled":False})
+    assert "share_text" not in payload
+    assert all("npvt" not in name for name in payload["files"])
+    assert "NPV Tunnel" not in payload["files"]["credentials.txt"].decode("utf-8")
+
+
+def test_xray_share_payload_has_qr_source():
+    payload=access_ops.xray_payload("u1","vless","vless://abc@example.com:443","https://example.com/sub/a","https://example.com/client/a")
+    assert payload["share_type"]=="xray"
+    assert payload["share_text"]=="vless://abc@example.com:443"
