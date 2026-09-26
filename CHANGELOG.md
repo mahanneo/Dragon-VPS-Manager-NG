@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.13.1-rc1] - 2026-09-26
+
+### Xray runtime failure repair
+- Fixed a service-permission mismatch where Makia could replace `config.json` as root-only `0600` while the official Xray systemd unit runs as a non-root install user.
+- Every Makia-owned Xray config mutation now preserves secure ownership for the actual systemd user and validates the active config as that user before restart.
+- Added authenticated Xray Diagnostics with root-vs-service-user config validation, Core version checks, service state, permission hints and recent systemd journal output.
+- Added guarded Repair & Restart with pre-repair backup and rollback.
+- Xray installation is pinned to Core `v26.3.27`, matching the CI validation target.
+- TLS certificates used directly by Xray are copied to a dedicated `0600` runtime directory owned by the Xray service user.
+- Added a Certbot deploy hook so renewed Let's Encrypt certificates are synchronized, validated and picked up by Xray.
+
+### Client education
+- Added the public Persian `/help/connect` page for Xray, WireGuard, OpenVPN and SSH/NPV import workflows.
+- Added a Client Guides view to the admin sidebar with per-protocol shareable guide URLs.
+- Public Xray client pages link directly to the Xray guide.
+- Protected delivery packages now include `connection-guide-fa.txt`.
+- Added comprehensive Persian GitHub documentation in `README_FA.md` and `docs/CLIENT-GUIDE-FA.md`.
+
+### Runtime audit
+- Self-Test now treats an installed Xray Core with invalid config, unreadable service-user config or inactive runtime as an explicit failure.
+- Services and Protocol Hub expose Xray Diagnose/Repair actions instead of showing only a generic failed state.
+
+### Release status
+Release candidate only. Stable still requires real-host upgrade/repair UAT, external client connectivity, TLS renewal rehearsal and the existing migration/network gates.
+
 ## [0.13.0-rc1] - 2026-09-26
 
 ### WireGuard compatibility controls
