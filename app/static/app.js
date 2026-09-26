@@ -20,12 +20,13 @@ async function setPass(id,type){const el=document.getElementById(id);if(!el)retu
 function setExpiryDays(id,days){const el=document.getElementById(id);if(!el)return;const d=new Date();d.setDate(d.getDate()+Number(days));el.value=d.toISOString().slice(0,10)}
 function quotaLabel(mb){if(!mb)return'بدون سقف';return mb>=1024?(mb/1024).toFixed(mb%1024?1:0)+' GB':mb+' MB'}
 function statusFor(a){if(!a.enabled)return'<span class="status-chip bad">Locked</span>';if(a.expired)return'<span class="status-chip bad">Expired</span>';if(a.days_left!==null&&a.days_left<=7)return'<span class="status-chip warn">'+a.days_left+' روز</span>';return'<span class="status-chip ok">Active</span>'}
-async function dashboard(){
+async function dashboard(renderToken=window.__viewRenderToken){
   title.textContent='Overview';setPageContext('OPERATIONS COCKPIT');
   content.innerHTML='<div class="loading-state"><span class="spinner"></span><b>در حال همگام‌سازی وضعیت سرور…</b></div>';
   const [d,hist,accessRows,stack]=await Promise.all([
     api('/api/overview'),api('/api/metrics/history?hours=24'),api('/api/access'),api('/api/protocols')
   ]);
+  if(renderToken!==window.__viewRenderToken||activeView!=='dashboard')return;
   const m=d.metrics,score=healthScore(d);
   const activeAccess=accessRows.filter(x=>x.status==='active').length;
   const expiringAccess=accessRows.filter(x=>x.status==='expired'||(x.expire_at&&x.expire_at<Date.now()/1000)).length;
@@ -106,10 +107,11 @@ function stepNumber(id,delta,min=1,max=50){const el=document.getElementById(id);
 let accessCache=[];
 let provisionState=null;
 
-async function access(){
+async function access(renderToken=window.__viewRenderToken){
   title.textContent='Access Center';setPageContext('IDENTITY & DELIVERY');
   content.innerHTML='<div class="loading-state"><span class="spinner"></span><b>در حال همگام‌سازی دسترسی‌ها…</b></div>';
   const [rows,stack,sshRows,pcRows]=await Promise.all([api('/api/access'),api('/api/protocols'),api('/api/accounts'),api('/api/protocol-clients')]);
+  if(renderToken!==window.__viewRenderToken||activeView!=='access')return;
   accessCache=rows;accountCache=sshRows;window.__protocolClients=pcRows;window.__protocolData=stack;
   const counts={ssh:0,xray:0,wireguard:0,openvpn:0};rows.forEach(x=>{if(counts[x.kind]!==undefined)counts[x.kind]++});
   const active=rows.filter(x=>x.status==='active').length,legacy=rows.filter(x=>x.legacy).length;
@@ -870,8 +872,9 @@ function applyLanguageShell(){
   document.querySelectorAll('nav button[data-view]').forEach(b=>{const label=dict[b.dataset.view];const t=b.querySelector('b');if(label&&t)t.textContent=label});
 }
 const views={dashboard,access,accounts,sessions,services,protocols,nodes,security,backups,audit:auditView,updates,settings};
-function currentView(){return(views[activeView]||dashboard)()}
+window.__viewRenderToken=0;
+function currentView(){const token=++window.__viewRenderToken;return(views[activeView]||dashboard)(token)}
 function switchView(v){activeView=v;setPageContext(v==='dashboard'?'OPERATIONS COCKPIT':v==='access'?'IDENTITY & DELIVERY':'MAKIA CONTROL CENTER');document.querySelectorAll('nav button[data-view]').forEach(x=>x.classList.toggle('active',x.dataset.view===v));return currentView()}
 document.querySelectorAll('nav button[data-view]').forEach(b=>b.addEventListener('click',()=>switchView(b.dataset.view)));
-applyLanguageShell();dashboard();
+applyLanguageShell();switchView('dashboard');
 if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('/static/sw.js').catch(()=>{}));}
