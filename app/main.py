@@ -4,7 +4,7 @@ import time, io, base64, secrets, string, urllib.request
 import pyotp, qrcode
 import qrcode.image.svg
 from fastapi import FastAPI, Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -413,7 +413,27 @@ def xray_quick_inbound(payload:XrayQuickInbound,request:Request):
     audit(actor,"xray_quick_inbound",result["tag"],f"protocol={payload.protocol}; port={payload.port}; quota={quota_bytes}; ip_limit={payload.ip_limit}",ip(request))
     return result
 
-@app.get("/sub/{subscription_id}",response_class=PlainTextResponse)
+def _subscription_snapshot(row):
+    usage={"uplink":0,"downlink":0,"total":0,"available":False}
+    if row.get("engine")=="xray" and row.get("protocol") in {"vless","vmess","trojan","hysteria2"} and row.get("enabled"):
+        try: usage=protocol_ops.xray_client_traffic(row["name"])
+        except Exception: pass
+    stored_up=int(row.get("used_up_bytes") or 0)
+    stored_down=int(row.get("used_down_bytes") or 0)
+    total_up=stored_up+int(usage.get("uplink") or 0)
+    total_down=stored_down+int(usage.get("downlink") or 0)
+    quota=int(row.get("quota_bytes") or 0)
+    expire_at=int(row.get("expire_at") or 0)
+    return {
+        "id":row.get("id"),"name":row.get("name"),"protocol":row.get("protocol"),
+        "enabled":bool(row.get("enabled")),"share_link":row.get("share_link") or "",
+        "quota_bytes":quota,"used_up_bytes":total_up,"used_down_bytes":total_down,
+        "used_bytes":total_up+total_down,"remaining_bytes":max(0,quota-total_up-total_down) if quota else None,
+        "expire_at":expire_at,"ip_limit":int(row.get("ip_limit") or 1),
+        "reset_days":int(row.get("reset_days") or 0),
+    }
+
+@app.get("/sub/{subscription_id}")
 def subscription_get(subscription_id:str,format:str="base64"):
     row=protocol_client_by_subscription(subscription_id)
     if not row:
@@ -423,10 +443,23 @@ def subscription_get(subscription_id:str,format:str="base64"):
         raise HTTPException(404,"subscription is empty")
     if format=="raw":
         return PlainTextResponse(link+"\n",media_type="text/plain; charset=utf-8")
+    if format=="json":
+        return JSONResponse(_subscription_snapshot(row))
     if format not in {"base64","b64"}:
-        raise HTTPException(400,"supported formats: base64, raw")
+        raise HTTPException(400,"supported formats: base64, raw, json")
     encoded=base64.b64encode((link+"\n").encode()).decode()
     return PlainTextResponse(encoded+"\n",media_type="text/plain; charset=utf-8")
+
+@app.get("/client/{subscription_id}",response_class=HTMLResponse)
+def subscription_page(subscription_id:str,request:Request):
+    row=protocol_client_by_subscription(subscription_id)
+    if not row:
+        raise HTTPException(404,"subscription not found")
+    snap=_subscription_snapshot(row)
+    return templates.TemplateResponse("subscription.html",{
+        "request":request,"client":snap,"subscription_id":subscription_id,
+        "app_name":APP_NAME,"version":VERSION,
+    })
 
 @app.get("/api/protocol-clients")
 def protocol_clients_get(request:Request):
@@ -667,6 +700,21 @@ def api_v1_accounts(request:Request):
     require_api_scope(request,"accounts:read")
     return account_rows()
 
+@app.get("/api/v1/protocol-clients")
+def api_v1_protocol_clients(request:Request):
+    require_api_scope(request,"protocols:read")
+    rows=[]
+    for row in list_protocol_clients():
+        snap=_subscription_snapshot(row)
+        snap.pop("share_link",None)
+        rows.append(snap)
+    return rows
+
+@app.get("/api/v1/nodes")
+def api_v1_nodes(request:Request):
+    require_api_scope(request,"nodes:read")
+    return list_nodes()
+
 class APITokenCreate(BaseModel):
     name:str=Field(min_length=1,max_length=80)
     scopes:list[str]=Field(default_factory=lambda:["status:read"])
@@ -679,7 +727,7 @@ def admin_tokens(request:Request):
 @app.post("/api/admin/tokens")
 def admin_token_create(payload:APITokenCreate,request:Request):
     actor=require_mutation(request)
-    allowed={"status:read","accounts:read"}
+    allowed={"status:read","accounts:read","protocols:read","nodes:read"}
     scopes=[x for x in payload.scopes if x in allowed]
     if not scopes:
         raise HTTPException(400,"at least one valid scope is required")
