@@ -27,7 +27,7 @@ for svc in makia-vps-manager makia-policy-enforcer makia-metrics-sampler makia-p
   if systemctl is-active --quiet "$svc"; then ok "Service $svc"; else bad "Service $svc"; fi
 done
 
-if "$APP/.venv/bin/python" - <<'PY'
+if ( cd "$APP" && "$APP/.venv/bin/python" - <<'PY'
 from app import access_ops
 from app.db import connect
 from app.config import SECRET_PATH
@@ -47,13 +47,14 @@ assert result["ok"]
 assert result["sample_size"]==15
 print("storage/crypto PASS")
 PY
+)
 then
   ok "SQLite integrity + secret permission + AES ZIP"
 else
   bad "SQLite integrity / crypto smoke"
 fi
 
-if "$APP/.venv/bin/python" -c 'import app.main; print(app.main.APP_NAME, app.main.VERSION)' >/tmp/makia-import.txt; then
+if ( cd "$APP" && "$APP/.venv/bin/python" -c 'import app.main; print(app.main.APP_NAME, app.main.VERSION)' ) >/tmp/makia-import.txt; then
   ok "Application import"
 else
   bad "Application import"
