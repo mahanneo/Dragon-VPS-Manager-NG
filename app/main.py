@@ -890,11 +890,18 @@ def access_share(kind:str,key:str,request:Request):
     share=str(payload.get("share_text") or payload.get("primary_text") or "")
     if not share: raise HTTPException(404,"share content is not available")
     qr=access_ops.make_qr_svg(share)
+    summary=payload.get("summary") or {}
+    subscription=str(summary.get("subscription_url") or "")
+    subscription_qr=""
+    if subscription:
+        subscription_qr="data:image/svg+xml;base64,"+base64.b64encode(access_ops.make_qr_svg(subscription)).decode("ascii")
     return {
         "kind":kind,"key":key,"share_type":payload.get("share_type") or kind,
         "share_text":share,
         "qr":"data:image/svg+xml;base64,"+base64.b64encode(qr).decode("ascii"),
-        "summary":payload.get("summary") or {},
+        "subscription_url":subscription,
+        "subscription_qr":subscription_qr,
+        "summary":summary,
         "artifact_id":artifact.get("id") if artifact else None,
     }
 
