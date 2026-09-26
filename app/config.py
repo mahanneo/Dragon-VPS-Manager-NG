@@ -15,6 +15,8 @@ ALLOWED_SERVICES = {
     "stunnel4": "Stunnel",
     "fail2ban": "Fail2ban",
     "xray": "Xray",
+    "openvpn-server@server": "OpenVPN",
+    "wg-quick@wg0": "WireGuard",
     "makia-policy-enforcer": "Policy Enforcer",
     "makia-metrics-sampler": "Metrics Sampler",
     "makia-protocol-traffic": "Protocol Traffic Collector",
