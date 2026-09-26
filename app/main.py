@@ -1206,8 +1206,19 @@ def diagnostics_self_test(request:Request):
             add("xray_config_root",bool(xdiag.get("root_validation")),xdiag.get("root_error") or "Xray core validation PASS","error")
             add("xray_config_service_user",bool(xdiag.get("service_validation")),xdiag.get("service_error") or f"readable by {xdiag.get('service_user')}","error")
             add("xray_runtime",bool(xdiag.get("service_active")),"active" if xdiag.get("service_active") else (xdiag.get("journal") or "service inactive")[-420:],"error")
+            add("xray_cert_sync_hook",bool(xdiag.get("cert_sync_hook")),"Certbot deploy hook installed" if xdiag.get("cert_sync_hook") else "Xray TLS renewal hook missing","warn")
     except Exception as exc:
         add("xray_runtime_diagnostics",False,exc,"warn")
+
+    try:
+        panel_domain=get_setting("panel_domain","").strip()
+        if panel_domain:
+            domain_health=panel_ops.domain_status(panel_domain)
+            if domain_health.get("certificate"):
+                days=domain_health.get("certificate_days_left")
+                add("panel_tls_expiry",days is not None and int(days)>14,f"{days} days remaining" if days is not None else "certificate expiry unavailable","warn")
+    except Exception as exc:
+        add("panel_tls_expiry",False,exc,"warn")
 
     critical=[x for x in checks if not x["ok"] and x["level"]=="error"]
     warnings=[x for x in checks if not x["ok"] and x["level"]=="warn"]
