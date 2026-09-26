@@ -6,7 +6,7 @@
 1. ارتقا از v0.10.0-rc1 با `sudo makia-upgrade`.
 2. `cat /opt/makia-vps-manager/VERSION` باید `0.11.0-rc1` باشد.
 3. `sudo makia-doctor` بدون خطای Backend/Nginx/Worker اجرا شود.
-4. `sudo bash /opt/makia-vps-manager/../makia-vps-manager/scripts/uat-smoke.sh` در سورس checkout یا اسکریپت متناظر از مخزن اجرا شود.
+4. `sudo makia-uat-smoke` باید PASS شود.
 5. `curl -fsS http://127.0.0.1:8787/healthz` پاسخ سالم بدهد.
 6. Backup حین فعالیت Workerها بدون `file changed as we read it` ساخته شود.
 7. روی VPS آزمایشی یک Update عمداً خراب شود و Auto Rollback نسخه قبلی را سالم برگرداند.
