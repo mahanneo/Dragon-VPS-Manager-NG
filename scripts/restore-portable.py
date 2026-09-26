@@ -171,6 +171,7 @@ def main():
     parser.add_argument("bundle",type=Path)
     parser.add_argument("--apply",action="store_true",help="perform the restore; without this flag only validate the bundle")
     parser.add_argument("--password",help="bundle password (prefer prompt or MAKIA_MIGRATION_PASSWORD)")
+    parser.add_argument("--allow-version-mismatch",action="store_true",help="allow restore when bundle/app versions differ")
     args=parser.parse_args()
     if os.geteuid()!=0:
         raise SystemExit("Run as root.")
@@ -186,6 +187,10 @@ def main():
         return
     if not APP.exists():
         raise SystemExit("Install Makia on the destination VPS before restore.")
+    installed_version=(APP/"VERSION").read_text(encoding="utf-8").strip() if (APP/"VERSION").exists() else ""
+    bundle_version=str(manifest.get("app_version") or "").strip()
+    if installed_version and bundle_version and installed_version!=bundle_version and not args.allow_version_mismatch:
+        raise SystemExit(f"Version mismatch: destination={installed_version}, bundle={bundle_version}. Install the matching Makia version or use --allow-version-mismatch after compatibility review.")
 
     BACKUP_ROOT.mkdir(parents=True,exist_ok=True)
     if shutil.which("makia-backup"):
