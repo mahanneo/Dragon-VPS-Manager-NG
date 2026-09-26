@@ -549,13 +549,13 @@ def subscription_get(subscription_id:str,format:str="base64"):
     if not link:
         raise HTTPException(404,"subscription is empty")
     if format=="raw":
-        return PlainTextResponse(link+"\n",media_type="text/plain; charset=utf-8")
+        return PlainTextResponse(link+"\n",media_type="text/plain; charset=utf-8",headers={"Cache-Control":"no-store, private","X-Content-Type-Options":"nosniff"})
     if format=="json":
-        return JSONResponse(snap)
+        return JSONResponse(snap,headers={"Cache-Control":"no-store, private","X-Content-Type-Options":"nosniff"})
     if format not in {"base64","b64"}:
         raise HTTPException(400,"supported formats: base64, raw, json")
     encoded=base64.b64encode((link+"\n").encode()).decode()
-    return PlainTextResponse(encoded+"\n",media_type="text/plain; charset=utf-8")
+    return PlainTextResponse(encoded+"\n",media_type="text/plain; charset=utf-8",headers={"Cache-Control":"no-store, private","X-Content-Type-Options":"nosniff"})
 
 @app.get("/client/{subscription_id}",response_class=HTMLResponse)
 def subscription_page(subscription_id:str,request:Request):
@@ -571,11 +571,14 @@ def subscription_page(subscription_id:str,request:Request):
     if link:
         profile_qr="data:image/svg+xml;base64,"+base64.b64encode(access_ops.make_qr_svg(link)).decode("ascii")
         subscription_qr="data:image/svg+xml;base64,"+base64.b64encode(access_ops.make_qr_svg(sub_url)).decode("ascii")
-    return templates.TemplateResponse("subscription.html",{
+    response=templates.TemplateResponse("subscription.html",{
         "request":request,"client":snap,"subscription_id":subscription_id,
         "app_name":APP_NAME,"version":VERSION,
         "profile_qr":profile_qr,"subscription_qr":subscription_qr,"subscription_url":sub_url,
     })
+    response.headers["Cache-Control"]="no-store, private"
+    response.headers["X-Content-Type-Options"]="nosniff"
+    return response
 
 @app.get("/api/protocol-clients")
 def protocol_clients_get(request:Request):
@@ -886,6 +889,10 @@ def access_entries(request:Request):
 @app.get("/api/access/{kind}/{key}/share")
 def access_share(kind:str,key:str,request:Request):
     require_user(request)
+    if kind not in {"ssh","xray","wireguard"}:
+        raise HTTPException(404,"share view is not available for this access type")
+    if kind=="ssh" and not operator_settings_snapshot()["delivery"]["npv_enabled"]:
+        raise HTTPException(409,"NPV SSH delivery is disabled in Settings")
     payload,artifact=_resolve_access_payload(kind,key,request)
     if kind=="ssh" and not payload.get("share_text"):
         summary=payload.get("summary") or {}
@@ -911,7 +918,7 @@ def access_share(kind:str,key:str,request:Request):
     subscription_qr=""
     if subscription:
         subscription_qr="data:image/svg+xml;base64,"+base64.b64encode(access_ops.make_qr_svg(subscription)).decode("ascii")
-    return {
+    return JSONResponse({
         "kind":kind,"key":key,"share_type":payload.get("share_type") or kind,
         "share_text":share,
         "qr":"data:image/svg+xml;base64,"+base64.b64encode(qr).decode("ascii"),
@@ -919,11 +926,15 @@ def access_share(kind:str,key:str,request:Request):
         "subscription_qr":subscription_qr,
         "summary":summary,
         "artifact_id":artifact.get("id") if artifact else None,
-    }
+    },headers={"Cache-Control":"no-store, private","X-Content-Type-Options":"nosniff"})
 
 @app.get("/api/access/{kind}/{key}/qr.svg")
 def access_qr(kind:str,key:str,request:Request):
     require_user(request)
+    if kind not in {"ssh","xray","wireguard"}:
+        raise HTTPException(404,"QR is not available for this access type")
+    if kind=="ssh" and not operator_settings_snapshot()["delivery"]["npv_enabled"]:
+        raise HTTPException(409,"NPV SSH delivery is disabled in Settings")
     payload,_=_resolve_access_payload(kind,key,request)
     if kind=="ssh" and not payload.get("share_text"):
         summary=payload.get("summary") or {}
