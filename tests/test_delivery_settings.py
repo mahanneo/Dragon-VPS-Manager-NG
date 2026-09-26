@@ -172,3 +172,28 @@ def test_protected_ssh_package_uses_current_npv_setting(monkeypatch):
         names=zf.namelist()
         assert "credentials.txt" in names
         assert all("npvt" not in name for name in names)
+
+
+def test_openvpn_delivery_is_rerendered_with_current_panel_domain(monkeypatch):
+    original={
+        "primary_text":"client\nproto udp\nremote 192.0.2.10 1194\n",
+        "native_filename":"client01.ovpn",
+        "files":{"client01.ovpn":b"client\nproto udp\nremote 192.0.2.10 1194\n"},
+        "summary":{"name":"client01","protocol":"openvpn"},
+    }
+    monkeypatch.setattr(main_app,"public_host",lambda request:"vpn.example.test")
+    monkeypatch.setattr(
+        main_app.protocol_ops,
+        "render_openvpn_client",
+        lambda name,endpoint:{
+            "name":name,
+            "endpoint":endpoint,
+            "port":1194,
+            "proto":"udp",
+            "config":"client\nproto udp4\nremote vpn.example.test 1194\nverify-x509-name server name\n",
+        },
+    )
+    refreshed=main_app._current_delivery_payload("openvpn","client01",original,_request("/api/access/openvpn/client01/native"))
+    assert "remote vpn.example.test 1194" in refreshed["primary_text"]
+    assert "proto udp4" in refreshed["primary_text"]
+    assert b"vpn.example.test" in refreshed["files"]["client01.ovpn"]
