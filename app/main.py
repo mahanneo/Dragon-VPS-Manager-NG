@@ -563,9 +563,18 @@ def subscription_page(subscription_id:str,request:Request):
     if not row:
         raise HTTPException(404,"subscription not found")
     snap=_subscription_snapshot(row)
+    link=(row.get("share_link") or "").strip()
+    origin=public_origin(request)
+    sub_url=f"{origin}/sub/{subscription_id}?format=base64"
+    profile_qr=""
+    subscription_qr=""
+    if link:
+        profile_qr="data:image/svg+xml;base64,"+base64.b64encode(access_ops.make_qr_svg(link)).decode("ascii")
+        subscription_qr="data:image/svg+xml;base64,"+base64.b64encode(access_ops.make_qr_svg(sub_url)).decode("ascii")
     return templates.TemplateResponse("subscription.html",{
         "request":request,"client":snap,"subscription_id":subscription_id,
         "app_name":APP_NAME,"version":VERSION,
+        "profile_qr":profile_qr,"subscription_qr":subscription_qr,"subscription_url":sub_url,
     })
 
 @app.get("/api/protocol-clients")
