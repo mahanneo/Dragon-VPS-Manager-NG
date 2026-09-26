@@ -1229,38 +1229,63 @@ def portable_backup_status(request:Request):
     status=system_ops.portable_backup_status(str(DATA_DIR))
     domain=(get_setting("panel_domain","") or "").strip()
     domain_state=panel_ops.domain_status(domain or None)
-    ssh_total=0
+    artifact_totals={"ssh":0,"wireguard":0,"openvpn":0}
+    artifact_domain={"ssh":0,"wireguard":0,"openvpn":0}
     ssh_recoverable=0
     for artifact in list_access_artifacts():
-        if artifact.get("kind")!="ssh":
+        kind=artifact.get("kind")
+        if kind not in artifact_totals:
             continue
-        ssh_total+=1
+        artifact_totals[kind]+=1
         try:
             payload=access_ops.open_payload(artifact["payload_enc"])
-            credentials=(payload.get("files") or {}).get("credentials.txt",b"")
-            if isinstance(credentials,bytes): credentials=credentials.decode("utf-8","replace")
-            if re.search(r"(?m)^Password:\s*.+$",str(credentials)):
-                ssh_recoverable+=1
+            text=str(payload.get("primary_text") or "")
+            if kind=="ssh":
+                credentials=(payload.get("files") or {}).get("credentials.txt",b"")
+                if isinstance(credentials,bytes): credentials=credentials.decode("utf-8","replace")
+                if re.search(r"(?m)^Password:\s*.+$",str(credentials)):
+                    ssh_recoverable+=1
+                host=str((payload.get("summary") or {}).get("host") or "")
+                if domain and host.lower()==domain.lower():
+                    artifact_domain[kind]+=1
+            elif domain and domain.lower() in text.lower():
+                artifact_domain[kind]+=1
         except Exception:
             pass
     xray_rows=list_protocol_clients()
-    xray_domain=sum(1 for row in xray_rows if domain and domain in str(row.get("share_link") or ""))
+    xray_domain=sum(1 for row in xray_rows if domain and domain.lower() in str(row.get("share_link") or "").lower())
     warnings=[]
     if not domain:
         warnings.append("Set a stable panel/client domain before migration to avoid IP-based client reconfiguration.")
     if domain and not domain_state.get("certificate"):
         warnings.append("HTTPS certificate is not installed for the configured domain.")
-    if ssh_total and ssh_recoverable<ssh_total:
-        warnings.append(f"{ssh_total-ssh_recoverable} SSH delivery artifact(s) do not contain a recoverable encrypted password.")
+    if artifact_totals["ssh"] and ssh_recoverable<artifact_totals["ssh"]:
+        warnings.append(f"{artifact_totals['ssh']-ssh_recoverable} SSH delivery artifact(s) do not contain a recoverable encrypted password.")
+    if domain and len(xray_rows)!=xray_domain:
+        warnings.append(f"{len(xray_rows)-xray_domain} Xray client(s) still use an IP/other host and will need a refreshed profile or subscription before seamless migration.")
+    for kind,label in (("ssh","SSH"),("wireguard","WireGuard"),("openvpn","OpenVPN")):
+        if domain and artifact_totals[kind]!=artifact_domain[kind]:
+            warnings.append(f"{artifact_totals[kind]-artifact_domain[kind]} {label} profile(s) do not currently use the configured domain endpoint.")
+    continuity_ready=bool(
+        domain and domain_state.get("certificate")
+        and ssh_recoverable==artifact_totals["ssh"]
+        and xray_domain==len(xray_rows)
+        and all(artifact_domain[k]==artifact_totals[k] for k in artifact_totals)
+    )
     return {
         **status,
         "panel_domain":domain,
         "certificate":bool(domain_state.get("certificate")),
         "xray_clients":len(xray_rows),
         "xray_domain_clients":xray_domain,
-        "ssh_artifacts":ssh_total,
+        "ssh_artifacts":artifact_totals["ssh"],
         "ssh_recoverable":ssh_recoverable,
-        "continuity_ready":bool(domain and ssh_recoverable==ssh_total),
+        "ssh_domain_profiles":artifact_domain["ssh"],
+        "wireguard_profiles":artifact_totals["wireguard"],
+        "wireguard_domain_profiles":artifact_domain["wireguard"],
+        "openvpn_profiles":artifact_totals["openvpn"],
+        "openvpn_domain_profiles":artifact_domain["openvpn"],
+        "continuity_ready":continuity_ready,
         "warnings":warnings,
     }
 
