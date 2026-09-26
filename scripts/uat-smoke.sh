@@ -13,6 +13,13 @@ xray_bad(){
     bad "$1"
   fi
 }
+ovpn_bad(){
+  if [[ "${MAKIA_ALLOW_PREEXISTING_OPENVPN_FAILURE:-0}" == "1" ]]; then
+    printf '! %s (pre-existing OpenVPN failure; panel diagnostics update allowed)\n' "$1"
+  else
+    bad "$1"
+  fi
+}
 
 [[ -d "$APP" ]] || { bad "Makia runtime missing at $APP"; exit 1; }
 
@@ -113,18 +120,18 @@ if [[ -f /etc/openvpn/server/server.conf ]]; then
   if [[ "$OVPN_PROTO" == "udp4" || "$OVPN_PROTO" == "tcp4-server" ]]; then
     ok "OpenVPN IPv4 transport ($OVPN_PROTO)"
   else
-    bad "OpenVPN transport is not normalized to udp4/tcp4-server ($OVPN_PROTO)"
+    ovpn_bad "OpenVPN transport is not normalized to udp4/tcp4-server ($OVPN_PROTO)"
   fi
   if systemctl is-active --quiet openvpn-server@server; then
     ok "OpenVPN runtime active"
   else
-    bad "OpenVPN runtime inactive"
+    ovpn_bad "OpenVPN runtime inactive"
     journalctl -u openvpn-server@server -n 12 --no-pager || true
   fi
   if [[ -n "$OVPN_PORT" ]] && ss -H -lntu 2>/dev/null | grep -Eq ":${OVPN_PORT}([[:space:]]|$)"; then
     ok "OpenVPN listener on port $OVPN_PORT"
   else
-    bad "OpenVPN listener missing"
+    ovpn_bad "OpenVPN listener missing"
   fi
 fi
 
