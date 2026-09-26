@@ -17,7 +17,7 @@ PASSWORD=os.environ["MAKIA_INITIAL_ADMIN_PASSWORD"]
 def seed():
     shutil.rmtree(DATA,ignore_errors=True)
     DATA.mkdir(parents=True,exist_ok=True)
-    from app.db import init_db, create_protocol_client, upsert_access_artifact
+    from app.db import init_db, create_protocol_client, upsert_access_artifact, get_protocol_client
     from app import access_ops
 
     init_db()
@@ -36,7 +36,7 @@ def seed():
         "xray",str(client_id),"browser-client","vless",payload["native_filename"],
         access_ops.seal_payload(payload),"{}",
     )
-    return client_id
+    return client_id,get_protocol_client(client_id)["subscription_id"]
 
 
 def wait_server(timeout=20):
@@ -52,7 +52,7 @@ def wait_server(timeout=20):
 
 
 def main():
-    client_id=seed()
+    client_id,subscription_id=seed()
     env=os.environ.copy()
     proc=subprocess.Popen(
         [sys.executable,"-m","uvicorn","app.main:app","--host","127.0.0.1","--port","8787"],
@@ -62,6 +62,13 @@ def main():
         wait_server()
         with sync_playwright() as p:
             browser=p.chromium.launch(headless=True)
+            portal=browser.new_page()
+            portal.goto(BASE_URL+"/client/"+subscription_id,wait_until="networkidle")
+            assert portal.locator(".client-qr-card").count()==2
+            assert portal.locator('img[alt="Profile QR"]').count()==1
+            assert portal.locator('img[alt="Subscription QR"]').count()==1
+            portal.close()
+
             page=browser.new_page(accept_downloads=True)
             page_errors=[]
             page.on("pageerror",lambda exc: page_errors.append(str(exc)))
@@ -73,6 +80,19 @@ def main():
 
             page.locator('button[data-view="access"]').click()
             page.locator(".access-profile",has_text="browser-client").wait_for()
+
+            row=page.locator(".access-profile",has_text="browser-client")
+            row.locator('[data-action="access-share"]').click()
+            page.locator(".share-modal").wait_for()
+            assert page.locator(".share-qr").count() >= 1
+            assert page.locator("#shareText").input_value().startswith("vless://")
+            assert page.locator("#shareSubscription").input_value().startswith(BASE_URL+"/sub/")
+            with page.expect_download() as qr_download:
+                page.locator('[data-action="qr-download"]').click()
+            qr_path=Path("/tmp/makia-browser-xray-qr.svg")
+            qr_download.value.save_as(str(qr_path))
+            assert "<svg" in qr_path.read_text(encoding="utf-8")
+            page.locator('.close-btn[data-action="modal-close"]').click()
 
             row=page.locator(".access-profile",has_text="browser-client")
             row.locator('[data-action="protected-export"]').click()
@@ -109,12 +129,30 @@ def main():
             assert page.locator(".diagnostic-score.pass").count()==1
             page.locator('.close-btn[data-action="modal-close"]').click()
 
-            for view in ["sessions","protocols","services","nodes","security","backups","audit","updates","settings","dashboard","access"]:
+            for view in ["sessions","protocols","services","nodes","security","backups","audit","updates","settings"]:
                 nav=page.locator(f'aside.sidebar nav button[data-view="{view}"]')
                 nav.click()
                 page.wait_for_timeout(450)
                 assert page.locator("#content").inner_text().strip(), f"{view} rendered empty content"
                 assert "active" in (nav.get_attribute("class") or ""), f"{view} sidebar item not active"
+
+            page.locator('[data-action="settings-tab"][data-tab="delivery"]').click()
+            page.locator("#opProfilePrefix").wait_for()
+            page.locator("#opProfilePrefix").fill("BrowserMakia")
+            page.locator('[data-action="settings-operator-save"]').click()
+            page.locator("#opProfilePrefix").wait_for()
+            assert page.locator("#opProfilePrefix").input_value()=="BrowserMakia"
+
+            for tab in ["general","domain","delivery","defaults","security","api"]:
+                page.locator(f'[data-action="settings-tab"][data-tab="{tab}"]').click()
+                page.wait_for_timeout(180)
+                assert page.locator(".settings-content-v2").inner_text().strip(), f"settings tab {tab} empty"
+
+            for view in ["dashboard","access"]:
+                nav=page.locator(f'aside.sidebar nav button[data-view="{view}"]')
+                nav.click()
+                page.wait_for_timeout(450)
+                assert page.locator("#content").inner_text().strip(), f"{view} rendered empty content"
 
             assert not page_errors, "JavaScript page errors: "+repr(page_errors)
             browser.close()

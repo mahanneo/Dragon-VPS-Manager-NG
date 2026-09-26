@@ -63,7 +63,32 @@ def make_qr_svg(text:str)->bytes:
     img.save(buf)
     return buf.getvalue()
 
-def ssh_payload(host,username,password,port=22):
+def npvt_ssh_link(host,username,password,port=22,remarks=None,dns_mode="UDP",udpgw_port=7300,transparent_dns=False):
+    profile={
+        "sshConfigType":"SSH-Direct",
+        "remarks":str(remarks or f"Makia {username}"),
+        "sshHost":str(host or "").strip(),
+        "sshPort":int(port or 22),
+        "sshUsername":str(username or "").strip(),
+        "sshPassword":str(password or ""),
+        "sni":"",
+        "tlsVersion":"DEFAULT",
+        "httpProxy":"",
+        "authenticateProxy":False,
+        "proxyUsername":"",
+        "proxyPassword":"",
+        "payload":"",
+        "dnsTTMode":str(dns_mode or "UDP").upper(),
+        "dnsServer":"",
+        "nameserver":"",
+        "publicKey":"",
+        "udpgwPort":int(udpgw_port or 7300),
+        "udpgwTransparentDNS":bool(transparent_dns),
+    }
+    raw=json.dumps(profile,ensure_ascii=False,separators=(",",":")).encode("utf-8")
+    return "npvt-ssh://"+base64.b64encode(raw).decode("ascii")
+
+def ssh_payload(host,username,password,port=22,npv_options=None):
     host=str(host or "").strip()
     username=str(username or "").strip()
     port=int(port or 22)
@@ -75,24 +100,56 @@ def ssh_payload(host,username,password,port=22):
         "    ServerAliveInterval 30\n"
         "    ServerAliveCountMax 3\n"
     )
+    opts=dict(npv_options or {})
+    npv_enabled=bool(opts.get("enabled",True))
+    npv=""
+    files={f"{safe_filename(username)}-ssh-config.txt":config.encode("utf-8")}
+    if npv_enabled:
+        npv=npvt_ssh_link(
+            host,username,password,port,
+            remarks=opts.get("remarks") or f"Makia {username}",
+            dns_mode=opts.get("dns_mode") or "UDP",
+            udpgw_port=int(opts.get("udpgw_port") or 7300),
+            transparent_dns=bool(opts.get("transparent_dns",False)),
+        )
     credentials=(
         "Makia SSH Access\n"
         f"Server: {host}\n"
         f"Port: {port}\n"
         f"Username: {username}\n"
         f"Password: {password}\n"
-        "\nOpenSSH does not support embedding passwords in config files.\n"
-        "Use the included ssh_config fragment for host/user settings and enter the password when your SSH client asks for it.\n"
     )
-    return {
+    if npv_enabled:
+        credentials += (
+            "\nNPV Tunnel / NapsternetV quick import:\n"
+            f"{npv}\n"
+            "\nImport the npvt-ssh link from clipboard or scan its QR in a compatible NPV client.\n"
+        )
+    credentials += (
+        "\nOpenSSH does not support embedding passwords in config files.\n"
+        "Use the included OpenSSH fragment for ordinary SSH clients.\n"
+    )
+    files["credentials.txt"]=credentials.encode("utf-8")
+    summary={"host":host,"port":port,"username":username,"npv_enabled":npv_enabled}
+    result={
         "native_filename":f"{safe_filename(username)}-ssh-config.txt",
-        "files":{
-            f"{safe_filename(username)}-ssh-config.txt":config.encode("utf-8"),
-            "credentials.txt":credentials.encode("utf-8"),
-        },
+        "files":files,
         "primary_text":credentials,
-        "summary":{"host":host,"port":port,"username":username},
+        "summary":summary,
     }
+    if npv_enabled:
+        npv_name=f"{safe_filename(username)}-npvt-ssh.txt"
+        files[npv_name]=(npv+"\n").encode("utf-8")
+        files[f"{safe_filename(username)}-npvt-qr.svg"]=make_qr_svg(npv)
+        result["share_text"]=npv
+        result["share_type"]="npvt-ssh"
+        summary.update({
+            "npv_link":npv,"npv_filename":npv_name,
+            "npv_dns_mode":str(opts.get("dns_mode") or "UDP").upper(),
+            "npv_udpgw_port":int(opts.get("udpgw_port") or 7300),
+            "npv_transparent_dns":bool(opts.get("transparent_dns",False)),
+        })
+    return result
 
 def wireguard_payload(name,config,address=None):
     filename=f"{safe_filename(name)}.conf"
@@ -103,6 +160,8 @@ def wireguard_payload(name,config,address=None):
             f"{safe_filename(name)}-qr.svg":make_qr_svg(str(config)),
         },
         "primary_text":str(config),
+        "share_text":str(config),
+        "share_type":"wireguard",
         "summary":{"address":address or ""},
     }
 
@@ -146,6 +205,8 @@ def xray_payload(name,protocol,share_link,subscription_url=None,client_url=None)
         "native_filename":filename,
         "files":files,
         "primary_text":str(share_link),
+        "share_text":str(share_link),
+        "share_type":"xray",
         "summary":{"protocol":protocol,"subscription_url":subscription_url or "","client_url":client_url or ""},
     }
 

@@ -7,6 +7,17 @@ Modern web-first VPS and access-infrastructure control center for Ubuntu.
 
 ## What Makia manages today
 
+### v0.12 QR, NPV and Settings Center
+- Xray profiles now have an in-panel QR/Share Center, direct profile QR, subscription QR, Copy Link and QR download
+- The public Xray client page shows both direct-profile and subscription QR cards
+- SSH delivery can generate an `npvt-ssh://` import link plus QR for NPV Tunnel/NapsternetV-compatible clients, alongside the normal OpenSSH config
+- SSH NPV delivery is included inside the encrypted Protected ZIP when enabled
+- The proprietary locked `.npv4/.npvt` container format is not fabricated; Makia uses the interoperable share-link/QR path instead
+- Settings is now a categorized control center for Panel UI, Domain/TLS, Delivery, Provisioning Defaults, Security/Session and Scoped API tokens
+- Provisioning Wizard defaults are stored server-side and loaded from Settings rather than being hard-coded in the browser
+- Admin signed-session lifetime is configurable (5 minutes to 30 days) and applies to subsequent logins
+
+
 ### v0.11 Control Center UX
 - Rebuilt application shell/sidebar with a dedicated Create Access action and safer event handling
 - New Operations Cockpit dashboard with live host, service, access and session data
@@ -233,7 +244,7 @@ Important:
 - packaging contract
 - real Ubuntu 22.04/24.04 host UAT
 
-See `docs/UAT-0.11.0-RC1.md` and `docs/PARITY-3XUI.md`.
+See `docs/UAT-0.12.0-RC1.md` and `docs/PARITY-3XUI.md`.
 
 ## License
 
@@ -268,3 +279,7 @@ sudo makia-reset-admin --generate --disable-2fa
 ```
 
 From v0.9.1-rc1 onward, the updater creates a runtime rollback point before replacing the application and automatically restores the previous runtime when the new backend fails its health check.
+
+
+## NPV / QR security note
+A QR code or `npvt-ssh://` / Xray share URI contains credentials needed by the client application. Once a user imports a working profile, no panel can cryptographically prevent that authorized user from extracting or forwarding those credentials. Makia therefore combines easy import with server-side expiry, concurrent-session/IP limits, quota where supported, revocation, and encrypted operator delivery packages.

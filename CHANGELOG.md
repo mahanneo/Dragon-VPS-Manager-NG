@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.12.0-rc1] - 2026-09-26
+
+### Xray QR and subscriptions
+- Added an authenticated QR/Share Center for managed Xray access profiles.
+- Added direct connection QR, Copy Link, downloadable SVG QR and subscription QR.
+- Public client access pages now render both direct-profile and subscription QR cards.
+- Subscription QR URLs are generated from the current panel origin so a later domain change does not leave the admin Share Center using a stale URL.
+
+### SSH → NPV Tunnel delivery
+- Added `npvt-ssh://` share-link generation for SSH-Direct profiles.
+- Added NPV QR and import-link text files to SSH encrypted delivery artifacts.
+- Added configurable profile prefix, NPV DNS mode, UDPGW port and transparent-DNS flag.
+- Existing SSH artifacts with retained encrypted credentials can be upgraded to NPV delivery on demand.
+- The proprietary locked `.npv4/.npvt` file container is intentionally not fabricated; Makia uses the share URI / QR import path.
+
+### Settings Center V2
+- Rebuilt Settings into Panel, Domain & TLS, Delivery, Provisioning, Security and API categories.
+- Added server-persisted provisioning defaults for SSH, Xray, WireGuard and OpenVPN.
+- Added configurable admin session lifetime.
+- Added QR/NPV delivery settings and real backend validation.
+- The provisioning wizard now reads defaults from the backend instead of hard-coded JavaScript values.
+
+### Verification
+- Added NPV share-link round-trip and payload tests.
+- Browser CI verifies Xray QR/Share, QR download, public QR portal, Settings tabs and persisted operator settings.
+- Existing Xray 26.3.27 real-core smoke remains required.
+
+### Release status
+Release candidate. Stable still requires real NPV mobile import, external Xray QR connection, and host UAT.
+
 ## [0.11.2-rc1] - 2026-09-26
 
 ### Xray 26.3.27 config-format hotfix
