@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#050812">
   <meta name="application-name" content="Makia VPS Manager">
   <title>{{app_name}}</title>
-  <link rel="manifest" href="/static/manifest.webmanifest">
+  <link rel="manifest" href="/static/manifest.webmanifest?v={{version}}">
   <link rel="icon" href="/static/makia.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/app.css?v={{version}}">
 </head>
 <body data-theme="{{theme}}" data-density="{{density}}">
   <div class="noise"></div>
@@ -90,6 +90,6 @@
     window.MAKIA_THEME='{{theme}}';
     window.MAKIA_DENSITY='{{density}}';
   </script>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v={{version}}"></script>
 </body>
 </html>
