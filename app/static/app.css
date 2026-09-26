@@ -509,3 +509,24 @@ body[data-license-tier="community"] nav button[data-view="nodes"]::after{
   .license-facts{grid-template-columns:1fr}
   .license-lock-panel{grid-template-columns:1fr}.license-lock-icon{width:60px;height:60px;border-radius:18px}
 }
+
+
+/* v0.16 remote support + commercial entitlement */
+.remote-support-banner{
+  position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:120;
+  display:flex;align-items:center;gap:10px;max-width:min(760px,calc(100vw - 32px));
+  padding:8px 12px;border:1px solid rgba(255,188,88,.55);border-radius:12px;
+  background:rgba(47,28,7,.88);backdrop-filter:blur(18px);box-shadow:0 12px 40px rgba(0,0,0,.35);
+  color:#ffe5ad;font-size:9px
+}
+.remote-support-banner b{letter-spacing:1.2px;color:#ffce7b}.remote-support-banner span{flex:1;line-height:1.5}
+.remote-support-banner form{margin:0}.remote-support-banner button{border:1px solid #936b2f;border-radius:8px;background:#4b2d0c;color:#ffe8b8;padding:6px 9px;cursor:pointer}
+.remote-support-panel{border-color:rgba(244,183,85,.32)!important}
+.remote-support-create{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,.8fr);gap:14px;align-items:start}
+.remote-support-create p{margin-top:0;color:#91a8bd;font-size:10px;line-height:1.8}
+.support-grant-list{display:grid;gap:7px}
+.support-grant-list>div{display:grid;grid-template-columns:auto auto 1fr auto;gap:8px;align-items:center;padding:9px;border:1px solid rgba(104,178,226,.22);border-radius:10px;background:rgba(3,16,29,.43)}
+.support-grant-list span{font:9px ui-monospace,monospace;color:#9ce7ff}.support-grant-list b{font-size:9px}.support-grant-list small{font-size:8px;color:#7f98ad}.support-grant-list em{font-size:8px;color:#70869b;font-style:normal}
+.support-code-box{margin:12px 0;padding:16px;border:1px solid rgba(98,217,255,.45);border-radius:14px;background:#020d18;color:#9eeaff;font:700 18px/1.5 ui-monospace,monospace;letter-spacing:1.2px;text-align:center}
+body[data-remote-support="1"] .topbar{margin-top:42px}
+@media(max-width:760px){.remote-support-create{grid-template-columns:1fr}.remote-support-banner{top:5px;align-items:flex-start;flex-wrap:wrap}.remote-support-banner span{min-width:70%}.support-grant-list>div{grid-template-columns:1fr auto}}
