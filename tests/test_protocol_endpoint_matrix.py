@@ -11,6 +11,8 @@ def test_endpoint_matrix_reports_all_configured_engines(tmp_path,monkeypatch):
     monkeypatch.setattr(protocol_ops,"WG_DIR",wg)
     monkeypatch.setattr(protocol_ops,"OVPN_DIR",ovpn)
     monkeypatch.setattr(protocol_ops,"_binary",lambda:"/usr/local/bin/xray")
+    xconfig=tmp_path/"xray.json"; xconfig.write_text("{}",encoding="utf-8")
+    monkeypatch.setattr(protocol_ops,"_config_path",lambda:str(xconfig))
     monkeypatch.setattr(protocol_ops,"ssh_endpoint_diagnostics",lambda endpoint:{"ok":True,"warnings":[]})
     monkeypatch.setattr(protocol_ops,"wireguard_diagnostics",lambda iface,endpoint:{"ok":True,"warnings":[]})
     monkeypatch.setattr(protocol_ops,"openvpn_endpoint_diagnostics",lambda endpoint:{"ok":True,"warnings":[]})
