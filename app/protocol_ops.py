@@ -162,8 +162,8 @@ def catalog():
             {"id":"trojan","engine":"xray","available":x["installed"]},
             {"id":"shadowsocks","engine":"xray","available":x["installed"]},
             {"id":"hysteria2","engine":"xray","available":x["installed"],"mode":"guided"},
-            {"id":"http","engine":"xray","available":x["installed"],"mode":"advanced"},
-            {"id":"socks","engine":"xray","available":x["installed"],"mode":"advanced"},
+            {"id":"http","engine":"xray","available":x["installed"],"mode":"guided"},
+            {"id":"socks","engine":"xray","available":x["installed"],"mode":"guided"},
             {"id":"tunnel","engine":"xray","available":x["installed"],"mode":"advanced"},
             {"id":"tun","engine":"xray","available":x["installed"],"mode":"advanced"},
             {"id":"wireguard","engine":"wireguard","available":wg["installed"],"mode":"guided"},
@@ -592,7 +592,7 @@ def _build_xray_stream(binary,protocol,transport,security,path_value,server_name
 
 def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", security="none", path_value="/", server_name="", reality_dest=""):
     protocol=(protocol or "").lower()
-    if protocol not in {"vless","vmess","trojan","shadowsocks","hysteria2"}:
+    if protocol not in {"vless","vmess","trojan","shadowsocks","hysteria2","http","socks"}:
         raise ProtocolError("unsupported Xray quick protocol")
     port=_validate_port(port)
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
@@ -641,10 +641,21 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
         settings={"version":2,"users":[client_obj]}
         transport="hysteria"
         security="tls"
+    elif protocol=="http":
+        credential=secrets.token_urlsafe(12)
+        settings={"accounts":[{"user":name,"pass":credential}]}
+        transport="tcp"; security="none"
+    elif protocol=="socks":
+        credential=secrets.token_urlsafe(12)
+        settings={"auth":"password","accounts":[{"user":name,"pass":credential}],"udp":True,"ip":"127.0.0.1"}
+        transport="tcp"; security="none"
     else:
         credential=secrets.token_urlsafe(18)
         settings={"method":"aes-128-gcm","password":credential,"network":"tcp,udp"}
-    if protocol=="hysteria2":
+    if protocol in {"http","socks"}:
+        stream={"method":"raw","security":"none"}
+        reality_meta={}
+    elif protocol=="hysteria2":
         sni=(server_name or "").strip().lower()
         if not sni:
             raise ProtocolError("Hysteria2 requires a TLS domain/SNI")
@@ -726,6 +737,10 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
         obj={"v":"2","ps":name,"add":host,"port":str(port),"id":credential,"aid":"0","scy":"auto","net":link_type,"type":"none","host":"","path":path_value if method!="grpc" else "","tls":"tls" if security=="tls" else ""}
         if method=="grpc": obj["path"]=path_value.strip("/")
         link="vmess://"+base64.b64encode(json.dumps(obj,separators=(",",":")).encode()).decode()
+    elif protocol=="http":
+        link=f"http://{urllib.parse.quote(name,safe='')}:{urllib.parse.quote(credential,safe='')}@{host}:{port}#{label}"
+    elif protocol=="socks":
+        link=f"socks://{urllib.parse.quote(name,safe='')}:{urllib.parse.quote(credential,safe='')}@{host}:{port}#{label}"
     else:
         userinfo=base64.urlsafe_b64encode(f"aes-128-gcm:{credential}".encode()).decode().rstrip("=")
         link=f"ss://{userinfo}@{host}:{port}#{label}"
@@ -760,6 +775,11 @@ def disable_xray_client(inbound_tag,email):
             before=len(users)
             settings["users"]=[x for x in users if not (isinstance(x,dict) and x.get("email")==email)]
             changed=len(settings["users"])!=before
+        elif isinstance(settings.get("accounts"),list):
+            accounts=settings["accounts"]
+            before=len(accounts)
+            settings["accounts"]=[x for x in accounts if not (isinstance(x,dict) and x.get("user")==email)]
+            changed=len(settings["accounts"])!=before
     if not changed:
         return {"disabled":False,"reason":"client not found in config"}
     backup_dir=Path("/var/backups/makia-vps-manager")
@@ -828,6 +848,17 @@ def enable_xray_client(inbound_tag,email,protocol,credential):
         if any(isinstance(x,dict) and x.get("email")==email for x in users):
             return {"enabled":True,"already_present":True}
         users.append({"auth":credential,"email":email,"level":0})
+    elif protocol=="http":
+        accounts=settings.setdefault("accounts",[])
+        if any(isinstance(x,dict) and x.get("user")==email for x in accounts):
+            return {"enabled":True,"already_present":True}
+        accounts.append({"user":email,"pass":credential})
+    elif protocol=="socks":
+        settings["auth"]="password"; settings["udp"]=True; settings.setdefault("ip","127.0.0.1")
+        accounts=settings.setdefault("accounts",[])
+        if any(isinstance(x,dict) and x.get("user")==email for x in accounts):
+            return {"enabled":True,"already_present":True}
+        accounts.append({"user":email,"pass":credential})
     else:
         raise ProtocolError("automatic re-enable is not supported for this protocol")
 
