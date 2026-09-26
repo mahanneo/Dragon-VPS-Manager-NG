@@ -66,13 +66,31 @@ if [[ -n "$XRAY" ]]; then
   [[ -z "$CONF" && -f /etc/xray/config.json ]] && CONF=/etc/xray/config.json
   if [[ -n "$CONF" ]]; then
     TMP_XRAY="$(mktemp)"
-    if "$XRAY" run -test -config "$CONF" >"$TMP_XRAY" 2>&1; then
-      ok "Xray config" "valid"
+    XRAY_VERSION="$("$XRAY" version 2>/dev/null | head -n1 || true)"
+    if [[ "$XRAY_VERSION" == *"26.3.27"* ]]; then
+      ok "Xray version" "$XRAY_VERSION"
     else
-      fail "Xray config" "$(tail -n 2 "$TMP_XRAY" | tr '\n' ' ')"
+      warn "Xray version" "${XRAY_VERSION:-unknown} (CI target: 26.3.27)"
+    fi
+    if "$XRAY" run -test -format=json -config "$CONF" >"$TMP_XRAY" 2>&1; then
+      ok "Xray config (root)" "valid"
+    else
+      fail "Xray config (root)" "$(tail -n 2 "$TMP_XRAY" | tr '\n' ' ')"
+    fi
+    XRAY_USER="$(systemctl show xray -p User --value 2>/dev/null || true)"
+    XRAY_USER="${XRAY_USER:-root}"
+    if [[ "$XRAY_USER" == "root" ]]; then
+      XRAY_USER_TEST=( "$XRAY" run -test -format=json -config "$CONF" )
+    else
+      XRAY_USER_TEST=( runuser -u "$XRAY_USER" -- "$XRAY" run -test -format=json -config "$CONF" )
+    fi
+    if "${XRAY_USER_TEST[@]}" >>"$TMP_XRAY" 2>&1; then
+      ok "Xray config ($XRAY_USER)" "readable + valid"
+    else
+      fail "Xray config ($XRAY_USER)" "$(tail -n 3 "$TMP_XRAY" | tr '\n' ' ')"
     fi
     rm -f "$TMP_XRAY"
-    check_service xray "Xray service" no
+    check_service xray "Xray service" yes
   else
     warn "Xray" "binary installed, config not found"
   fi
