@@ -513,6 +513,12 @@ def revoke_openvpn_client(name):
     crl=OVPN_EASYRSA/"pki/crl.pem"
     if crl.exists():
         shutil.copy2(crl,OVPN_DIR/"server/crl.pem")
+    archive=OVPN_DIR/"revoked"
+    archive.mkdir(parents=True,exist_ok=True)
+    os.chmod(archive,0o700)
+    for src in [OVPN_EASYRSA/f"pki/issued/{name}.crt",OVPN_EASYRSA/f"pki/private/{name}.key"]:
+        if src.exists():
+            shutil.move(str(src),str(archive/src.name))
     return {"revoked":True,"name":name}
 
 def _port_in_use(port):
@@ -944,6 +950,46 @@ def create_xray_tunnel(listen_port, target_host, target_port, network="tcp,udp",
         raise
     return {"tag":tag,"listen_port":listen_port,"target_host":target_host,"target_port":target_port,"network":network,"backup":str(backup) if backup else None}
 
+
+def remove_xray_inbound(inbound_tag):
+    binary=_binary()
+    config_path=_config_path()
+    if not binary or not config_path:
+        raise ProtocolError("Xray core/config is not available")
+    path=Path(config_path)
+    try:
+        data=json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ProtocolError(f"cannot parse Xray config: {exc}") from exc
+    inbounds=data.get("inbounds")
+    if not isinstance(inbounds,list):
+        raise ProtocolError("invalid Xray inbounds collection")
+    before=len(inbounds)
+    data["inbounds"]=[x for x in inbounds if not (isinstance(x,dict) and x.get("tag")==inbound_tag)]
+    if len(data["inbounds"])==before:
+        raise ProtocolError("Xray inbound not found")
+    backup_dir=Path("/var/backups/makia-vps-manager")
+    backup_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
+    backup=backup_dir/f"xray-remove-{int(time.time())}.json"
+    shutil.copy2(path,backup)
+    tmp=path.with_suffix(path.suffix+".makia-remove")
+    tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    os.chmod(tmp,0o600)
+    try:
+        _run([binary,"run","-test","-config",str(tmp)],timeout=30)
+        os.replace(tmp,path)
+        _run(["systemctl","restart","xray"],timeout=30)
+        if not _active("xray"):
+            raise ProtocolError("Xray did not become active after inbound removal")
+    except Exception:
+        try:
+            if tmp.exists(): tmp.unlink()
+            shutil.copy2(backup,path)
+            _run(["systemctl","restart","xray"],timeout=30)
+        except Exception:
+            pass
+        raise
+    return {"removed":True,"tag":inbound_tag,"backup":str(backup)}
 
 def disable_xray_client(inbound_tag,email):
     binary=_binary()
