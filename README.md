@@ -2,10 +2,20 @@
 
 Modern web-first VPS and access-infrastructure control center for Ubuntu.
 
-> **Current release candidate:** `v0.11.0-rc1`  
+> **Current release candidate:** `v0.12.0-rc2`  
 > CI-validated, but **not yet production-certified**. A real-host UAT is required before a `1.0.0 Stable` label.
 
 ## What Makia manages today
+
+### v0.12.0-rc2 Domain, Network & Portable Recovery
+- Domain-first client provisioning so new Xray/WireGuard/OpenVPN/SSH deliveries use the configured stable domain
+- Real Panel Domain + Nginx validation + Let's Encrypt issuance/renewal from Settings
+- WireGuard defaults for UDP port, MTU and PersistentKeepalive, plus a restricted-network preset (UDP 443 / MTU 1280 / Keepalive 25)
+- TCP/UDP port-family validation is independent; HTTPS TCP 443 can coexist with WireGuard/Hysteria2 UDP 443 when the UDP port is free
+- Guided Trojan + REALITY in addition to VLESS + REALITY; Full Xray Config Studio remains available for arbitrary valid Xray JSON
+- AES-256 portable recovery bundle for Makia DB/secret, Xray, WireGuard keys, OpenVPN PKI, Nginx and Let's Encrypt
+- `makia-restore` validates first, requires explicit `--apply`, recreates recoverable SSH users, validates Xray, and runs host smoke after restore
+- Migration readiness warns about IP-bound profiles before a VPS cutover
 
 ### v0.12 QR, NPV and Settings Center
 - Xray profiles now have an in-panel QR/Share Center, direct profile QR, subscription QR, Copy Link and QR download
@@ -72,7 +82,7 @@ Validated Xray transports:
 Xray security:
 - None
 - TLS using the panel-managed Let's Encrypt certificate
-- VLESS REALITY with generated X25519 keys and Short ID
+- VLESS and Trojan REALITY with generated X25519 keys and Short ID
 
 Advanced Xray JSON editor:
 - Read the live config
@@ -106,7 +116,10 @@ Per-client traffic enforcement currently applies to VLESS, VMess, Trojan and Hys
 - Server bootstrap
 - IP forwarding/NAT
 - Peer provisioning
-- Downloadable client configuration
+- Configurable UDP port, MTU and PersistentKeepalive
+- Stable domain endpoint for VPS migration continuity
+- Restricted-network preset without pretending WireGuard is TCP
+- Downloadable client configuration + QR
 
 ### OpenVPN
 - Package/Easy-RSA install
@@ -199,8 +212,12 @@ It checks the Makia backend, Nginx, Policy Enforcer, Metrics Sampler, Protocol T
 
 ```bash
 sudo makia-backup
+sudo makia-restore /path/to/makia-portable.zip
+sudo makia-restore /path/to/makia-portable.zip --apply
 sudo makia-uninstall
 ```
+
+Portable restore preserves service credentials/keys when they exist in the bundle. For migration continuity, provision clients with a stable domain and repoint that same DNS name to the replacement VPS after restore. Existing live network sessions reconnect; they are not transferred byte-for-byte between hosts.
 
 ## Runtime layout
 
@@ -235,7 +252,7 @@ Important:
 
 ## Release gate
 
-`v0.10.0-rc1` must pass:
+`v0.12.0-rc2` must pass:
 - Python compilation
 - unit tests
 - Bash syntax
@@ -244,7 +261,7 @@ Important:
 - packaging contract
 - real Ubuntu 22.04/24.04 host UAT
 
-See `docs/UAT-0.12.0-RC1.md` and `docs/PARITY-3XUI.md`.
+See `docs/UAT-0.12.0-RC2.md` and `docs/PARITY-3XUI.md`.
 
 ## License
 
