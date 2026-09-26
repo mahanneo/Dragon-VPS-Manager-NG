@@ -45,6 +45,60 @@ def public_origin(request:Request):
 def public_host(request:Request):
     return (get_setting("panel_domain","") or request.url.hostname or "server").strip()
 
+
+def _setting_int(key,default,minimum=None,maximum=None):
+    try: value=int(get_setting(key,default))
+    except Exception: value=int(default)
+    if minimum is not None: value=max(int(minimum),value)
+    if maximum is not None: value=min(int(maximum),value)
+    return value
+
+def _setting_bool(key,default=False):
+    raw=str(get_setting(key,"1" if default else "0")).strip().lower()
+    return raw in {"1","true","yes","on"}
+
+def operator_settings_snapshot():
+    return {
+        "session_max_age_minutes":_setting_int("session_max_age_minutes",720,5,43200),
+        "delivery":{
+            "profile_prefix":get_setting("delivery_profile_prefix","Makia"),
+            "npv_enabled":_setting_bool("delivery_npv_enabled",True),
+            "npv_dns_mode":get_setting("delivery_npv_dns_mode","UDP"),
+            "npv_udpgw_port":_setting_int("delivery_npv_udpgw_port",7300,1,65535),
+            "npv_transparent_dns":_setting_bool("delivery_npv_transparent_dns",False),
+            "show_qr":_setting_bool("delivery_show_qr",True),
+        },
+        "defaults":{
+            "ssh_password_mode":get_setting("default_ssh_password_mode","pin6"),
+            "ssh_expire_days":_setting_int("default_ssh_expire_days",30,0,3650),
+            "ssh_sessions":_setting_int("default_ssh_sessions",1,1,50),
+            "ssh_devices":_setting_int("default_ssh_devices",1,1,50),
+            "xray_protocol":get_setting("default_xray_protocol","vless"),
+            "xray_port":_setting_int("default_xray_port",2087,1,65535),
+            "xray_transport":get_setting("default_xray_transport","xhttp"),
+            "xray_security":get_setting("default_xray_security","reality"),
+            "xray_path":get_setting("default_xray_path","/makia"),
+            "xray_sni":get_setting("default_xray_sni","www.microsoft.com"),
+            "xray_reality_target":get_setting("default_xray_reality_target","www.microsoft.com:443"),
+            "xray_quota_gb":_setting_int("default_xray_quota_gb",50,0,100000),
+            "xray_expire_days":_setting_int("default_xray_expire_days",30,0,3650),
+            "xray_ip_limit":_setting_int("default_xray_ip_limit",1,1,50),
+            "xray_reset_days":_setting_int("default_xray_reset_days",30,0,3650),
+            "wireguard_dns":get_setting("default_wireguard_dns","1.1.1.1"),
+            "openvpn_port":_setting_int("default_openvpn_port",1194,1,65535),
+            "openvpn_proto":get_setting("default_openvpn_proto","udp"),
+        }
+    }
+
+def ssh_npv_options(username):
+    settings=operator_settings_snapshot()["delivery"]
+    return {
+        "remarks":f"{settings['profile_prefix']} {username}".strip(),
+        "dns_mode":settings["npv_dns_mode"],
+        "udpgw_port":settings["npv_udpgw_port"],
+        "transparent_dns":settings["npv_transparent_dns"],
+    }
+
 def artifact_save(kind,external_key,display_name,protocol,payload,metadata=None):
     return upsert_access_artifact(
         kind,external_key,display_name,protocol,payload.get("native_filename",""),
@@ -157,7 +211,8 @@ def login(request:Request,username:str=Form(...),password:str=Form(...)):
     audit(username,"login_success",ip=ip(request))
     r=RedirectResponse("/",302)
     secure_cookie=request.headers.get("x-forwarded-proto","").lower()=="https"
-    r.set_cookie(COOKIE_NAME,make_session(username),httponly=True,secure=secure_cookie,samesite="strict",max_age=43200)
+    session_age=_setting_int("session_max_age_minutes",720,5,43200)*60
+    r.set_cookie(COOKIE_NAME,make_session(username,session_age),httponly=True,secure=secure_cookie,samesite="strict",max_age=session_age)
     return r
 
 @app.post("/login/2fa")
@@ -173,7 +228,8 @@ def login_2fa(request:Request,token:str=Form(...),code:str=Form(...)):
     audit(username,"login_success_2fa",ip=ip(request))
     r=RedirectResponse("/",302)
     secure_cookie=request.headers.get("x-forwarded-proto","").lower()=="https"
-    r.set_cookie(COOKIE_NAME,make_session(username),httponly=True,secure=secure_cookie,samesite="strict",max_age=43200)
+    session_age=_setting_int("session_max_age_minutes",720,5,43200)*60
+    r.set_cookie(COOKIE_NAME,make_session(username,session_age),httponly=True,secure=secure_cookie,samesite="strict",max_age=session_age)
     return r
 
 @app.post("/logout")
@@ -256,7 +312,7 @@ def create_account(payload:AccountCreate,request:Request):
     try:
         system_ops.create_ssh_user(payload.username,password,payload.expire_date)
         upsert_profile(payload.username,payload.plan,payload.note,payload.expire_date,payload.connection_limit,payload.quota_mb,1,payload.device_limit,payload.renewal_days)
-        delivery=access_ops.ssh_payload(public_host(request),payload.username,password,22)
+        delivery=access_ops.ssh_payload(public_host(request),payload.username,password,22,ssh_npv_options(payload.username))
         artifact_id=artifact_save("ssh",payload.username,payload.username,"ssh",delivery,{
             "expire_date":payload.expire_date or "","plan":payload.plan or "",
             "connection_limit":payload.connection_limit,"device_limit":payload.device_limit
@@ -286,7 +342,7 @@ def update_account(username:str,payload:AccountUpdate,request:Request):
         upsert_profile(username,payload.plan,payload.note,None if payload.clear_expire else payload.expire_date,payload.connection_limit,payload.quota_mb,1 if payload.enabled else 0,payload.device_limit,payload.renewal_days)
     except system_ops.OperationError as e: raise HTTPException(400,str(e))
     if payload.password:
-        delivery=access_ops.ssh_payload(public_host(request),username,payload.password,22)
+        delivery=access_ops.ssh_payload(public_host(request),username,payload.password,22,ssh_npv_options(username))
         artifact_save("ssh",username,username,"ssh",delivery,{
             "expire_date":None if payload.clear_expire else (payload.expire_date or ""),
             "plan":payload.plan or "","connection_limit":payload.connection_limit,"device_limit":payload.device_limit
@@ -817,6 +873,46 @@ def access_entries(request:Request):
     rows.sort(key=lambda x:(order.get(x["kind"],9),str(x["name"]).lower()))
     return rows
 
+@app.get("/api/access/{kind}/{key}/share")
+def access_share(kind:str,key:str,request:Request):
+    require_user(request)
+    payload,artifact=_resolve_access_payload(kind,key,request)
+    if kind=="ssh" and not payload.get("share_text"):
+        summary=payload.get("summary") or {}
+        credentials=(payload.get("files") or {}).get("credentials.txt",b"")
+        if isinstance(credentials,bytes): credentials=credentials.decode("utf-8","replace")
+        match=re.search(r"(?m)^Password:\s*(.+)$",str(credentials))
+        password=match.group(1).strip() if match else ""
+        if password and summary.get("host") and summary.get("username"):
+            payload=access_ops.ssh_payload(summary["host"],summary["username"],password,int(summary.get("port") or 22),ssh_npv_options(summary["username"]))
+            artifact_save("ssh",key,summary["username"],"ssh",payload,{"upgraded_delivery":"npvt-ssh"})
+    share=str(payload.get("share_text") or payload.get("primary_text") or "")
+    if not share: raise HTTPException(404,"share content is not available")
+    qr=access_ops.make_qr_svg(share)
+    return {
+        "kind":kind,"key":key,"share_type":payload.get("share_type") or kind,
+        "share_text":share,
+        "qr":"data:image/svg+xml;base64,"+base64.b64encode(qr).decode("ascii"),
+        "summary":payload.get("summary") or {},
+        "artifact_id":artifact.get("id") if artifact else None,
+    }
+
+@app.get("/api/access/{kind}/{key}/qr.svg")
+def access_qr(kind:str,key:str,request:Request):
+    require_user(request)
+    payload,_=_resolve_access_payload(kind,key,request)
+    if kind=="ssh" and not payload.get("share_text"):
+        summary=payload.get("summary") or {}
+        credentials=(payload.get("files") or {}).get("credentials.txt",b"")
+        if isinstance(credentials,bytes): credentials=credentials.decode("utf-8","replace")
+        match=re.search(r"(?m)^Password:\s*(.+)$",str(credentials))
+        password=match.group(1).strip() if match else ""
+        if password and summary.get("host") and summary.get("username"):
+            payload=access_ops.ssh_payload(summary["host"],summary["username"],password,int(summary.get("port") or 22),ssh_npv_options(summary["username"]))
+    share=str(payload.get("share_text") or payload.get("primary_text") or "")
+    if not share: raise HTTPException(404,"QR content is not available")
+    return Response(content=access_ops.make_qr_svg(share),media_type="image/svg+xml",headers={"Cache-Control":"no-store, private","X-Content-Type-Options":"nosniff"})
+
 @app.get("/api/access/{kind}/{key}/manifest")
 def access_manifest(kind:str,key:str,request:Request):
     require_user(request)
@@ -1136,6 +1232,84 @@ def general_settings_put(payload:GeneralSettings,request:Request):
     set_setting("density",density)
     audit(actor,"general_settings_update",domain or "none",f"language={language}; theme={theme}; density={density}",ip(request))
     return {"ok":True,"language":language,"panel_domain":domain,"theme":theme,"density":density}
+
+
+class OperatorSettings(BaseModel):
+    session_max_age_minutes:int=Field(default=720,ge=5,le=43200)
+    profile_prefix:str=Field(default="Makia",max_length=40)
+    npv_enabled:bool=True
+    npv_dns_mode:str="UDP"
+    npv_udpgw_port:int=Field(default=7300,ge=1,le=65535)
+    npv_transparent_dns:bool=False
+    show_qr:bool=True
+    ssh_password_mode:str="pin6"
+    ssh_expire_days:int=Field(default=30,ge=0,le=3650)
+    ssh_sessions:int=Field(default=1,ge=1,le=50)
+    ssh_devices:int=Field(default=1,ge=1,le=50)
+    xray_protocol:str="vless"
+    xray_port:int=Field(default=2087,ge=1,le=65535)
+    xray_transport:str="xhttp"
+    xray_security:str="reality"
+    xray_path:str=Field(default="/makia",max_length=256)
+    xray_sni:str=Field(default="www.microsoft.com",max_length=253)
+    xray_reality_target:str=Field(default="www.microsoft.com:443",max_length=300)
+    xray_quota_gb:int=Field(default=50,ge=0,le=100000)
+    xray_expire_days:int=Field(default=30,ge=0,le=3650)
+    xray_ip_limit:int=Field(default=1,ge=1,le=50)
+    xray_reset_days:int=Field(default=30,ge=0,le=3650)
+    wireguard_dns:str=Field(default="1.1.1.1",max_length=64)
+    openvpn_port:int=Field(default=1194,ge=1,le=65535)
+    openvpn_proto:str="udp"
+
+@app.get("/api/settings/operator")
+def operator_settings_get(request:Request):
+    require_user(request)
+    return operator_settings_snapshot()
+
+@app.put("/api/settings/operator")
+def operator_settings_put(payload:OperatorSettings,request:Request):
+    actor=require_mutation(request)
+    allowed_modes={"pin4","pin6","easy8","strong"}
+    allowed_protocols={"vless","vmess","trojan","shadowsocks","hysteria2","http","socks"}
+    allowed_transports={"tcp","ws","grpc","httpupgrade","xhttp","kcp"}
+    allowed_security={"none","tls","reality"}
+    dns_mode=(payload.npv_dns_mode or "UDP").upper()
+    if dns_mode not in {"UDP","TCP"}: raise HTTPException(400,"NPV DNS mode must be UDP or TCP")
+    if payload.ssh_password_mode not in allowed_modes: raise HTTPException(400,"invalid SSH password mode")
+    if payload.xray_protocol not in allowed_protocols: raise HTTPException(400,"invalid Xray protocol")
+    if payload.xray_transport not in allowed_transports: raise HTTPException(400,"invalid Xray transport")
+    if payload.xray_security not in allowed_security: raise HTTPException(400,"invalid Xray security")
+    if payload.openvpn_proto not in {"udp","tcp"}: raise HTTPException(400,"OpenVPN proto must be udp or tcp")
+    values={
+        "session_max_age_minutes":payload.session_max_age_minutes,
+        "delivery_profile_prefix":payload.profile_prefix.strip() or "Makia",
+        "delivery_npv_enabled":1 if payload.npv_enabled else 0,
+        "delivery_npv_dns_mode":dns_mode,
+        "delivery_npv_udpgw_port":payload.npv_udpgw_port,
+        "delivery_npv_transparent_dns":1 if payload.npv_transparent_dns else 0,
+        "delivery_show_qr":1 if payload.show_qr else 0,
+        "default_ssh_password_mode":payload.ssh_password_mode,
+        "default_ssh_expire_days":payload.ssh_expire_days,
+        "default_ssh_sessions":payload.ssh_sessions,
+        "default_ssh_devices":payload.ssh_devices,
+        "default_xray_protocol":payload.xray_protocol,
+        "default_xray_port":payload.xray_port,
+        "default_xray_transport":payload.xray_transport,
+        "default_xray_security":payload.xray_security,
+        "default_xray_path":payload.xray_path or "/",
+        "default_xray_sni":payload.xray_sni.strip(),
+        "default_xray_reality_target":payload.xray_reality_target.strip(),
+        "default_xray_quota_gb":payload.xray_quota_gb,
+        "default_xray_expire_days":payload.xray_expire_days,
+        "default_xray_ip_limit":payload.xray_ip_limit,
+        "default_xray_reset_days":payload.xray_reset_days,
+        "default_wireguard_dns":payload.wireguard_dns.strip() or "1.1.1.1",
+        "default_openvpn_port":payload.openvpn_port,
+        "default_openvpn_proto":payload.openvpn_proto,
+    }
+    for key,value in values.items(): set_setting(key,value)
+    audit(actor,"operator_settings_update","settings",f"session={payload.session_max_age_minutes}; npv={payload.npv_enabled}; xray={payload.xray_protocol}/{payload.xray_transport}/{payload.xray_security}",ip(request))
+    return operator_settings_snapshot()
 
 class DomainApply(BaseModel):
     domain:str=Field(min_length=3,max_length=253)
