@@ -37,7 +37,7 @@ def ip(request:Request): return request.client.host if request.client else None
 
 def public_origin(request:Request):
     domain=(get_setting("panel_domain","") or "").strip()
-    host=domain or request.url.hostname or "server"
+    host=domain or request.url.netloc or request.url.hostname or "server"
     forwarded=request.headers.get("x-forwarded-proto","").lower()
     scheme="https" if forwarded=="https" or (domain and panel_ops.domain_status(domain).get("certificate")) else "http"
     return f"{scheme}://{host}"
