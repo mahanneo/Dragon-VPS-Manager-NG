@@ -159,6 +159,7 @@ def test_protected_ssh_package_uses_current_npv_setting(monkeypatch):
         {"enabled":True,"remarks":"Old","dns_mode":"UDP","udpgw_port":7300,"transparent_dns":False},
     )
     monkeypatch.setattr(main_app,"require_mutation",lambda request:"admin")
+    monkeypatch.setattr(main_app,"require_local_admin",lambda request:"admin")
     monkeypatch.setattr(main_app,"require_access_kind",lambda request,kind,mutation=False:"admin")
     monkeypatch.setattr(main_app,"assert_license_feature",lambda feature:None)
     monkeypatch.setattr(main_app,"_resolve_access_payload",lambda kind,key,request:(original,{"id":1}))
