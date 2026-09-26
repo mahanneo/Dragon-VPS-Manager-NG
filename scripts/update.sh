@@ -4,10 +4,15 @@ set -Eeuo pipefail
 
 ENV_FILE=/etc/makia-vps-manager/makia.env
 if [[ -r "$ENV_FILE" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
+  while IFS='=' read -r key value; do
+    [[ -z "$key" || "$key" == \#* ]] && continue
+    case "$key" in
+      MAKIA_SUPPORT_TELEGRAM|MAKIA_SUPPORT_WEBHOOK_URL|MAKIA_RELEASE_ARCHIVE_URL|MAKIA_RELEASE_BEARER_TOKEN)
+        printf -v "$key" '%s' "$value"
+        export "$key"
+        ;;
+    esac
+  done <"$ENV_FILE"
 fi
 
 REPO="mahanneo/Makia-VPS-Manager"
