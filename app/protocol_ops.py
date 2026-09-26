@@ -185,7 +185,7 @@ def install_component(component):
     if component=="xray":
         # Official XTLS installer. It installs the core + systemd service and
         # verifies the release artifacts handled by the upstream installer.
-        _run(["bash","-lc","curl -fsSL https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh | bash -s -- install"],timeout=600)
+        _run(["bash","-lc",'bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install'],timeout=600)
         config=Path("/usr/local/etc/xray/config.json")
         config.parent.mkdir(parents=True,exist_ok=True)
         if not config.exists():
