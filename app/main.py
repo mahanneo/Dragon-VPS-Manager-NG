@@ -1,6 +1,6 @@
 from pathlib import Path
 from datetime import date, datetime, timedelta
-import time, io, base64, secrets, string, urllib.request, json
+import time, io, base64, secrets, string, urllib.request, json, os, stat
 import pyotp, qrcode
 import qrcode.image.svg
 from fastapi import FastAPI, Request, Form, HTTPException
@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from .config import APP_NAME, VERSION, COOKIE_NAME, ALLOWED_SERVICES, DATA_DIR
+from .config import APP_NAME, VERSION, COOKIE_NAME, ALLOWED_SERVICES, DATA_DIR, SECRET_PATH
 from .db import init_db, connect, audit, upsert_profile, all_profiles, delete_profile, metrics_since, get_admin_2fa, set_admin_totp_secret, set_admin_totp_enabled, clear_admin_totp, create_api_token, list_api_tokens, revoke_api_token, verify_api_token, create_node, list_nodes, revoke_node, node_by_token, update_node_heartbeat, get_setting, set_setting, all_settings, create_protocol_client, list_protocol_clients, get_protocol_client, update_protocol_client_state, delete_protocol_client, reset_protocol_traffic, protocol_client_by_subscription, login_rate_state, record_login_failure, clear_login_failures, upsert_access_artifact, list_access_artifacts, get_access_artifact_by_key, delete_access_artifact_by_key
 from .security import verify_password, make_session, read_session, hash_password, make_preauth, read_preauth
 from . import system_ops, protocol_ops, panel_ops, access_ops
@@ -817,6 +817,20 @@ def access_entries(request:Request):
     rows.sort(key=lambda x:(order.get(x["kind"],9),str(x["name"]).lower()))
     return rows
 
+@app.get("/api/access/{kind}/{key}/manifest")
+def access_manifest(kind:str,key:str,request:Request):
+    require_user(request)
+    payload,artifact=_resolve_access_payload(kind,key,request)
+    files=payload.get("files") or {}
+    return {
+        "kind":kind,
+        "key":key,
+        "native_filename":payload.get("native_filename") or "",
+        "files":[{"name":str(name),"size":len(data.encode("utf-8") if isinstance(data,str) else bytes(data))} for name,data in files.items()],
+        "protected_package":bool(files),
+        "artifact_id":artifact.get("id") if artifact else None,
+    }
+
 @app.get("/api/access/{kind}/{key}/native")
 def access_native(kind:str,key:str,request:Request):
     require_user(request)
@@ -831,7 +845,12 @@ def access_native(kind:str,key:str,request:Request):
     if filename.endswith((".txt",".conf",".json")): media="text/plain; charset=utf-8"
     elif filename.endswith(".ovpn"): media="application/x-openvpn-profile"
     audit(current_user(request),"access_native_export",f"{kind}:{key}",filename,ip(request))
-    return Response(content=bytes(data),media_type=media,headers={"Content-Disposition":f'attachment; filename="{access_ops.safe_filename(filename)}"'})
+    safe=access_ops.safe_filename(filename)
+    return Response(content=bytes(data),media_type=media,headers={
+        "Content-Disposition":f'attachment; filename="{safe}"',
+        "Cache-Control":"no-store, private",
+        "X-Content-Type-Options":"nosniff",
+    })
 
 @app.post("/api/access/{kind}/{key}/package")
 def access_package(kind:str,key:str,payload:AccessPackageRequest,request:Request):
@@ -841,9 +860,17 @@ def access_package(kind:str,key:str,payload:AccessPackageRequest,request:Request
         content=access_ops.protected_zip(access.get("files") or {},payload.password)
     except access_ops.AccessPackageError as e:
         raise HTTPException(400,str(e))
+    try:
+        access_ops.verify_protected_zip(content,payload.password)
+    except access_ops.AccessPackageError as e:
+        raise HTTPException(500,str(e))
     filename=access_ops.safe_filename(f"makia-{kind}-{key}.zip")
     audit(actor,"access_protected_export",f"{kind}:{key}",filename,ip(request))
-    return Response(content=content,media_type="application/zip",headers={"Content-Disposition":f'attachment; filename="{filename}"'})
+    return Response(content=content,media_type="application/zip",headers={
+        "Content-Disposition":f'attachment; filename="{filename}"',
+        "Cache-Control":"no-store, private",
+        "X-Content-Type-Options":"nosniff",
+    })
 
 @app.delete("/api/access/{kind}/{key}")
 def access_revoke(kind:str,key:str,request:Request):
@@ -879,6 +906,76 @@ def access_revoke(kind:str,key:str,request:Request):
         raise HTTPException(400,str(e))
     audit(actor,"access_revoke",f"{kind}:{key}",ip=ip(request))
     return {"ok":True}
+
+@app.get("/api/diagnostics/self-test")
+def diagnostics_self_test(request:Request):
+    require_user(request)
+    checks=[]
+    def add(name,ok,detail="",level="ok"):
+        checks.append({"name":name,"ok":bool(ok),"detail":str(detail)[:500],"level":level if not ok else "ok"})
+
+    try:
+        with connect() as con:
+            value=con.execute("SELECT 1 AS ok").fetchone()["ok"]
+        add("database",value==1,"SQLite query succeeded")
+    except Exception as exc:
+        add("database",False,exc,"error")
+
+    try:
+        mode=stat.S_IMODE(os.stat(SECRET_PATH).st_mode) if SECRET_PATH.exists() else None
+        add("server_secret",SECRET_PATH.exists() and mode==0o600,f"mode={oct(mode) if mode is not None else 'missing'}","error")
+    except Exception as exc:
+        add("server_secret",False,exc,"error")
+
+    try:
+        probe={"native_filename":"probe.txt","files":{"probe.txt":b"makia-self-test"},"summary":{"kind":"probe"}}
+        token=access_ops.seal_payload(probe)
+        reopened=access_ops.open_payload(token)
+        add("artifact_crypto",reopened["files"]["probe.txt"]==b"makia-self-test","Fernet round-trip")
+    except Exception as exc:
+        add("artifact_crypto",False,exc,"error")
+
+    try:
+        z=access_ops.protected_zip({"probe.txt":b"makia-self-test"},"582941")
+        verified=access_ops.verify_protected_zip(z,"582941","probe.txt")
+        add("protected_zip",verified.get("ok") and verified.get("sample_size")==15,f"{len(z)} bytes AES archive")
+    except Exception as exc:
+        add("protected_zip",False,exc,"error")
+
+    artifacts=list_access_artifacts()
+    broken=[]
+    for row in artifacts:
+        try:
+            access_ops.open_payload(row["payload_enc"])
+        except Exception as exc:
+            broken.append(f"{row.get('kind')}:{row.get('external_key')}:{str(exc)[:80]}")
+    add("stored_artifacts",not broken,f"{len(artifacts)} checked"+(f"; broken={'; '.join(broken[:3])}" if broken else ""),"error")
+
+    for service_name,label in ALLOWED_SERVICES.items():
+        try:
+            status=system_ops.service_status(service_name)
+            installed=status.get("state") not in {"not-found","unknown"}
+            if installed:
+                add(f"service:{service_name}",bool(status.get("active")),f"{label}: {status.get('state')}","warn")
+        except Exception as exc:
+            add(f"service:{service_name}",False,exc,"warn")
+
+    try:
+        stack=protocol_ops.catalog()
+        add("protocol_catalog",True,f"{sum(1 for x in stack.get('capabilities',[]) if x.get('available'))} capabilities available")
+    except Exception as exc:
+        add("protocol_catalog",False,exc,"error")
+
+    critical=[x for x in checks if not x["ok"] and x["level"]=="error"]
+    warnings=[x for x in checks if not x["ok"] and x["level"]=="warn"]
+    return {
+        "ok":not critical,
+        "version":VERSION,
+        "checks":checks,
+        "critical":len(critical),
+        "warnings":len(warnings),
+        "summary":"PASS" if not critical else "FAIL",
+    }
 
 @app.get("/api/backups")
 def backups(request:Request):
