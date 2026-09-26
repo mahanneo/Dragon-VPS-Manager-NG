@@ -773,9 +773,105 @@ async function disable2FA(){const password=prompt('رمز فعلی مدیر:');i
 async function changePass(){try{await api('/api/admin/password',{method:'POST',body:JSON.stringify({current_password:oldP.value,new_password:newP.value})});alert('رمز مدیر تغییر کرد.')}catch(e){alert(e.message)}}
 function toast(msg){let t=document.getElementById('makiaToast');if(!t){t=document.createElement('div');t.id='makiaToast';t.className='toast';document.body.appendChild(t)}t.textContent=msg;t.classList.add('show');clearTimeout(window.__toastTimer);window.__toastTimer=setTimeout(()=>t.classList.remove('show'),2200)}
 const commandItems=[['Overview','dashboard'],['Access Center','access'],['SSH Accounts','accounts'],['Live Sessions','sessions'],['Protocols','protocols'],['Nodes','nodes'],['Services','services'],['Security','security'],['Backups','backups'],['Audit Logs','audit'],['Update Center','updates'],['Settings / 2FA / API Tokens','settings']];
-function openCommandPalette(){modalRoot.innerHTML=`<div class="modal-backdrop command-backdrop" onclick="if(event.target===this)closeModal()"><div class="command-modal"><input id="commandSearch" autofocus placeholder="Search Makia…  (Ctrl+K)" oninput="renderCommands(this.value)"><div id="commandList"></div></div></div>`;setTimeout(()=>{document.getElementById('commandSearch')?.focus();renderCommands('')},0)}
-function renderCommands(q=''){const root=document.getElementById('commandList');if(!root)return;const s=q.toLowerCase();root.innerHTML=commandItems.filter(x=>x[0].toLowerCase().includes(s)).map(x=>`<button onclick="closeModal();switchView('${x[1]}')"><span>${x[0]}</span><kbd>↵</kbd></button>`).join('')}
+
+function openCommandPalette(){
+  modalRoot.innerHTML='<div class="modal-backdrop command-backdrop"><div class="command-modal"><input id="commandSearch" autofocus placeholder="Search Makia…  (Ctrl+K)"><div id="commandList"></div></div></div>';
+  const input=document.getElementById('commandSearch');
+  input?.addEventListener('input',()=>renderCommands(input.value));
+  setTimeout(()=>{input?.focus();renderCommands('')},0);
+}
+function renderCommands(q=''){
+  const root=document.getElementById('commandList');if(!root)return;
+  const s=q.toLowerCase();
+  root.innerHTML=commandItems.filter(x=>x[0].toLowerCase().includes(s)).map(x=>'<button data-action="nav" data-view="'+htmlEsc(x[1])+'"><span>'+htmlEsc(x[0])+'</span><kbd>↵</kbd></button>').join('');
+}
+
+async function selectWizardProtocol(kind){
+  if(!provisionState)return;
+  if(!wizardProtocolReady(kind)){await openProtocolSetup(kind);return}
+  provisionState.protocol=kind;provisionState.step=2;
+  if(kind==='ssh'){
+    const sec=await api('/api/accounts/generate-secret?mode=pin6').catch(()=>({secret:''}));
+    provisionState.password=sec.secret||'';provisionState.expireDate=dateAfterDays(30);
+  }
+  renderProvisionWizard();
+}
+
+async function handleMakiaAction(btn){
+  const action=btn.dataset.action;if(!action)return;
+  if(action==='nav'){closeModal();switchView(btn.dataset.view);return}
+  if(action==='wizard-open'){await openProvisionWizard(btn.dataset.kind||null);return}
+  if(action==='wizard-protocol'){await selectWizardProtocol(btn.dataset.kind);return}
+  if(action==='wizard-next'){await wizardNext();return}
+  if(action==='wizard-prev'){wizardPrev();return}
+  if(action==='wizard-create'){await createProvisionedAccess();return}
+  if(action==='wizard-secret'){
+    const mode=btn.dataset.mode||'pin6',r=await api('/api/accounts/generate-secret?mode='+encodeURIComponent(mode));
+    if(provisionState)provisionState.password=r.secret||'';const el=document.getElementById('wizPassword');if(el)el.value=r.secret||'';return;
+  }
+  if(action==='wizard-expiry'){
+    const days=Number(btn.dataset.days||0),value=days?dateAfterDays(days):'';
+    if(provisionState)provisionState.expireDate=value;const el=document.getElementById('wizExpireDate');if(el)el.value=value;return;
+  }
+  if(action==='wizard-package-pin'){
+    const r=await api('/api/accounts/generate-secret?mode=pin6');if(provisionState)provisionState.packagePassword=r.secret||'';
+    const el=document.getElementById('wizPackagePassword');if(el)el.value=r.secret||'';return;
+  }
+  if(action==='protected-export'){await openProtectedExport(btn.dataset.kind,dataDec(btn.dataset.key),dataDec(btn.dataset.name));return}
+  if(action==='protected-download-confirm'){
+    const password=document.getElementById('protectedPassword')?.value||'';
+    await performProtectedDownload(btn.dataset.kind,dataDec(btn.dataset.key),dataDec(btn.dataset.name),password);return;
+  }
+  if(action==='protected-download-now'){
+    await performProtectedDownload(btn.dataset.kind,dataDec(btn.dataset.key),dataDec(btn.dataset.name),dataDec(btn.dataset.password));return;
+  }
+  if(action==='native-export'){await downloadAccessNative(btn.dataset.kind,dataDec(btn.dataset.key));return}
+  if(action==='manage-access'){manageAccess(dataDec(btn.dataset.id));return}
+  if(action==='revoke-access'){await revokeAccess(btn.dataset.kind,dataDec(btn.dataset.key),dataDec(btn.dataset.name));return}
+  if(action==='wg-reissue'){await reissueWireGuard(dataDec(btn.dataset.key));return}
+  if(action==='protocol-setup'){await openProtocolSetup(btn.dataset.kind);return}
+  if(action==='protocol-install'){await performProtocolInstall(btn.dataset.kind);return}
+  if(action==='protocol-bootstrap'){await performProtocolBootstrap(btn.dataset.kind,btn.dataset.installed==='1');return}
+  if(action==='self-test'){await runSelfTest();return}
+  if(action==='success-done'){closeModal();switchView('access');return}
+  if(action==='modal-close'){closeModal();return}
+  if(action==='modal-close-refresh'){const v=btn.dataset.view;closeModal();if(v&&views[v])await views[v]();return}
+  if(action==='copy-target'){const el=document.getElementById(btn.dataset.target);if(el)copyText('value' in el?el.value:el.textContent||'');return}
+  if(action==='copy-last-credential'){
+    const p=window.__lastCredential||{};copyText('Makia SSH Account\nServer: '+(p.host||'')+'\nUsername: '+(p.username||'')+'\nPassword: '+(p.password||'')+'\nExpire: '+(p.expire_date||'No expiry'));return;
+  }
+  if(action==='download-text-target'){
+    const el=document.getElementById(btn.dataset.target);if(el)downloadText(window.__lastConfigFilename||'config.txt',el.value||el.textContent||'');return;
+  }
+  if(action==='account-edit'){const u=dataDec(btn.dataset.user),row=accountCache.find(x=>x.username===u);if(row)editAccount(row);return}
+  if(action==='account-disconnect'){await accountAction(dataDec(btn.dataset.user),'disconnect');return}
+  if(action==='account-delete'){await accountAction(dataDec(btn.dataset.user),'delete');return}
+  if(action==='refresh'){await currentView();return}
+}
+
+document.addEventListener('click',e=>{
+  const shell=e.target.closest('[data-shell-action]');
+  if(shell){
+    const a=shell.dataset.shellAction;
+    if(a==='command')openCommandPalette();
+    else if(a==='refresh')currentView();
+    else if(a==='create-access')openProvisionWizard();
+    return;
+  }
+  const btn=e.target.closest('[data-action]');
+  if(btn){e.preventDefault();Promise.resolve(handleMakiaAction(btn)).catch(err=>alert(err?.message||String(err)))}
+});
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();openCommandPalette()}if(e.key==='Escape')closeModal()});
-function applyLanguageShell(){const fa={dashboard:'نمای کلی',access:'مرکز دسترسی',accounts:'کاربران SSH',sessions:'اتصال‌های زنده',services:'سرویس‌ها',protocols:'پروتکل‌ها',nodes:'نودها',security:'امنیت',backups:'بکاپ‌ها',audit:'گزارش رویدادها',updates:'بروزرسانی',settings:'تنظیمات'};const en={dashboard:'Overview',access:'Access Center',accounts:'SSH Accounts',sessions:'Live Sessions',services:'Services',protocols:'Protocols',nodes:'Nodes',security:'Security',backups:'Backups',audit:'Audit Logs',updates:'Update Center',settings:'Settings'};const dict=window.MAKIA_LANG==='en'?en:fa;document.documentElement.lang=window.MAKIA_LANG==='en'?'en':'fa';document.documentElement.dir=window.MAKIA_LANG==='en'?'ltr':'rtl';document.querySelectorAll('nav button[data-view]').forEach(b=>{const label=dict[b.dataset.view];if(!label)return;const span=b.querySelector('span');b.textContent='';if(span)b.appendChild(span);b.appendChild(document.createTextNode(' '+label))})}
-const views={dashboard,access,accounts,sessions,services,protocols,nodes,security,backups,audit:auditView,updates,settings};function currentView(){return(views[activeView]||dashboard)()}function switchView(v){activeView=v;document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===v));currentView()}document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>switchView(b.dataset.view));applyLanguageShell();dashboard();
+
+function applyLanguageShell(){
+  const fa={dashboard:'نمای کلی',access:'مرکز دسترسی',accounts:'کاربران SSH',sessions:'اتصال‌های زنده',services:'سرویس‌ها',protocols:'پروتکل‌ها',nodes:'نودها',security:'امنیت',backups:'بکاپ‌ها',audit:'گزارش رویدادها',updates:'بروزرسانی',settings:'تنظیمات'};
+  const en={dashboard:'Overview',access:'Access Center',accounts:'SSH Accounts',sessions:'Live Sessions',services:'Services',protocols:'Protocols',nodes:'Nodes',security:'Security',backups:'Backups',audit:'Audit Logs',updates:'Update Center',settings:'Settings'};
+  const dict=window.MAKIA_LANG==='en'?en:fa;document.documentElement.lang=window.MAKIA_LANG==='en'?'en':'fa';document.documentElement.dir=window.MAKIA_LANG==='en'?'ltr':'rtl';
+  document.querySelectorAll('nav button[data-view]').forEach(b=>{const label=dict[b.dataset.view];const t=b.querySelector('b');if(label&&t)t.textContent=label});
+}
+const views={dashboard,access,accounts,sessions,services,protocols,nodes,security,backups,audit:auditView,updates,settings};
+function currentView(){return(views[activeView]||dashboard)()}
+function switchView(v){activeView=v;setPageContext(v==='dashboard'?'OPERATIONS COCKPIT':v==='access'?'IDENTITY & DELIVERY':'MAKIA CONTROL CENTER');document.querySelectorAll('nav button[data-view]').forEach(x=>x.classList.toggle('active',x.dataset.view===v));return currentView()}
+document.querySelectorAll('nav button[data-view]').forEach(b=>b.addEventListener('click',()=>switchView(b.dataset.view)));
+applyLanguageShell();dashboard();
 if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('/static/sw.js').catch(()=>{}));}
