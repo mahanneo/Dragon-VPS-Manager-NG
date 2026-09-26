@@ -191,6 +191,7 @@ def main():
                 assert "payload/data.tar.gz" in names
                 manifest=zf.read("manifest.json").decode("utf-8")
                 assert "makia-portable-migration" in manifest
+            page.locator('.close-btn[data-action="modal-close"]').click()
 
             for view in ["dashboard","access"]:
                 nav=page.locator(f'aside.sidebar nav button[data-view="{view}"]')
