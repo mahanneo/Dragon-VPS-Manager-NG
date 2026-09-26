@@ -4,6 +4,23 @@
 
 > وضعیت فعلی پروژه Release Candidate است. قبل از استفاده Production، UAT واقعی روی VPS مقصد انجام شود.
 
+## نسخه v0.14.0-rc1 — Glass Aurora و OpenVPN با دامنه
+
+ظاهر پیش‌فرض پنل به **Glass Aurora** تغییر کرده است: سایدبار و Topbar شیشه‌ای، کارت‌های شفاف آبی/بنفش، Dashboard جدید با وضعیت سرویس‌ها، چهار کارت خلاصه، حلقه‌های CPU/RAM/Disk، نمودار واقعی شبکه و نمایش Responsive. نصب‌های قبلی در اولین اجرای این Release یک‌بار به Glass منتقل می‌شوند و Themeهای قبلی همچنان از Settings قابل انتخاب‌اند.
+
+### OpenVPN با دامنه
+
+HTTPS پنل و TLS داخلی OpenVPN یک چیز نیستند. HTTPS پنل توسط Nginx/Let's Encrypt مدیریت می‌شود، اما OpenVPN از CA و Certificateهای EasyRSA خودش استفاده می‌کند. دامنه در فایل OVPN فقط Endpoint سرور است.
+
+برای Domain Endpoint:
+- رکورد **A** باید مستقیماً به IPv4 همان VPS اشاره کند.
+- رکورد VPN پشت Proxy/CDN معمولی مثل Cloudflare در حالت Proxied نباشد؛ برای OpenVPN خام از **DNS-only** استفاده کنید.
+- Profileهای جدید و Exportهای مجدد با `udp4` یا `tcp4-client` ساخته می‌شوند تا AAAA اشتباه باعث رفتن Client به IPv6 نشود.
+- Profileهای قدیمی هنگام Export با Domain فعلی پنل دوباره Render می‌شوند؛ Certificate کاربر Reissue نمی‌شود.
+- از **Settings → WG / OpenVPN → Domain Diagnostics** می‌توانید DNS، A/AAAA، Listener، systemd و Port را بررسی کنید.
+- **Normalize IPv4 runtime** از `server.conf` Backup می‌گیرد، OpenVPN را روی `udp4` یا `tcp4-server` نرمال می‌کند و در Failure Rollback می‌کند.
+- OpenVPN روی **TCP/443** با Nginx HTTPS روی همان IP و Port تداخل دارد، مگر Port-sharing/IP جدا داشته باشید. **UDP/443** می‌تواند هم‌زمان با HTTPS/TCP 443 استفاده شود.
+
 ## نصب
 
 روی Ubuntu 22.04 یا 24.04 تازه:
