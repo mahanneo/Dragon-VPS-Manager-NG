@@ -161,10 +161,37 @@ def main():
             page.locator("#opSubscriptionFormat").wait_for()
             assert page.locator("#opSubscriptionFormat").input_value()=="raw"
 
+            page.locator('[data-action="settings-tab"][data-tab="vpn"]').click()
+            page.locator("#opWgPort").wait_for()
+            page.locator('[data-action="wg-compat-preset"]').click()
+            assert page.locator("#opWgPort").input_value()=="443"
+            assert page.locator("#opWgMtu").input_value()=="1280"
+            assert page.locator("#opWgKeepalive").input_value()=="15"
+            assert page.locator("#opWgAllowedIps").input_value()=="0.0.0.0/0"
+            page.locator('[data-action="settings-operator-save"]').click()
+            page.locator("#opWgPort").wait_for()
+            assert page.locator("#opWgPort").input_value()=="443"
+
             for tab in ["general","domain","ssh","xray","vpn","delivery","subscription","security","api","recovery"]:
                 page.locator(f'[data-action="settings-tab"][data-tab="{tab}"]').click()
                 page.wait_for_timeout(180)
                 assert page.locator(".settings-content-v2").inner_text().strip(), f"settings tab {tab} empty"
+
+            page.locator('[data-action="settings-tab"][data-tab="recovery"]').click()
+            page.locator('[data-action="portable-backup"]').click()
+            page.locator("#migrationPassword").fill("MigrationPass!2026")
+            with page.expect_download() as portable:
+                page.locator('[data-action="portable-backup-download"]').click()
+            portable_path=Path("/tmp/makia-browser-portable.zip")
+            portable.value.save_as(str(portable_path))
+            with pyzipper.AESZipFile(portable_path,"r") as zf:
+                zf.setpassword(b"MigrationPass!2026")
+                names=zf.namelist()
+                assert "manifest.json" in names
+                assert "payload/data.tar.gz" in names
+                manifest=zf.read("manifest.json").decode("utf-8")
+                assert "makia-portable-migration" in manifest
+            page.locator('.close-btn[data-action="modal-close"]').click()
 
             for view in ["dashboard","access"]:
                 nav=page.locator(f'aside.sidebar nav button[data-view="{view}"]')

@@ -96,6 +96,11 @@ def test_operator_settings_persist_and_validate(monkeypatch):
         xray_ip_limit=1,
         xray_reset_days=30,
         wireguard_dns="1.1.1.1",
+        wireguard_port=443,
+        wireguard_mtu=1280,
+        wireguard_keepalive=15,
+        wireguard_allowed_ips="0.0.0.0/0",
+        wireguard_cidr="10.66.66.1/24",
         openvpn_port=1194,
         openvpn_proto="udp",
         subscription_enabled=True,
@@ -107,6 +112,10 @@ def test_operator_settings_persist_and_validate(monkeypatch):
     assert result["delivery"]["profile_prefix"]=="Makia Test"
     assert result["defaults"]["ssh_sessions"]==2
     assert result["defaults"]["xray_transport"]=="xhttp"
+    assert result["defaults"]["wireguard_port"]==443
+    assert result["defaults"]["wireguard_mtu"]==1280
+    assert result["defaults"]["wireguard_keepalive"]==15
+    assert result["defaults"]["wireguard_allowed_ips"]=="0.0.0.0/0"
     assert result["subscription"]["enabled"] is True
     assert result["subscription"]["client_page_enabled"] is True
     assert result["subscription"]["default_format"]=="raw"

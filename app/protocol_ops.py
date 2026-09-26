@@ -219,6 +219,19 @@ def _default_iface():
         raise ProtocolError("unable to detect default network interface")
     return m.group(1)
 
+def _ufw_allow_if_active(port,proto,label):
+    if not shutil.which("ufw"):
+        return {"active":False,"changed":False}
+    status=subprocess.run(["ufw","status"],text=True,capture_output=True,timeout=8,check=False)
+    text=(status.stdout or status.stderr or "").lower()
+    if status.returncode!=0 or "status: active" not in text:
+        return {"active":False,"changed":False}
+    rule=f"{int(port)}/{proto}"
+    p=subprocess.run(["ufw","allow",rule,"comment",f"Makia {label}"],text=True,capture_output=True,timeout=15,check=False)
+    if p.returncode!=0:
+        raise ProtocolError((p.stderr or p.stdout or f"unable to allow {rule} in UFW").strip()[:600])
+    return {"active":True,"changed":True,"rule":rule}
+
 def _validate_port(port):
     port=int(port)
     if port<1 or port>65535:
@@ -269,10 +282,36 @@ def _endpoint_is_private(host):
         lowered=str(host or "").lower()
         return lowered=="localhost" or lowered.endswith(".local")
 
-def bootstrap_wireguard(port=51820, cidr="10.66.66.1/24", iface="wg0"):
+def _validate_wireguard_allowed_ips(value):
+    raw=str(value or "0.0.0.0/0").strip()
+    items=[x.strip() for x in raw.split(",") if x.strip()]
+    if not items:
+        raise ProtocolError("WireGuard AllowedIPs cannot be empty")
+    normalized=[]
+    for item in items:
+        try:
+            normalized.append(str(ipaddress.ip_network(item,strict=False)))
+        except Exception as exc:
+            raise ProtocolError(f"invalid WireGuard AllowedIPs entry: {item}") from exc
+    return ", ".join(normalized)
+
+def _validate_wireguard_mtu(value):
+    mtu=int(value or 0)
+    if mtu and (mtu<576 or mtu>1500):
+        raise ProtocolError("WireGuard MTU must be 0 (auto) or between 576 and 1500")
+    return mtu
+
+def _validate_keepalive(value):
+    keepalive=int(value or 0)
+    if keepalive<0 or keepalive>3600:
+        raise ProtocolError("WireGuard keepalive must be between 0 and 3600 seconds")
+    return keepalive
+
+def bootstrap_wireguard(port=51820, cidr="10.66.66.1/24", iface="wg0", mtu=0):
     if not re.fullmatch(r"wg\d{1,2}",iface):
         raise ProtocolError("invalid WireGuard interface name")
     _validate_port(port)
+    mtu=_validate_wireguard_mtu(mtu)
     try:
         net=ipaddress.ip_interface(cidr)
     except Exception as exc:
@@ -293,7 +332,8 @@ def bootstrap_wireguard(port=51820, cidr="10.66.66.1/24", iface="wg0"):
         f"Address = {net}\n"
         f"ListenPort = {int(port)}\n"
         f"PrivateKey = {private}\n"
-        f"PostUp = iptables -A FORWARD -i {iface} -j ACCEPT; iptables -A FORWARD -o {iface} -j ACCEPT; iptables -t nat -A POSTROUTING -o {uplink} -j MASQUERADE\n"
+        +(f"MTU = {mtu}\n" if mtu else "")
+        +f"PostUp = iptables -A FORWARD -i {iface} -j ACCEPT; iptables -A FORWARD -o {iface} -j ACCEPT; iptables -t nat -A POSTROUTING -o {uplink} -j MASQUERADE\n"
         f"PostDown = iptables -D FORWARD -i {iface} -j ACCEPT; iptables -D FORWARD -o {iface} -j ACCEPT; iptables -t nat -D POSTROUTING -o {uplink} -j MASQUERADE\n",
         encoding="utf-8"
     )
@@ -301,7 +341,8 @@ def bootstrap_wireguard(port=51820, cidr="10.66.66.1/24", iface="wg0"):
     Path("/etc/sysctl.d/99-makia-wireguard.conf").write_text("net.ipv4.ip_forward=1\n",encoding="utf-8")
     _run(["sysctl","--system"],timeout=30)
     _run(["systemctl","enable","--now",f"wg-quick@{iface}"],timeout=30)
-    return {"interface":iface,"address":str(net),"port":int(port),"public_key":public}
+    firewall=_ufw_allow_if_active(port,"udp","WireGuard")
+    return {"interface":iface,"address":str(net),"port":int(port),"public_key":public,"mtu":mtu,"firewall":firewall}
 
 def _wg_used_ips(iface):
     used=set()
@@ -317,10 +358,13 @@ def _wg_used_ips(iface):
                     pass
     return used
 
-def create_wireguard_peer(name, endpoint, iface="wg0", dns="1.1.1.1"):
+def create_wireguard_peer(name, endpoint, iface="wg0", dns="1.1.1.1", mtu=1280, keepalive=15, allowed_ips="0.0.0.0/0"):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
         raise ProtocolError("invalid peer name")
     endpoint=_validate_endpoint_host(endpoint)
+    mtu=_validate_wireguard_mtu(mtu)
+    keepalive=_validate_keepalive(keepalive)
+    allowed_ips=_validate_wireguard_allowed_ips(allowed_ips)
     conf=WG_DIR/f"{iface}.conf"
     if not conf.exists():
         raise ProtocolError("WireGuard server is not bootstrapped")
@@ -350,14 +394,15 @@ def create_wireguard_peer(name, endpoint, iface="wg0", dns="1.1.1.1"):
         "[Interface]\n"
         f"PrivateKey = {client_private}\n"
         f"Address = {client_ip}/32\n"
-        f"DNS = {dns}\n\n"
-        "[Peer]\n"
+        f"DNS = {dns}\n"
+        +(f"MTU = {mtu}\n" if mtu else "")
+        +"\n[Peer]\n"
         f"PublicKey = {server_public}\n"
         f"Endpoint = {_uri_host(endpoint)}:{p.group(1)}\n"
-        "AllowedIPs = 0.0.0.0/0, ::/0\n"
-        "PersistentKeepalive = 25\n"
+        f"AllowedIPs = {allowed_ips}\n"
+        f"PersistentKeepalive = {keepalive}\n"
     )
-    return {"name":name,"address":str(client_ip),"public_key":client_public,"config":client}
+    return {"name":name,"address":str(client_ip),"public_key":client_public,"config":client,"endpoint":endpoint,"port":int(p.group(1)),"dns":dns,"mtu":mtu,"keepalive":keepalive,"allowed_ips":allowed_ips}
 
 def list_wireguard_peers(iface="wg0"):
     conf=WG_DIR/f"{iface}.conf"
@@ -478,7 +523,8 @@ def bootstrap_openvpn(port=1194, proto="udp"):
     Path("/etc/sysctl.d/99-makia-openvpn.conf").write_text("net.ipv4.ip_forward=1\n",encoding="utf-8")
     _run(["sysctl","--system"],timeout=30)
     _run(["systemctl","enable","--now","openvpn-server@server"],timeout=30)
-    return {"server":"server","port":port,"proto":proto}
+    firewall=_ufw_allow_if_active(port,"udp" if proto=="udp" else "tcp","OpenVPN")
+    return {"server":"server","port":port,"proto":proto,"firewall":firewall}
 
 def create_openvpn_client(name, endpoint, port=1194, proto="udp"):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}",name or ""):
@@ -891,6 +937,8 @@ def create_xray_inbound(protocol, port, name, endpoint, transport="tcp", securit
         _run(["systemctl","restart","xray"],timeout=30)
         if not _active("xray"):
             raise ProtocolError("Xray did not become active after restart")
+        firewall_proto="udp" if protocol=="hysteria2" or stream.get("method")=="mkcp" else "tcp"
+        _ufw_allow_if_active(port,firewall_proto,f"Xray {protocol}")
     except Exception:
         try:
             if tmp.exists(): tmp.unlink()
@@ -1213,6 +1261,35 @@ def validate_xray_config(data):
         except Exception:
             pass
 
+def _xray_firewall_rules(data):
+    rules=[]
+    for inbound in data.get("inbounds",[]) if isinstance(data,dict) else []:
+        if not isinstance(inbound,dict):
+            continue
+        listen=str(inbound.get("listen") or "0.0.0.0").strip().lower()
+        if listen in {"127.0.0.1","localhost","::1"}:
+            continue
+        try:
+            port=_validate_port(inbound.get("port"))
+        except Exception:
+            continue
+        protocol=str(inbound.get("protocol") or "xray").lower()
+        settings=inbound.get("settings") if isinstance(inbound.get("settings"),dict) else {}
+        stream=inbound.get("streamSettings") if isinstance(inbound.get("streamSettings"),dict) else {}
+        network=str(stream.get("network") or stream.get("method") or settings.get("network") or "").lower()
+        transports=set()
+        if protocol in {"hysteria","hysteria2"} or network in {"kcp","mkcp","quic","hysteria","hysteria2"}:
+            transports.add("udp")
+        elif network in {"tcp,udp","udp,tcp"}:
+            transports.update({"tcp","udp"})
+        elif protocol=="dokodemo-door" and "udp" in str(settings.get("network") or "").lower():
+            transports.update({"tcp","udp"} if "tcp" in str(settings.get("network") or "").lower() else {"udp"})
+        else:
+            transports.add("tcp")
+        for proto in sorted(transports):
+            rules.append((port,proto,f"Xray {protocol}"))
+    return sorted(set(rules))
+
 def apply_xray_config(data):
     binary=_binary()
     if not binary:
@@ -1237,6 +1314,8 @@ def apply_xray_config(data):
         _run(["systemctl","restart","xray"],timeout=30)
         if not _active("xray"):
             raise ProtocolError("Xray failed to become active")
+        for fw_port,fw_proto,fw_label in _xray_firewall_rules(data):
+            _ufw_allow_if_active(fw_port,fw_proto,fw_label)
     except Exception:
         try:
             if tmp.exists(): tmp.unlink()

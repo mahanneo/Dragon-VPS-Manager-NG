@@ -9,7 +9,7 @@ bad(){ printf '✗ %s\n' "$1"; FAIL=1; }
 
 [[ -d "$APP" ]] || { bad "Makia runtime missing at $APP"; exit 1; }
 
-printf '\nMakia v0.11 host smoke\n'
+printf '\nMakia v0.13 host smoke\n'
 printf '%s\n' '---------------------'
 
 VERSION="$(cat "$APP/VERSION" 2>/dev/null || true)"
@@ -73,6 +73,20 @@ if command -v xray >/dev/null 2>&1; then
       sed -n '1,12p' /tmp/makia-xray-test.log || true
     fi
   fi
+fi
+
+if [[ -f /etc/wireguard/wg0.conf ]]; then
+  if command -v wg >/dev/null 2>&1 && wg show wg0 >/tmp/makia-wg-show.txt 2>&1; then
+    ok "WireGuard wg0 runtime"
+  else
+    bad "WireGuard wg0 runtime"
+  fi
+fi
+
+if command -v makia-restore-portable >/dev/null 2>&1; then
+  ok "Portable restore command"
+else
+  bad "Portable restore command missing"
 fi
 
 if command -v makia-doctor >/dev/null 2>&1; then

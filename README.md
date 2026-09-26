@@ -283,3 +283,17 @@ From v0.9.1-rc1 onward, the updater creates a runtime rollback point before repl
 
 ## NPV / QR security note
 A QR code or `npvt-ssh://` / Xray share URI contains credentials needed by the client application. Once a user imports a working profile, no panel can cryptographically prevent that authorized user from extracting or forwarding those credentials. Makia therefore combines easy import with server-side expiry, concurrent-session/IP limits, quota where supported, revocation, and encrypted operator delivery packages.
+
+## Portable VPS migration
+
+For migration-safe deployments, configure a stable panel/domain name and provision clients with that domain instead of a server IP. In **Backups → Portable Migration**, Makia can build an AES-256 encrypted migration bundle containing application data and the protocol/service state required to preserve credentials. On a freshly installed destination VPS, validate and restore it with:
+
+```bash
+sudo makia-restore-portable /path/to/makia-portable-....zip
+sudo makia-restore-portable /path/to/makia-portable-....zip --apply
+sudo makia-uat-smoke
+```
+
+The restore preserves Xray/REALITY keys, WireGuard keys, OpenVPN PKI, the Makia server secret and managed SSH password hashes. After restore and validation, move the domain's DNS A/AAAA record to the destination VPS. DNS propagation can still cause a short cutover window; the goal is credential continuity, not an impossible zero-packet-loss guarantee.
+
+WireGuard compatibility defaults (UDP/443, MTU 1280, keepalive 15) address common NAT/MTU issues but cannot guarantee operation on networks that filter WireGuard itself. Use the validated Xray/REALITY path where a different transport is required.

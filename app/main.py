@@ -1,6 +1,6 @@
 from pathlib import Path
 from datetime import date, datetime, timedelta
-import time, io, base64, secrets, string, urllib.request, json, os, stat, re
+import time, io, base64, secrets, string, urllib.request, json, os, stat, re, ipaddress
 import pyotp, qrcode
 import qrcode.image.svg
 from fastapi import FastAPI, Request, Form, HTTPException
@@ -90,6 +90,11 @@ def operator_settings_snapshot():
             "xray_ip_limit":_setting_int("default_xray_ip_limit",1,1,50),
             "xray_reset_days":_setting_int("default_xray_reset_days",30,0,3650),
             "wireguard_dns":get_setting("default_wireguard_dns","1.1.1.1"),
+            "wireguard_port":_setting_int("default_wireguard_port",443,1,65535),
+            "wireguard_mtu":_setting_int("default_wireguard_mtu",1280,576,1500),
+            "wireguard_keepalive":_setting_int("default_wireguard_keepalive",15,0,3600),
+            "wireguard_allowed_ips":get_setting("default_wireguard_allowed_ips","0.0.0.0/0"),
+            "wireguard_cidr":get_setting("default_wireguard_cidr","10.66.66.1/24"),
             "openvpn_port":_setting_int("default_openvpn_port",1194,1,65535),
             "openvpn_proto":get_setting("default_openvpn_proto","udp"),
         }
@@ -732,32 +737,38 @@ def protocol_install(payload:ProtocolInstall,request:Request):
     return result
 
 class WireGuardBootstrap(BaseModel):
-    port:int=Field(default=51820,ge=1,le=65535)
+    port:int=Field(default=443,ge=1,le=65535)
     cidr:str="10.66.66.1/24"
+    mtu:int=Field(default=1280,ge=576,le=1500)
 
 @app.post("/api/protocols/wireguard/bootstrap")
 def wireguard_bootstrap(payload:WireGuardBootstrap,request:Request):
     actor=require_mutation(request)
     try:
-        result=protocol_ops.bootstrap_wireguard(payload.port,payload.cidr)
+        result=protocol_ops.bootstrap_wireguard(payload.port,payload.cidr,mtu=payload.mtu)
     except protocol_ops.ProtocolError as e:
         raise HTTPException(400,str(e))
-    audit(actor,"wireguard_bootstrap","wg0",f"port={payload.port}; cidr={payload.cidr}",ip(request))
+    audit(actor,"wireguard_bootstrap","wg0",f"port={payload.port}; cidr={payload.cidr}; mtu={payload.mtu}",ip(request))
     return result
 
 class WireGuardPeer(BaseModel):
     name:str=Field(min_length=1,max_length=48)
     endpoint:str=Field(min_length=1,max_length=255)
     dns:str=Field(default="1.1.1.1",max_length=64)
+    mtu:int=Field(default=1280,ge=576,le=1500)
+    keepalive:int=Field(default=15,ge=0,le=3600)
+    allowed_ips:str=Field(default="0.0.0.0/0",max_length=255)
 
 @app.post("/api/protocols/wireguard/peers")
 def wireguard_peer_create(payload:WireGuardPeer,request:Request):
     actor=require_mutation(request)
     try:
-        result=protocol_ops.create_wireguard_peer(payload.name,payload.endpoint,dns=payload.dns)
+        result=protocol_ops.create_wireguard_peer(payload.name,payload.endpoint,dns=payload.dns,mtu=payload.mtu,keepalive=payload.keepalive,allowed_ips=payload.allowed_ips)
         delivery=access_ops.wireguard_payload(payload.name,result["config"],result.get("address"))
         artifact_id=artifact_save("wireguard",payload.name,payload.name,"wireguard",delivery,{
-            "public_key":result.get("public_key",""),"address":result.get("address",""),"interface":"wg0"
+            "public_key":result.get("public_key",""),"address":result.get("address",""),"interface":"wg0",
+            "endpoint":result.get("endpoint",""),"port":result.get("port"),"dns":result.get("dns",""),
+            "mtu":result.get("mtu"),"keepalive":result.get("keepalive"),"allowed_ips":result.get("allowed_ips","")
         })
     except protocol_ops.ProtocolError as e:
         raise HTTPException(400,str(e))
@@ -1170,6 +1181,31 @@ def backup_create(request:Request):
     audit(actor,"backup_create",result["name"],ip=ip(request))
     return result
 
+class PortableBackupRequest(BaseModel):
+    password:str=Field(min_length=10,max_length=128)
+
+@app.post("/api/backups/portable")
+def backup_portable(payload:PortableBackupRequest,request:Request):
+    actor=require_mutation(request)
+    try:
+        files=system_ops.portable_migration_files(
+            str(DATA_DIR),
+            list(all_profiles().keys()),
+            panel_domain=get_setting("panel_domain",""),
+            version=VERSION,
+        )
+        blob=access_ops.protected_zip(files,payload.password)
+        access_ops.verify_protected_zip(blob,payload.password,"manifest.json")
+    except (system_ops.OperationError,access_ops.AccessPackageError) as e:
+        raise HTTPException(400,str(e))
+    filename=f"makia-portable-{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.zip"
+    audit(actor,"portable_backup_export",filename,f"files={len(files)}",ip(request))
+    return Response(content=blob,media_type="application/zip",headers={
+        "Content-Disposition":f'attachment; filename="{filename}"',
+        "Cache-Control":"no-store, private",
+        "X-Content-Type-Options":"nosniff",
+    })
+
 @app.get("/api/audit")
 def audit_list(request:Request,limit:int=100):
     require_user(request); limit=max(1,min(limit,500))
@@ -1341,6 +1377,11 @@ class OperatorSettings(BaseModel):
     xray_ip_limit:int=Field(default=1,ge=1,le=50)
     xray_reset_days:int=Field(default=30,ge=0,le=3650)
     wireguard_dns:str=Field(default="1.1.1.1",max_length=64)
+    wireguard_port:int=Field(default=443,ge=1,le=65535)
+    wireguard_mtu:int=Field(default=1280,ge=576,le=1500)
+    wireguard_keepalive:int=Field(default=15,ge=0,le=3600)
+    wireguard_allowed_ips:str=Field(default="0.0.0.0/0",max_length=255)
+    wireguard_cidr:str=Field(default="10.66.66.1/24",max_length=64)
     openvpn_port:int=Field(default=1194,ge=1,le=65535)
     openvpn_proto:str="udp"
     subscription_enabled:bool=True
@@ -1367,6 +1408,15 @@ def operator_settings_put(payload:OperatorSettings,request:Request):
     if payload.xray_security not in allowed_security: raise HTTPException(400,"invalid Xray security")
     if payload.openvpn_proto not in {"udp","tcp"}: raise HTTPException(400,"OpenVPN proto must be udp or tcp")
     if payload.subscription_default_format not in {"base64","raw"}: raise HTTPException(400,"subscription format must be base64 or raw")
+    try:
+        wg_allowed_ips=protocol_ops._validate_wireguard_allowed_ips(payload.wireguard_allowed_ips)
+        protocol_ops._validate_wireguard_mtu(payload.wireguard_mtu)
+        protocol_ops._validate_keepalive(payload.wireguard_keepalive)
+        wg_cidr=ipaddress.ip_interface(payload.wireguard_cidr)
+        if wg_cidr.version!=4:
+            raise ValueError("WireGuard tunnel CIDR must be IPv4 in this release")
+    except Exception as exc:
+        raise HTTPException(400,str(exc))
     values={
         "session_max_age_minutes":payload.session_max_age_minutes,
         "delivery_profile_prefix":payload.profile_prefix.strip() or "Makia",
@@ -1391,6 +1441,11 @@ def operator_settings_put(payload:OperatorSettings,request:Request):
         "default_xray_ip_limit":payload.xray_ip_limit,
         "default_xray_reset_days":payload.xray_reset_days,
         "default_wireguard_dns":payload.wireguard_dns.strip() or "1.1.1.1",
+        "default_wireguard_port":payload.wireguard_port,
+        "default_wireguard_mtu":payload.wireguard_mtu,
+        "default_wireguard_keepalive":payload.wireguard_keepalive,
+        "default_wireguard_allowed_ips":wg_allowed_ips,
+        "default_wireguard_cidr":payload.wireguard_cidr.strip(),
         "default_openvpn_port":payload.openvpn_port,
         "default_openvpn_proto":payload.openvpn_proto,
         "subscription_enabled":1 if payload.subscription_enabled else 0,

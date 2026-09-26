@@ -23,7 +23,7 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
       - name: Python compile
-        run: python -m compileall -q app tests
+        run: python -m compileall -q app tests scripts/restore-portable.py
       - name: Import application smoke test
         run: python -c "import app.main; print(app.main.APP_NAME, app.main.VERSION)"
       - name: Unit tests
@@ -58,7 +58,11 @@ jobs:
           test -f docs/UAT-0.8.0-RC2.md
           test -f docs/UAT-0.11.0-RC1.md
           test -f docs/UAT-0.12.0-RC1.md
+          test -f docs/UAT-0.13.0-RC1.md
           test -f scripts/uat-smoke.sh
+          test -f scripts/restore-portable.py
+          grep -q 'makia-restore-portable' scripts/install.sh
+          grep -q 'makia-restore-portable' scripts/update.sh
           grep -q 'makia-uat-smoke' scripts/install.sh
           grep -q 'makia-uat-smoke' scripts/update.sh
       - name: UAT v0.11 contract
@@ -73,6 +77,19 @@ jobs:
           grep -q 'data-action="access-share"' app/static/app.js
           grep -q '/api/settings/operator' app/static/app.js
           grep -q 'npvt-ssh://' app/access_ops.py
+
+      - name: UAT v0.13 contract
+        run: |
+          grep -q 'Portable Migration Bundle' docs/UAT-0.13.0-RC1.md
+          grep -q 'WireGuard compatibility' docs/UAT-0.13.0-RC1.md
+          grep -q 'makia-restore-portable' docs/UAT-0.13.0-RC1.md
+          grep -q '/api/backups/portable' app/main.py
+          grep -q 'wg-compat-preset' app/static/app.js
+          grep -q 'Advanced JSON' app/static/app.js
+          grep -q 'portable_migration_files' app/system_ops.py
+          grep -q 'Preserving active Makia Nginx/Certbot configuration' scripts/update.sh
+          grep -q '_xray_firewall_rules' app/protocol_ops.py
+          grep -q '_ufw_allow_if_active' app/protocol_ops.py
 
   browser-smoke:
     runs-on: ubuntu-24.04

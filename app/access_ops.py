@@ -58,6 +58,17 @@ def safe_filename(value:str, fallback="access"):
     value=re.sub(r"[^A-Za-z0-9_.-]+","-",str(value or "")).strip(".-")
     return (value or fallback)[:96]
 
+def safe_archive_name(value:str,fallback="file"):
+    raw=str(value or "").replace("\\","/").strip("/")
+    parts=[]
+    for part in raw.split("/"):
+        if not part or part in {".",".."}:
+            continue
+        clean=safe_filename(part,fallback)
+        if clean:
+            parts.append(clean)
+    return "/".join(parts) if parts else fallback
+
 def make_qr_svg(text:str)->bytes:
     img=qrcode.make(text,image_factory=qrcode.image.svg.SvgPathImage)
     buf=io.BytesIO()
@@ -295,7 +306,7 @@ def protected_zip(files:dict[str,bytes|str],password:str)->bytes:
         zf.setpassword(password.encode("utf-8"))
         zf.setencryption(pyzipper.WZ_AES,nbits=256)
         for name,data in files.items():
-            filename=safe_filename(name,"file")
+            filename=safe_archive_name(name,"file")
             raw=data.encode("utf-8") if isinstance(data,str) else bytes(data)
             zf.writestr(filename,raw)
     return buf.getvalue()
