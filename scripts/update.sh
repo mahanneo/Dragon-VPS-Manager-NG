@@ -7,7 +7,48 @@ REF="${MAKIA_REF:-${DRAGON_REF:-main}}"
 APP=/opt/makia-vps-manager
 OLD_APP=/opt/dragon-vps-manager-ng
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+ROLLBACK_ARMED=0
+RELEASE_BACKUP=""
+
+on_exit(){
+  local rc=$?
+  trap - EXIT
+  if [[ "$rc" -ne 0 && "$ROLLBACK_ARMED" -eq 1 && -n "$RELEASE_BACKUP" && -f "$RELEASE_BACKUP" ]]; then
+    echo
+    echo "Update failed. Restoring previous Makia runtime..."
+    set +e
+    systemctl stop makia-vps-manager 2>/dev/null
+    rm -rf "$APP/app"
+    tar -xzf "$RELEASE_BACKUP" -C /
+    if [[ -f "$APP/requirements.txt" && -x "$APP/.venv/bin/pip" ]]; then
+      "$APP/.venv/bin/pip" install -r "$APP/requirements.txt" >/dev/null 2>&1
+    fi
+    systemctl daemon-reload
+    nginx -t >/dev/null 2>&1 && systemctl reload nginx
+    systemctl restart makia-vps-manager
+    systemctl restart makia-policy-enforcer 2>/dev/null
+    systemctl restart makia-metrics-sampler 2>/dev/null
+    systemctl restart makia-protocol-traffic 2>/dev/null
+    restored=0
+    for _ in {1..12}; do
+      if curl -fsS --max-time 3 http://127.0.0.1:8787/healthz >/dev/null 2>&1; then
+        restored=1; break
+      fi
+      sleep 1
+    done
+    if [[ "$restored" -eq 1 ]]; then
+      echo "Rollback successful. Previous backend is healthy again."
+      echo "Runtime backup: $RELEASE_BACKUP"
+    else
+      echo "Rollback attempted, but backend is still unhealthy."
+      echo "Run: sudo journalctl -u makia-vps-manager -n 120 --no-pager"
+    fi
+    set -e
+  fi
+  rm -rf "$TMP"
+  exit "$rc"
+}
+trap on_exit EXIT
 
 if [[ ! -d "$APP" && -d "$OLD_APP" ]]; then
   echo "Legacy installation detected. Run the latest installer once to migrate to /opt/makia-vps-manager."
@@ -16,14 +57,37 @@ fi
 [[ -d "$APP" ]] || { echo "Makia VPS Manager is not installed."; exit 1; }
 install -d -m 0700 /var/backups/makia-vps-manager
 
-BACKUP="$(/usr/local/sbin/makia-backup)"
-echo "Backup created: $BACKUP"
+if command -v makia-backup >/dev/null 2>&1; then
+  BACKUP="$(makia-backup)"
+else
+  STAMP_DATA="$(date -u +%Y%m%dT%H%M%SZ)"
+  BACKUP="/var/backups/makia-vps-manager/makia-data-${STAMP_DATA}.tar.gz"
+  tar -C "$APP" -czf "$BACKUP" data
+  chmod 0600 "$BACKUP"
+fi
+echo "Data backup created: $BACKUP"
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+RELEASE_BACKUP="/var/backups/makia-vps-manager/makia-runtime-${STAMP}.tar.gz"
+SNAPSHOT=("opt/makia-vps-manager/app" "opt/makia-vps-manager/requirements.txt" "opt/makia-vps-manager/VERSION")
+for item in \
+  "etc/systemd/system/makia-vps-manager.service" \
+  "etc/systemd/system/makia-policy-enforcer.service" \
+  "etc/systemd/system/makia-metrics-sampler.service" \
+  "etc/systemd/system/makia-protocol-traffic.service" \
+  "etc/nginx/sites-available/makia-vps-manager"; do
+  [[ -e "/$item" ]] && SNAPSHOT+=("$item")
+done
+tar -C / -czf "$RELEASE_BACKUP" "${SNAPSHOT[@]}"
+chmod 0600 "$RELEASE_BACKUP"
+echo "Runtime rollback point: $RELEASE_BACKUP"
 
 curl -fL --retry 3 "https://github.com/${REPO}/archive/refs/heads/${REF}.tar.gz" -o "$TMP/source.tar.gz"
 tar -xzf "$TMP/source.tar.gz" -C "$TMP"
 SRC="$(find "$TMP" -mindepth 1 -maxdepth 1 -type d -name 'Makia-VPS-Manager-*' | head -n1)"
 [[ -n "$SRC" ]] || { echo "Unable to locate extracted source."; exit 1; }
 
+ROLLBACK_ARMED=1
 systemctl stop makia-vps-manager
 rm -rf "$APP/app"
 cp -a "$SRC/app" "$APP/app"
@@ -31,7 +95,6 @@ install -m 0644 "$SRC/requirements.txt" "$APP/requirements.txt"
 install -m 0644 "$SRC/VERSION" "$APP/VERSION"
 "$APP/.venv/bin/pip" install -r "$APP/requirements.txt"
 
-# Keep the weak-PIN mitigation baseline consistent on upgraded installs.
 if ! command -v fail2ban-client >/dev/null 2>&1; then
   apt-get update
   apt-get install -y fail2ban
@@ -56,6 +119,7 @@ install -m 0755 "$SRC/scripts/update.sh" /usr/local/sbin/makia-update
 install -m 0755 "$SRC/scripts/backup.sh" /usr/local/sbin/makia-backup
 install -m 0755 "$SRC/scripts/uninstall.sh" /usr/local/sbin/makia-uninstall
 install -m 0755 "$SRC/scripts/doctor.sh" /usr/local/sbin/makia-doctor
+install -m 0755 "$SRC/scripts/reset-admin.sh" /usr/local/sbin/makia-reset-admin
 install -m 0755 "$SRC/upgrade.sh" /usr/local/sbin/makia-upgrade
 
 systemctl daemon-reload
@@ -71,17 +135,21 @@ systemctl enable --now fail2ban
 systemctl restart fail2ban
 systemctl reload nginx
 
-for _ in {1..15}; do
-  if curl -fsS http://127.0.0.1:8787/healthz >/dev/null; then
-    printf 'Update complete. Installed version: '
-    cat "$APP/VERSION"
-    echo
-    /usr/local/sbin/makia-doctor || true
-    exit 0
+healthy=0
+for _ in {1..20}; do
+  if curl -fsS --max-time 3 http://127.0.0.1:8787/healthz >/dev/null; then
+    healthy=1; break
   fi
   sleep 1
 done
+if [[ "$healthy" -ne 1 ]]; then
+  echo "Health check failed after update."
+  echo "The updater will restore the previous runtime automatically."
+  exit 3
+fi
 
-echo "Health check failed after update."
-echo "Backup is available at: $BACKUP"
-exit 3
+ROLLBACK_ARMED=0
+printf 'Update complete. Installed version: '
+cat "$APP/VERSION"
+echo
+/usr/local/sbin/makia-doctor || true
