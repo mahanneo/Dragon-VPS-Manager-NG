@@ -42,7 +42,7 @@ def test_share_response_is_no_store(monkeypatch):
     }
     monkeypatch.setattr(main_app,"require_user",lambda request:"admin")
     monkeypatch.setattr(main_app,"_resolve_access_payload",lambda kind,key,request:(payload,{"id":1}))
-    monkeypatch.setattr(main_app,"get_protocol_client",lambda client_id:{"subscription_id":"abc"})
+    monkeypatch.setattr(main_app,"get_protocol_client",lambda client_id:{"subscription_id":"abc","protocol":"vless"})
     monkeypatch.setattr(main_app,"get_setting",lambda key,default=None: default)
     response=main_app.access_share("xray","1",_request("/api/access/xray/1/share"))
     assert response.status_code==200
@@ -51,6 +51,9 @@ def test_share_response_is_no_store(monkeypatch):
     assert body["share_text"].startswith("vless://")
     assert body["qr"].startswith("data:image/svg+xml;base64,")
     assert body["subscription_qr"].startswith("data:image/svg+xml;base64,")
+    assert body["connection"]["protocol"]=="vless"
+    assert body["connection"]["host"]=="example.test"
+    assert body["connection"]["port"]==443
 
 
 def test_ssh_share_respects_disabled_npv(monkeypatch):
@@ -95,9 +98,44 @@ def test_operator_settings_persist_and_validate(monkeypatch):
         wireguard_dns="1.1.1.1",
         openvpn_port=1194,
         openvpn_proto="udp",
+        subscription_enabled=True,
+        subscription_client_page_enabled=True,
+        subscription_default_format="raw",
     )
     result=main_app.operator_settings_put(payload,_request("/api/settings/operator"))
     assert result["session_max_age_minutes"]==180
     assert result["delivery"]["profile_prefix"]=="Makia Test"
     assert result["defaults"]["ssh_sessions"]==2
     assert result["defaults"]["xray_transport"]=="xhttp"
+    assert result["subscription"]["enabled"] is True
+    assert result["subscription"]["client_page_enabled"] is True
+    assert result["subscription"]["default_format"]=="raw"
+
+
+def test_legacy_ssh_share_upgrade_generates_npvt_link(monkeypatch):
+    payload={
+        "primary_text":"legacy",
+        "summary":{"host":"vpn.example.test","port":22,"username":"user001"},
+        "files":{"credentials.txt":b"Makia SSH Access\nPassword: 123456\n"},
+    }
+    monkeypatch.setattr(main_app,"require_user",lambda request:"admin")
+    monkeypatch.setattr(main_app,"operator_settings_snapshot",lambda:{
+        "delivery":{"npv_enabled":True,"profile_prefix":"Makia","npv_dns_mode":"UDP","npv_udpgw_port":7300,"npv_transparent_dns":False,"show_qr":True},
+        "subscription":{"enabled":True,"client_page_enabled":True,"default_format":"base64"},
+        "defaults":{},
+    })
+    monkeypatch.setattr(main_app,"_resolve_access_payload",lambda kind,key,request:(payload,{"id":1}))
+    monkeypatch.setattr(main_app,"artifact_save",lambda *args,**kwargs:1)
+    response=main_app.access_share("ssh","user001",_request("/api/access/ssh/user001/share"))
+    body=json.loads(response.body)
+    assert body["share_text"].startswith("npvt-ssh://")
+    assert body["share_type"]=="npvt-ssh"
+
+
+def test_subscription_can_be_disabled(monkeypatch):
+    monkeypatch.setattr(main_app,"operator_settings_snapshot",lambda:{
+        "subscription":{"enabled":False,"client_page_enabled":True,"default_format":"base64"}
+    })
+    with pytest.raises(HTTPException) as exc:
+        main_app.subscription_get("unused")
+    assert exc.value.status_code==404
