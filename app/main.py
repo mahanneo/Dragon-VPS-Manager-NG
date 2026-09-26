@@ -20,6 +20,23 @@ templates=Jinja2Templates(directory=BASE/"templates")
 
 @app.middleware("http")
 async def security_headers(request:Request,call_next):
+    allowed_raw=(os.getenv("MAKIA_ADMIN_ALLOWED_CIDRS") or "").strip()
+    public_path=(
+        request.url.path=="/healthz" or
+        request.url.path=="/help/connect" or
+        request.url.path.startswith("/static/") or
+        request.url.path.startswith("/sub/") or
+        request.url.path.startswith("/client/") or
+        request.url.path=="/api/node/heartbeat"
+    )
+    if allowed_raw and not public_path:
+        try:
+            client_ip=ipaddress.ip_address((request.client.host if request.client else "").strip())
+            networks=[ipaddress.ip_network(x.strip(),strict=False) for x in allowed_raw.split(",") if x.strip()]
+            if not networks or not any(client_ip in network for network in networks):
+                return PlainTextResponse("Makia admin access is not allowed from this network.",status_code=403)
+        except ValueError:
+            return PlainTextResponse("Makia admin network policy is invalid.",status_code=503)
     response=await call_next(request)
     response.headers.setdefault("X-Frame-Options","DENY")
     response.headers.setdefault("X-Content-Type-Options","nosniff")
@@ -108,6 +125,7 @@ def support_snapshot():
         "telegram_username":username,
         "telegram_url":f"https://t.me/{username}" if username else "",
         "webhook_enabled":bool(webhook),
+        "admin_network_restricted":bool((os.getenv("MAKIA_ADMIN_ALLOWED_CIDRS") or "").strip()),
     }
 
 def ip(request:Request): return request.client.host if request.client else None
