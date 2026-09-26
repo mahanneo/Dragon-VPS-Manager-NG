@@ -817,10 +817,11 @@ def _resolve_access_payload(kind,key,request):
             raise HTTPException(404,"Xray client not found")
         sub_id=row.get("subscription_id") or ""
         origin=public_origin(request)
+        subscription_settings=operator_settings_snapshot()["subscription"]
         payload=access_ops.xray_payload(
             row["name"],row["protocol"],row.get("share_link") or "",
-            f"{origin}/sub/{sub_id}?format=base64" if sub_id else "",
-            f"{origin}/client/{sub_id}" if sub_id else ""
+            f"{origin}/sub/{sub_id}?format={subscription_settings['default_format']}" if sub_id and subscription_settings["enabled"] else "",
+            f"{origin}/client/{sub_id}" if sub_id and subscription_settings["client_page_enabled"] else ""
         )
         artifact_id=artifact_save("xray",str(row["id"]),row["name"],row["protocol"],payload,{
             "client_id":row["id"],"inbound_tag":row.get("inbound_tag",""),"subscription_id":sub_id
@@ -842,6 +843,34 @@ def _resolve_access_payload(kind,key,request):
     if kind=="ssh":
         raise HTTPException(409,"SSH password was not retained for this legacy account; set a new password once to enable encrypted exports")
     raise HTTPException(404,"access entry not found")
+
+def _current_delivery_payload(kind,key,payload,request):
+    """Rebuild delivery-facing files from current settings without mutating service credentials."""
+    if kind=="ssh":
+        summary=dict(payload.get("summary") or {})
+        credentials=(payload.get("files") or {}).get("credentials.txt",b"")
+        if isinstance(credentials,bytes):
+            credentials=credentials.decode("utf-8","replace")
+        match=re.search(r"(?m)^Password:\s*(.+)$",str(credentials))
+        password=match.group(1).strip() if match else ""
+        username=summary.get("username") or key
+        if password and summary.get("host") and username:
+            return access_ops.ssh_payload(
+                summary["host"],username,password,int(summary.get("port") or 22),ssh_npv_options(username)
+            )
+    elif kind=="xray":
+        try: row=get_protocol_client(int(key))
+        except Exception: row=None
+        if row and row.get("share_link"):
+            subscription_settings=operator_settings_snapshot()["subscription"]
+            sid=row.get("subscription_id") or ""
+            origin=public_origin(request)
+            return access_ops.xray_payload(
+                row["name"],row["protocol"],row.get("share_link") or "",
+                f"{origin}/sub/{sid}?format={subscription_settings['default_format']}" if sid and subscription_settings["enabled"] else "",
+                f"{origin}/client/{sid}" if sid and subscription_settings["client_page_enabled"] else ""
+            )
+    return payload
 
 @app.get("/api/access")
 def access_entries(request:Request):
@@ -908,15 +937,7 @@ def access_share(kind:str,key:str,request:Request):
     if kind=="ssh" and not operator_settings_snapshot()["delivery"]["npv_enabled"]:
         raise HTTPException(409,"NPV SSH delivery is disabled in Settings")
     payload,artifact=_resolve_access_payload(kind,key,request)
-    if kind=="ssh" and not payload.get("share_text"):
-        summary=payload.get("summary") or {}
-        credentials=(payload.get("files") or {}).get("credentials.txt",b"")
-        if isinstance(credentials,bytes): credentials=credentials.decode("utf-8","replace")
-        match=re.search(r"(?m)^Password:\s*(.+)$",str(credentials))
-        password=match.group(1).strip() if match else ""
-        if password and summary.get("host") and summary.get("username"):
-            payload=access_ops.ssh_payload(summary["host"],summary["username"],password,int(summary.get("port") or 22),ssh_npv_options(summary["username"]))
-            artifact_save("ssh",key,summary["username"],"ssh",payload,{"upgraded_delivery":"npvt-ssh"})
+    payload=_current_delivery_payload(kind,key,payload,request)
     share=str(payload.get("share_text") or payload.get("primary_text") or "")
     if not share: raise HTTPException(404,"share content is not available")
     qr=access_ops.make_qr_svg(share)
@@ -954,14 +975,7 @@ def access_qr(kind:str,key:str,request:Request):
     if kind=="ssh" and not operator_settings_snapshot()["delivery"]["npv_enabled"]:
         raise HTTPException(409,"NPV SSH delivery is disabled in Settings")
     payload,_=_resolve_access_payload(kind,key,request)
-    if kind=="ssh" and not payload.get("share_text"):
-        summary=payload.get("summary") or {}
-        credentials=(payload.get("files") or {}).get("credentials.txt",b"")
-        if isinstance(credentials,bytes): credentials=credentials.decode("utf-8","replace")
-        match=re.search(r"(?m)^Password:\s*(.+)$",str(credentials))
-        password=match.group(1).strip() if match else ""
-        if password and summary.get("host") and summary.get("username"):
-            payload=access_ops.ssh_payload(summary["host"],summary["username"],password,int(summary.get("port") or 22),ssh_npv_options(summary["username"]))
+    payload=_current_delivery_payload(kind,key,payload,request)
     share=str(payload.get("share_text") or payload.get("primary_text") or "")
     if not share: raise HTTPException(404,"QR content is not available")
     return Response(content=access_ops.make_qr_svg(share),media_type="image/svg+xml",headers={"Cache-Control":"no-store, private","X-Content-Type-Options":"nosniff"})
@@ -983,6 +997,7 @@ def access_subscription_qr(key:str,request:Request):
 def access_manifest(kind:str,key:str,request:Request):
     require_user(request)
     payload,artifact=_resolve_access_payload(kind,key,request)
+    payload=_current_delivery_payload(kind,key,payload,request)
     files=payload.get("files") or {}
     return {
         "kind":kind,
@@ -997,6 +1012,7 @@ def access_manifest(kind:str,key:str,request:Request):
 def access_native(kind:str,key:str,request:Request):
     require_user(request)
     payload,_=_resolve_access_payload(kind,key,request)
+    payload=_current_delivery_payload(kind,key,payload,request)
     filename=payload.get("native_filename") or "makia-access.txt"
     files=payload.get("files") or {}
     data=files.get(filename)
@@ -1018,6 +1034,7 @@ def access_native(kind:str,key:str,request:Request):
 def access_package(kind:str,key:str,payload:AccessPackageRequest,request:Request):
     actor=require_mutation(request)
     access,_=_resolve_access_payload(kind,key,request)
+    access=_current_delivery_payload(kind,key,access,request)
     try:
         content=access_ops.protected_zip(access.get("files") or {},payload.password)
     except access_ops.AccessPackageError as e:
