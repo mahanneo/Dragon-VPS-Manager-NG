@@ -17,7 +17,7 @@ PASSWORD=os.environ["MAKIA_INITIAL_ADMIN_PASSWORD"]
 def seed():
     shutil.rmtree(DATA,ignore_errors=True)
     DATA.mkdir(parents=True,exist_ok=True)
-    from app.db import init_db, create_protocol_client, upsert_access_artifact
+    from app.db import init_db, create_protocol_client, upsert_access_artifact, get_protocol_client
     from app import access_ops
 
     init_db()
@@ -36,7 +36,7 @@ def seed():
         "xray",str(client_id),"browser-client","vless",payload["native_filename"],
         access_ops.seal_payload(payload),"{}",
     )
-    return client_id
+    return client_id,get_protocol_client(client_id)["subscription_id"]
 
 
 def wait_server(timeout=20):
@@ -52,7 +52,7 @@ def wait_server(timeout=20):
 
 
 def main():
-    client_id=seed()
+    client_id,subscription_id=seed()
     env=os.environ.copy()
     proc=subprocess.Popen(
         [sys.executable,"-m","uvicorn","app.main:app","--host","127.0.0.1","--port","8787"],
@@ -62,6 +62,13 @@ def main():
         wait_server()
         with sync_playwright() as p:
             browser=p.chromium.launch(headless=True)
+            portal=browser.new_page()
+            portal.goto(BASE_URL+"/client/"+subscription_id,wait_until="networkidle")
+            assert portal.locator(".client-qr-card").count()==2
+            assert portal.locator('img[alt="Profile QR"]').count()==1
+            assert portal.locator('img[alt="Subscription QR"]').count()==1
+            portal.close()
+
             page=browser.new_page(accept_downloads=True)
             page_errors=[]
             page.on("pageerror",lambda exc: page_errors.append(str(exc)))
