@@ -87,6 +87,9 @@ jobs:
           grep -q 'wg-compat-preset' app/static/app.js
           grep -q 'Advanced JSON' app/static/app.js
           grep -q 'portable_migration_files' app/system_ops.py
+          grep -q 'Preserving active Makia Nginx/Certbot configuration' scripts/update.sh
+          grep -q '_xray_firewall_rules' app/protocol_ops.py
+          grep -q '_ufw_allow_if_active' app/protocol_ops.py
 
   browser-smoke:
     runs-on: ubuntu-24.04
