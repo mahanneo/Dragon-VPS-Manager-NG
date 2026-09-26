@@ -54,7 +54,7 @@ function renderAccessRows(){
 function accessRow(a){
   const quota=a.quota_bytes?fmtBytes(a.quota_bytes):'—',used=a.used_bytes?fmtBytes(a.used_bytes):'0 B';
   const detail=a.kind==='ssh'?('Sessions '+(a.online||0)+'/'+(a.connection_limit||1)+' · Devices '+(a.device_limit||1)):a.kind==='xray'?('Used '+used+' / '+(a.quota_bytes?quota:'Unlimited')+' · IP '+(a.online||0)+'/'+(a.device_limit||1)):a.kind==='wireguard'?(a.address||'Native peer'):'Certificate profile';
-  const native=a.can_export?`<button class="ghost" onclick="downloadAccessNative('${a.kind}',${JSON.stringify(a.key)})">Native file</button>`:`<span class="status-chip warn">Reissue export</span>`;
+  const native=a.can_export?`<button class="ghost" onclick="downloadAccessNative('${a.kind}',${JSON.stringify(a.key)})">Native file</button>`:(a.kind==='wireguard'?`<button class="ghost" onclick="reissueWireGuard(${JSON.stringify(a.key)})">Reissue config</button>`:`<span class="status-chip warn">Reset credential</span>`);
   const protectedBtn=a.can_export?`<button class="primary" onclick="downloadProtectedAccess('${a.kind}',${JSON.stringify(a.key)},${JSON.stringify(a.name)})">Protected ZIP</button>`:'';
   const manage=(a.kind==='ssh'||a.kind==='xray')?`<button class="soft" onclick="manageAccess(${JSON.stringify(a.id)})">Manage</button>`:'';
   return `<div class="access-row"><div><div class="client-main"><b>${a.name}</b><span class="protocol-pill">${String(a.protocol).toUpperCase()}</span><span class="status-chip ${a.status==='active'?'ok':a.status==='expired'?'bad':'warn'}">${a.status}</span>${a.legacy?'<span class="status-chip">Legacy</span>':''}</div><div class="muted">${detail}</div></div><div><b>${a.kind==='ssh'?(a.expire_date||'No expiry'):a.kind==='xray'?(a.expire_at?new Date(a.expire_at*1000).toLocaleDateString():'No expiry'):'Native config'}</b><div class="muted">${a.plan||a.kind}</div></div><div class="toolbar export-actions">${native}${protectedBtn}</div><div class="toolbar">${manage}<button class="danger" onclick="revokeAccess('${a.kind}',${JSON.stringify(a.key)},${JSON.stringify(a.name)})">Revoke</button></div></div>`;
@@ -91,6 +91,17 @@ async function downloadProtectedAccess(kind,key,name){
   }catch(e){alert(e.message)}
 }
 async function revokeAccess(kind,key,name){if(!confirm('دسترسی '+name+' لغو/حذف شود؟'))return;try{await api('/api/access/'+encodeURIComponent(kind)+'/'+encodeURIComponent(key),{method:'DELETE'});toast('Access revoked');await access()}catch(e){alert(e.message)}}
+
+async function reissueWireGuard(name){
+  if(!confirm('Reissue، کانفیگ قدیمی '+name+' را باطل می‌کند. ادامه می‌دهی؟'))return;
+  const endpoint=prompt('Public domain or server IP',window.PANEL_DOMAIN||location.hostname);if(!endpoint)return;
+  const dns=prompt('Client DNS','1.1.1.1')||'1.1.1.1';
+  try{
+    await api('/api/access/wireguard/'+encodeURIComponent(name),{method:'DELETE'});
+    const r=await api('/api/protocols/wireguard/peers',{method:'POST',body:JSON.stringify({name,endpoint,dns})});
+    configModal('WireGuard · '+name,r.config,name+'.conf','wireguard',name);
+  }catch(e){alert(e.message)}
+}
 
 async function accounts(){
   title.textContent='Account Center';
