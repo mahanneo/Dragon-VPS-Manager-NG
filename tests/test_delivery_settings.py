@@ -139,3 +139,26 @@ def test_subscription_can_be_disabled(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         main_app.subscription_get("unused")
     assert exc.value.status_code==404
+
+
+def test_protected_ssh_package_uses_current_npv_setting(monkeypatch):
+    from app import access_ops
+    original=access_ops.ssh_payload(
+        "vpn.example.test","user001","123456",22,
+        {"enabled":True,"remarks":"Old","dns_mode":"UDP","udpgw_port":7300,"transparent_dns":False},
+    )
+    monkeypatch.setattr(main_app,"require_mutation",lambda request:"admin")
+    monkeypatch.setattr(main_app,"_resolve_access_payload",lambda kind,key,request:(original,{"id":1}))
+    monkeypatch.setattr(main_app,"operator_settings_snapshot",lambda:{
+        "delivery":{"npv_enabled":False,"profile_prefix":"Makia","npv_dns_mode":"UDP","npv_udpgw_port":7300,"npv_transparent_dns":False,"show_qr":True},
+        "subscription":{"enabled":True,"client_page_enabled":True,"default_format":"base64"},
+        "defaults":{},
+    })
+    monkeypatch.setattr(main_app,"audit",lambda *args,**kwargs:None)
+    response=main_app.access_package("ssh","user001",main_app.AccessPackageRequest(password="739251"),_request("/api/access/ssh/user001/package"))
+    import io, pyzipper
+    with pyzipper.AESZipFile(io.BytesIO(response.body),"r") as zf:
+        zf.setpassword(b"739251")
+        names=zf.namelist()
+        assert "credentials.txt" in names
+        assert all("npvt" not in name for name in names)
