@@ -9,7 +9,7 @@ bad(){ printf '✗ %s\n' "$1"; FAIL=1; }
 
 [[ -d "$APP" ]] || { bad "Makia runtime missing at $APP"; exit 1; }
 
-printf '\nMakia v0.11 host smoke\n'
+printf '\nMakia host smoke\n'
 printf '%s\n' '---------------------'
 
 VERSION="$(cat "$APP/VERSION" 2>/dev/null || true)"
@@ -60,6 +60,41 @@ else
   bad "Application import"
 fi
 
+if [[ -f /etc/wireguard/wg0.conf ]]; then
+  if command -v wg >/dev/null 2>&1 && systemctl is-active --quiet wg-quick@wg0; then
+    if wg show wg0 >/tmp/makia-wg-show.txt 2>&1; then
+      ok "WireGuard configured runtime"
+    else
+      bad "WireGuard runtime query"
+    fi
+  else
+    bad "WireGuard config exists but wg0 is not active"
+  fi
+fi
+
+if ( cd "$APP" && "$APP/.venv/bin/python" - <<'PY'
+from app import system_ops
+from app.config import DATA_DIR
+
+status=system_ops.portable_backup_status(str(DATA_DIR))
+assert status["has_data"], status
+bundle=system_ops.create_portable_backup(
+    str(DATA_DIR),"MakiaSmokeBackup123",
+    metadata={"purpose":"host-smoke"},
+    sources=[(DATA_DIR,"data")],
+)
+verified=system_ops.verify_portable_backup(bundle["blob"],"MakiaSmokeBackup123")
+assert verified["ok"]
+assert any(name.startswith("data") for name in verified["members"])
+print("portable backup PASS")
+PY
+)
+then
+  ok "Portable backup encryption + verification"
+else
+  bad "Portable backup encryption / verification"
+fi
+
 if command -v xray >/dev/null 2>&1; then
   XRAY_CONFIG=""
   for candidate in /usr/local/etc/xray/config.json /etc/xray/config.json; do
@@ -72,6 +107,19 @@ if command -v xray >/dev/null 2>&1; then
       bad "Xray active config syntax"
       sed -n '1,12p' /tmp/makia-xray-test.log || true
     fi
+  fi
+fi
+
+DOMAIN="$(cd "$APP" && "$APP/.venv/bin/python" - <<'PY'
+from app.db import get_setting
+print((get_setting("panel_domain","") or "").strip())
+PY
+)"
+if [[ -n "$DOMAIN" ]]; then
+  if [[ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" && -f "/etc/letsencrypt/live/$DOMAIN/privkey.pem" ]]; then
+    ok "Configured panel domain certificate: $DOMAIN"
+  else
+    bad "Configured panel domain certificate missing: $DOMAIN"
   fi
 fi
 
