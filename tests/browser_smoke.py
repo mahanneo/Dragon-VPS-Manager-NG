@@ -63,6 +63,8 @@ def main():
         with sync_playwright() as p:
             browser=p.chromium.launch(headless=True)
             page=browser.new_page(accept_downloads=True)
+            page_errors=[]
+            page.on("pageerror",lambda exc: page_errors.append(str(exc)))
             page.goto(BASE_URL+"/login",wait_until="networkidle")
             page.locator('input[name="username"]').fill("admin")
             page.locator('input[name="password"]').fill(PASSWORD)
@@ -106,6 +108,14 @@ def main():
             page.locator(".diagnostics-modal").wait_for()
             assert page.locator(".diagnostic-score.pass").count()==1
             page.locator('.close-btn[data-action="modal-close"]').click()
+
+            for view in ["sessions","protocols","services","nodes","security","backups","audit","updates","settings","dashboard","access"]:
+                page.locator(f'button[data-view="{view}"]').click()
+                page.wait_for_timeout(350)
+                assert page.locator("#content").inner_text().strip(), f"{view} rendered empty content"
+                assert page.locator(f'button[data-view="{view}"]').get_attribute("class") and "active" in page.locator(f'button[data-view="{view}"]').get_attribute("class")
+
+            assert not page_errors, "JavaScript page errors: "+repr(page_errors)
             browser.close()
         print(f"browser smoke PASS; client_id={client_id}")
     finally:
