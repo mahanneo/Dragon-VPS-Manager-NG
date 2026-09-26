@@ -67,12 +67,37 @@ if command -v xray >/dev/null 2>&1; then
   done
   if [[ -n "$XRAY_CONFIG" ]]; then
     if xray run -test -format=json -config "$XRAY_CONFIG" >/tmp/makia-xray-test.log 2>&1; then
-      ok "Xray active config syntax"
+      ok "Xray active config syntax (root)"
     else
-      bad "Xray active config syntax"
+      bad "Xray active config syntax (root)"
       sed -n '1,12p' /tmp/makia-xray-test.log || true
     fi
+    XRAY_USER="$(systemctl show xray -p User --value 2>/dev/null || true)"
+    XRAY_USER="${XRAY_USER:-root}"
+    if [[ "$XRAY_USER" == "root" ]]; then
+      XRAY_USER_TEST=( xray run -test -format=json -config "$XRAY_CONFIG" )
+    else
+      XRAY_USER_TEST=( runuser -u "$XRAY_USER" -- xray run -test -format=json -config "$XRAY_CONFIG" )
+    fi
+    if "${XRAY_USER_TEST[@]}" >/tmp/makia-xray-user-test.log 2>&1; then
+      ok "Xray config readable by systemd user ($XRAY_USER)"
+    else
+      bad "Xray config unreadable/invalid for systemd user ($XRAY_USER)"
+      sed -n '1,12p' /tmp/makia-xray-user-test.log || true
+    fi
+    if systemctl is-active --quiet xray; then
+      ok "Xray runtime active"
+    else
+      bad "Xray runtime inactive"
+      journalctl -u xray -n 12 --no-pager || true
+    fi
   fi
+fi
+
+if [[ -x /etc/letsencrypt/renewal-hooks/deploy/makia-xray-sync ]]; then
+  ok "Xray Certbot deploy hook"
+else
+  bad "Xray Certbot deploy hook missing"
 fi
 
 if [[ -f /etc/wireguard/wg0.conf ]]; then
