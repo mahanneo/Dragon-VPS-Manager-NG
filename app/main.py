@@ -150,10 +150,25 @@ def require_local_admin(request:Request):
         raise HTTPException(status_code=403,detail="local administrator confirmation required")
     return actor
 
+def _support_operator_mutation_allowed(request:Request)->bool:
+    if request.method.upper()!="POST":
+        return False
+    path=request.url.path
+    if re.fullmatch(r"/api/services/[^/]+/(start|stop|restart)",path):
+        return True
+    return path in {
+        "/api/protocols/xray/repair",
+        "/api/protocols/openvpn/repair",
+        "/api/support/requests",
+    }
+
 def require_mutation(request:Request):
     user=require_user(request)
-    if is_support_actor(user) and support_actor_scope(user)!="operator":
-        raise HTTPException(status_code=403,detail="remote support session is read-only")
+    if is_support_actor(user):
+        if support_actor_scope(user)!="operator":
+            raise HTTPException(status_code=403,detail="remote support session is read-only")
+        if not _support_operator_mutation_allowed(request):
+            raise HTTPException(status_code=403,detail="remote support operator is limited to approved runtime repair actions")
     if request.headers.get("x-makia-request")!="1":
         raise HTTPException(status_code=403,detail="invalid management request")
     origin=(request.headers.get("origin") or "").strip()
@@ -488,14 +503,16 @@ def license_status_api(request:Request):
 
 @app.post("/api/license/sync")
 def license_sync(request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     result=_sync_license_lease_once()
     audit(actor,"license_sync","license",str(result.get("lease",{}).get("status") or result.get("error") or "offline")[:200],ip(request))
     return {**license_snapshot(),"support":support_snapshot()}
 
 @app.post("/api/license/activate")
 def license_activate(payload:LicenseActivation,request:Request):
-    actor=require_mutation(request)
+    actor=require_local_admin(request)
+    require_mutation(request)
     try:
         verified=license_ops.verify_license(payload.code)
     except license_ops.LicenseError as exc:
