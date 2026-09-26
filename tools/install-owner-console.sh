@@ -17,7 +17,11 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -f "$PRIVATE_KEY" ]] || { echo "--private-key must point to the Ed25519 owner private key"; exit 2; }
 [[ "$PUBLIC_URL" == https://* ]] || { echo "--public-url must be HTTPS"; exit 2; }
-[[ "${#PASSWORD}" -ge 14 ]] || { echo "--password must be at least 14 characters"; exit 2; }
+if [[ -z "$PASSWORD" ]]; then
+  read -rsp "Owner password (min 14 chars): " PASSWORD
+  echo
+fi
+[[ "${#PASSWORD}" -ge 14 ]] || { echo "Owner password must be at least 14 characters"; exit 2; }
 if [[ -z "$INGEST_TOKEN" ]]; then INGEST_TOKEN="$(python3 - <<'PY'
 import secrets
 print(secrets.token_urlsafe(32))
