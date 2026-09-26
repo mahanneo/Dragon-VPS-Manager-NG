@@ -196,7 +196,7 @@ html[dir="rtl"] .settings-nav-v2 button.active{box-shadow:inset -3px 0 0 #42d5ff
 
 
 /* v0.13.1 Xray diagnostics + client education */
-.guide-shell{width:min(980px,100%);display:grid;gap:14px}
+.guide-page{place-items:start center}.guide-shell{width:min(980px,100%);display:grid;gap:14px}
 .guide-hero p{color:#92a5bd;line-height:1.9}
 .guide-nav{display:flex;gap:8px;flex-wrap:wrap;margin-top:15px}
 .guide-nav a{padding:9px 12px;border:1px solid #2b425e;border-radius:10px;background:#091522;color:#ccecff;text-decoration:none;font-size:10px}
