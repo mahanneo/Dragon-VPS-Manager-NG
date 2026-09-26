@@ -24,6 +24,7 @@ def main():
     p.add_argument("--webhook",default=None,help="Optional HTTPS support webhook")
     p.add_argument("--release-archive-url",default=None,help="Optional private release .tar.gz URL")
     p.add_argument("--release-token",default=None,help="Optional bearer token for private release download")
+    p.add_argument("--admin-cidrs",default=None,help="Optional comma-separated admin CIDRs, e.g. 203.0.113.4/32,10.0.0.0/8")
     args=p.parse_args()
     data=parse_existing()
     if args.telegram is not None:
@@ -47,8 +48,17 @@ def main():
         data["MAKIA_RELEASE_ARCHIVE_URL"]=url
     if args.release_token is not None:
         data["MAKIA_RELEASE_BEARER_TOKEN"]=args.release_token.strip()
+    if args.admin_cidrs is not None:
+        import ipaddress
+        values=[]
+        for item in args.admin_cidrs.split(","):
+            item=item.strip()
+            if not item:
+                continue
+            values.append(str(ipaddress.ip_network(item,strict=False)))
+        data["MAKIA_ADMIN_ALLOWED_CIDRS"]=",".join(values)
     ENV_PATH.parent.mkdir(parents=True,exist_ok=True)
-    keys=["MAKIA_SUPPORT_TELEGRAM","MAKIA_SUPPORT_WEBHOOK_URL","MAKIA_RELEASE_ARCHIVE_URL","MAKIA_RELEASE_BEARER_TOKEN"]
+    keys=["MAKIA_SUPPORT_TELEGRAM","MAKIA_SUPPORT_WEBHOOK_URL","MAKIA_RELEASE_ARCHIVE_URL","MAKIA_RELEASE_BEARER_TOKEN","MAKIA_ADMIN_ALLOWED_CIDRS"]
     body="# Makia owner/distribution configuration. Keep this file root-only.\n"
     for key in keys:
         value=data.get(key,"")
